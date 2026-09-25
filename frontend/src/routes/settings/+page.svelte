@@ -1,21 +1,20 @@
 <script>
-	import { onMount } from 'svelte';
+	import { untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { bS, iS, tS } from '$lib/client/styles';
+	import { postJSON, readDetail } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
-    import { handlers } from '$lib/client/handlers';
 
-	let settings = $state({});
+	let { data } = $props();
+	let loadError = $derived(data.loadError || '');
+	// Editable working copy of the loaded settings (intentionally captured once).
+	let settings = $state(untrack(() => ({ ...data.settings })));
 	let status = $state({
 		message: '',
 		color: 'green'
 	});
 
 	const pageTitle = 'Settings | TAM';
-
-	onMount(async () => {
-		settings = await handlers.get('/api/settings');
-	});
 </script>
 
 <svelte:head>
@@ -25,7 +24,11 @@
 <div id="app_container" class="p-1">
 	<HeaderBar>
 		<div>Settings Sections:</div>
+		{#if data.settings.remote_server}
+			<a href={resolve('/settings/auth-keys')} class={bS.gray}>Auth Keys</a>
+		{/if}
 		<a href={resolve('/settings/prefixes')} class={bS.gray}>Prefixes</a>
+		<a href={resolve('/settings/backuprestore')} class={bS.gray}>Backup/Restore</a>
 	</HeaderBar>
 	<h1 class="text-xl font-bold">{pageTitle}</h1>
 	<div class="flex flex-col gap-1 w-full py-1">
@@ -82,15 +85,20 @@
 		</div>
 		<div class="flex flex-row gap-1 items-center">
 			<button
-				class={bS.gray}
+				class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
+				disabled={!!loadError}
 				onclick={async () => {
-					const res = await fetch('/api/settings', {
-						method: 'POST',
-						body: JSON.stringify(settings),
-						headers: { 'Content-Type': 'application/json' }
-					});
+					if (loadError) return;
+					let res;
+					try {
+						res = await postJSON('/api/settings', settings);
+					} catch {
+						status.message = 'Could not reach the TAM client API';
+						status.color = 'red';
+						return;
+					}
 					if (!res.ok) {
-						status.message = `Error Code: ${res.status}`;
+						status.message = `Error Code: ${res.status} (${await readDetail(res)})`;
 						status.color = 'red';
 					} else {
 						const resData = await res.json();
@@ -103,13 +111,13 @@
 			>
 			<button
 				class={bS.gray}
-				onclick={async () => {
-					settings = await handlers.get('/api/settings')
+				onclick={() => {
+					settings = { ...data.settings };
 				}}>Cancel</button
 			>
 		</div>
 		<div>
-			<p class={tS[status.color]}>{status.message}</p>
+			<p class={tS[loadError ? 'red' : status.color]}>{loadError || status.message}</p>
 		</div>
 	</div>
 </div>

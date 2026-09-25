@@ -1,20 +1,72 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
-	import { bS, bAS, iS } from '$lib/client/styles';
+	import { bS, bAS, iS, tS } from '$lib/client/styles';
+	import { postJSON, readDetail } from '$lib/client/api';
 	import { resolve } from '$app/paths';
-    import { handlers } from '$lib/client/handlers';
+
+	let { data } = $props();
 
 	const pageTitle = 'Prefixes | TAM';
 
-	let prefixes = $state([]);
+	// Local copy of the loaded prefixes (intentionally captured once; the page reloads after changes).
+	let prefixes = $state(untrack(() => [...data.prefixes]));
 	let editPrefix = $state({ prefix: '', color: 'white', weight: 1 });
+	let status = $state('');
 
-	onMount(async () => {
-		prefixes = await handlers.get('/api/prefixes');
+	const selectPrefixInput = () => {
 		const form_prefix = document.getElementById('form_prefix');
 		if (form_prefix) form_prefix.select();
+	};
+
+	onMount(() => {
+		selectPrefixInput();
 	});
+
+	async function addChange() {
+		const name = String(editPrefix.prefix ?? '').trim();
+		if (!name) {
+			status = 'Prefix name cannot be empty.';
+			selectPrefixInput();
+			return;
+		}
+		const body = [
+			{
+				prefix: name,
+				color: editPrefix.color,
+				weight: Math.trunc(Number(editPrefix.weight) || 0)
+			}
+		];
+		let res;
+		try {
+			res = await postJSON('/api/prefixes', body);
+		} catch {
+			status = 'Could not reach the TAM client API';
+			return;
+		}
+		if (res.ok) {
+			window.location.reload();
+		} else {
+			status = await readDetail(res);
+		}
+	}
+
+	async function deletePrefix(prefix) {
+		let res;
+		try {
+			res = await fetch(`/api/prefixes?p=${encodeURIComponent(prefix.prefix)}`, {
+				method: 'DELETE'
+			});
+		} catch {
+			status = 'Could not reach the TAM client API';
+			return;
+		}
+		if (res.ok) {
+			window.location.reload();
+		} else {
+			status = await readDetail(res);
+		}
+	}
 </script>
 
 <svelte:head>
@@ -45,28 +97,25 @@
 		</div>
 		<div class="flex flex-col gap-1">
 			<div>Weight</div>
-			<input type="number" id="form_weight" class={iS.normal} bind:value={editPrefix.weight} />
+			<input
+				type="number"
+				id="form_weight"
+				step="1"
+				min="0"
+				class={iS.normal}
+				bind:value={editPrefix.weight}
+			/>
 		</div>
 		<div class="flex flex-col gap-1">
 			<div>Actions</div>
-			<button
-				class={bS[editPrefix.color]}
-				onclick={async () => {
-					if (editPrefix.prefix) {
-						const req = await fetch('/api/prefixes', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify([editPrefix])
-						});
-						if (req.ok) window.location.reload();
-					}
-					editPrefix.prefix = '';
-					const form_prefix = document.getElementById('form_prefix');
-					if (form_prefix) form_prefix.select();
-				}}>Add/Change</button
-			>
+			<button class={bS[editPrefix.color]} onclick={addChange}>Add/Change</button>
 		</div>
 	</div>
+	{#if status}
+		<div class="py-1">
+			<p class={tS.red}>{status}</p>
+		</div>
+	{/if}
 	<div class="flex flex-row gap-1 py-1 items-center">
 		<div>Colors:</div>
 		<button
@@ -120,15 +169,7 @@
 							<button class={bS[prefix.color]} onclick={() => (editPrefix = { ...prefix })}
 								>Edit</button
 							>
-							<button
-								class={bS[prefix.color]}
-								onclick={async () => {
-									const res = await fetch(`/api/prefixes?p=${prefix.prefix}`, {
-										method: 'DELETE'
-									});
-									if (res.ok) window.location.reload();
-								}}>Delete</button
-							>
+							<button class={bS[prefix.color]} onclick={() => deletePrefix(prefix)}>Delete</button>
 						</div>
 					</td>
 				</tr>
