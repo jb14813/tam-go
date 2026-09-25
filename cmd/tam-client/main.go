@@ -1,41 +1,51 @@
+// Command tam-client serves the Ticket Auction Manager web app and its API
+// on a venue laptop, against a local database or a remote tam-server.
 package main
 
 import (
 	"embed"
-	"fmt"
+	"flag"
 	"io/fs"
+	"log"
 	"net/http"
-	"os"
-	"ticket-auction-manager/tam-go/internal/config"
+	"path/filepath"
+	"time"
+
+	"ticket-auction-manager/tam-go/internal/client"
 	"ticket-auction-manager/tam-go/internal/db"
-	"ticket-auction-manager/tam-go/internal/prefixes"
+	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/store"
 )
 
-//go:embed all:dist/*
-var filesystem embed.FS
-
-func init() {
-	os.Setenv("TAM_DAEMON", "Client")
-	db.InitDB()
-}
+//go:embed all:dist
+var distFS embed.FS
 
 func main() {
-	clientSrv := http.NewServeMux()
+	addr := flag.String("addr", "localhost:3080", "address to listen on")
+	flag.Parse()
 
-	subFS, err := fs.Sub(filesystem, "dist")
+	dataDir, err := env.DataDir()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+	sqldb, err := db.Open(filepath.Join(dataDir, "tam-local.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqldb.Close()
+	if err := db.Migrate(sqldb); err != nil {
+		log.Fatal(err)
+	}
+	dist, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	clientSrv.Handle("/", http.RedirectHandler("/web", http.StatusPermanentRedirect))
-	clientSrv.Handle("/web/", http.StripPrefix("/web", http.FileServer(http.FS(subFS))))
-
-	clientSrv.HandleFunc("GET /api/settings", config.GetAllSettings)
-	clientSrv.HandleFunc("POST /api/settings", config.SaveAllSettings)
-	clientSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
-	clientSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
-	clientSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
-
-	fmt.Println("Listening on http://localhost:3080/")
-	http.ListenAndServe("localhost:3080", clientSrv)
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	log.Printf("tam-client listening on http://%s/ (data in %s)", *addr, dataDir)
+	log.Fatal(srv.ListenAndServe())
 }

@@ -1,40 +1,52 @@
+// Command tam-server is the shared Ticket Auction Manager database that
+// several tam-client installations talk to in remote mode.
 package main
 
 import (
-	"fmt"
+	"flag"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
+
 	"ticket-auction-manager/tam-go/internal/db"
-	"ticket-auction-manager/tam-go/internal/prefixes"
+	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/server"
+	"ticket-auction-manager/tam-go/internal/store"
 )
 
-func init() {
-	os.Setenv("TAM_DAEMON", "Server")
-	db.InitDB()
-}
-
 func main() {
-	apiSrv := http.NewServeMux()
-
-	apiSrv.HandleFunc("/api/prefixes", prefixes.GetAllPrefixes)
-
-	if len(os.Args) > 1 && os.Args[1] == "dev" {
-		fmt.Println("Listening on http://localhost:8000")
-		err := http.ListenAndServe("localhost:8000", apiSrv)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		fmt.Println("Listening on http://0.0.0.0:8000")
-		err := http.ListenAndServe(":8000", apiSrv)
-		if err != nil {
-			panic(err)
-		}
+	addr := flag.String("addr", ":8000", "address to listen on")
+	flag.Parse()
+	if flag.Arg(0) == "dev" {
+		*addr = "localhost:8000"
 	}
-}
 
-type ApiRootResp struct {
-	WhoAmI  string `json:"whoami"`
-	Auth    bool   `json:"authenticated"`
-	Healthy bool   `json:"healthy"`
+	password := os.Getenv("TAM_PWD")
+	if password == "" {
+		password = "changeme"
+		log.Print("WARNING: TAM_PWD is not set; the key-management password is \"changeme\". Set TAM_PWD before exposing this server.")
+	}
+
+	dataDir, err := env.DataDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	sqldb, err := db.Open(filepath.Join(dataDir, "tam-remote.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqldb.Close()
+	if err := db.Migrate(sqldb); err != nil {
+		log.Fatal(err)
+	}
+
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           server.NewHandler(store.New(sqldb), password),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	log.Printf("tam-server listening on %s (data in %s)", *addr, dataDir)
+	log.Fatal(srv.ListenAndServe())
 }
