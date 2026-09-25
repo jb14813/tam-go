@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"log"
 	"os"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,7 @@ func Tray(o Options, done <-chan struct{}) {
 				case <-openCh:
 					openURL(o.OpenURL)
 				case <-quit.ClickedCh:
+					log.Print("shutdown requested from the notification-area icon: stopping")
 					o.Quit()
 				case <-done:
 					return
@@ -70,6 +72,7 @@ func Tray(o Options, done <-chan struct{}) {
 		if ready.Load() {
 			// The icon was closed by the system while the program was still
 			// running: treat it as a request to stop.
+			log.Print("notification-area icon closed by the system: stopping")
 			o.Quit()
 		}
 	}

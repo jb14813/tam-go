@@ -53,7 +53,7 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 | `dev` | positional argument, tam-server | binds localhost instead of every interface |
 | `-tls`, `-cert`, `-key` | flags, tam-server | HTTPS with the given PEM files, or a self-signed pair created in the data directory |
 
-`tam-client` keeps `settings.json` in the data directory. It is safe to edit by hand while the daemon runs; the edit is picked up on the next request. A file that fails to parse is logged and the last good settings stay in effect until it is fixed or saved again from the Settings page.
+`tam-client` keeps `settings.json` in the data directory. It is safe to edit by hand while the daemon runs; the edit is picked up on the next request. A file that fails to parse is logged and the last good settings stay in effect until it is fixed or saved again from the Settings page. Both programs also append everything they print to `tam-client.log` or `tam-server.log` in the data directory, including why they stopped (Ctrl+C, a closed window, the Shut Down button, or the notification-area icon), so the reason is there after the window is gone.
 
 The databases use SQLite's WAL journal, so recent writes may sit in `tam-local.db-wal` next to the main file: copy the whole data folder, or stop the daemon first, when taking a copy by hand. Backup/Restore in the app is the safer route.
 
@@ -140,7 +140,7 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 
 ```
 cmd/tam-client, cmd/tam-server   entry points
-internal/env                     data directory from TAM_DATA_DIR
+internal/env                     data directory from TAM_DATA_DIR, log file
 internal/db                      SQLite open + schema (tables and views of the original)
 internal/store                   every query, typed models
 internal/config                  settings.json

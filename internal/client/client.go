@@ -116,6 +116,7 @@ func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotImplemented, "Shutdown is not available in this setup")
 		return
 	}
+	log.Print("shutdown requested from the web page: stopping")
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "TAM client is shutting down."})
 	go h.shutdown()
 }

@@ -21,3 +21,10 @@ func DataDir() (string, error) {
 	}
 	return dir, nil
 }
+
+// OpenLog opens name inside the data directory for appending, so a run
+// leaves a record of what happened after its console window is gone. The
+// caller closes the file.
+func OpenLog(dataDir, name string) (*os.File, error) {
+	return os.OpenFile(filepath.Join(dataDir, name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+}

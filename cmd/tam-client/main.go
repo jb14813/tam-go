@@ -8,10 +8,12 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -40,6 +42,12 @@ func main() {
 	dataDir, err := env.DataDir()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if f, err := env.OpenLog(dataDir, "tam-client.log"); err == nil {
+		defer f.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	} else {
+		log.Printf("not keeping a log file: %v", err)
 	}
 	sqldb, err := db.Open(filepath.Join(dataDir, "tam-local.db"))
 	if err != nil {
