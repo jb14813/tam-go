@@ -50,7 +50,11 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 | `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server |
 | `dev` | positional argument, tam-server | binds `localhost:8000` instead of every interface |
 
-`tam-client` keeps `settings.json` in the data directory. It is safe to edit by hand; a file that fails to parse is logged and defaults are used until it is fixed or saved again from the Settings page.
+`tam-client` keeps `settings.json` in the data directory. It is safe to edit by hand while the daemon runs; the edit is picked up on the next request. A file that fails to parse is logged and the last good settings stay in effect until it is fixed or saved again from the Settings page.
+
+The databases use SQLite's WAL journal, so recent writes may sit in `tam-local.db-wal` next to the main file: copy the whole data folder, or stop the daemon first, when taking a copy by hand. Backup/Restore in the app is the safer route.
+
+A data folder from the original app is a drop-in: the tables and views are the same, and the Go daemons open it as is.
 
 ```json
 {
@@ -117,7 +121,15 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
 - Every link is a full page load (`data-sveltekit-reload`, as in the original), so pending rows on the forms are saved when you leave the page and each prefix starts with a clean form.
 - The client listens on port 3080 instead of the original's 3000.
-- Request bodies are capped at 64 MiB (the original ran Node with no limit); that is far above any realistic backup file.
+- Request bodies are capped at 64 MiB (the original ran Node with no limit); that is far above any realistic backup file. A larger body answers 413.
+- Validation errors answer 400 where FastAPI answered 422. Unknown paths and wrong methods under `/api` answer `{"detail": ...}` as the original did. `HEAD` is accepted on every GET route.
+- `DELETE /api/prefixes` and `DELETE /api/auth` echo the deleted row; a missing row is 404. In remote mode a prefix the server no longer has is still removed from the local mirror.
+- Success messages use the `message` key everywhere (the original used `details` for a local restore and an empty list for a remote one). A reversed range (`/5/1`) is swapped instead of answered empty.
+- Ids accept every spelling the original accepted (`4`, `4.0`, `"4"`); a ticket or basket without an id is rejected instead of being stored as id 0.
+- Both daemons require `Content-Type: application/json` on POST (the original client always sent it; the original server did not check). The push buttons send an empty JSON object for the same reason.
+- 500 and 502 responses carry a generic message; the reason is in the daemon's log.
+- `tam-server dev` binds localhost only when `-addr` is not given.
+- The counts report labels its last row `Total` on both daemons (the original server said `Totals`); the report views are recreated on every start so an older database picks that up.
 
 ## Layout
 
@@ -146,3 +158,5 @@ On 2026-09-25, on Windows 11 with Go 1.27.1 and pnpm 12:
 - Standalone, through the browser: adding prefixes, selecting a prefix on the main menu, loading a ticket range and saving names, saving basket descriptions, entering a winning ticket with the buyer looked up live, winners by name, winners by basket, ticket counts, ticket search, print sheets, saving settings.
 - Remote mode, through the browser: pointing the client at `tam-server dev` with `TAM_PWD=testpw`; the main menu shows Remote, Authenticated and Healthy; a wrong password on Auth Keys is rejected; creating a key and pressing Use; pushing prefixes, tickets and baskets; entering tickets against the server (confirmed on the server with curl and the key); remote backup download.
 - Not verified here: the Docker images and the Caddy proxy, because the Docker daemon was not running on the build machine. The files mirror the original's deployment.
+
+A second, adversarial pass then reviewed the package against the original with the original FastAPI server and the original SvelteKit client running as oracles, sending identical request suites to both implementations, and mixed the daemons (Go client against the original server, original client against the Go server). It found and led to fixes for: full page loads on navigation (the original's `data-sveltekit-reload`, without which pending rows were lost when leaving a form), a push that the original server rejected because unused lists were sent as `null`, a new connection pool per proxied request, a settings save that could be read half-written, numeric ids sent as strings by the original client, executable bits lost in the zip, and the smaller wire and documentation differences listed above. Attacks that held up: SQL injection through every parameter, path traversal on the web app, cross-site writes, oversized and malformed bodies, hundreds of concurrent and same-row writes, key deletion and server outage in remote mode.
