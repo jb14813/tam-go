@@ -1,5 +1,7 @@
 // Command tam-server is the shared Ticket Auction Manager database that
 // several tam-client installations talk to in remote mode.
+//
+//go:generate go-winres simply --icon icon.ico --manifest cli --arch amd64 --product-name "Ticket Auction Manager" --file-description "Ticket Auction Manager server" --original-filename tam-server.exe --file-version 0.0.1 --product-version 0.0.1 --copyright "Copyright (c) 2026 Dilan Gilluly. MIT License." --out rsrc
 package main
 
 import (
@@ -14,20 +16,27 @@ import (
 	"ticket-auction-manager/tam-go/internal/env"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
+	"ticket-auction-manager/tam-go/internal/tlscert"
 )
 
 func main() {
-	addr := flag.String("addr", ":8000", "address to listen on")
+	addr := flag.String("addr", "", "address to listen on (default :8000, or :8443 with -tls)")
+	useTLS := flag.Bool("tls", false, "serve HTTPS; a self-signed certificate is created in the data directory when none is given")
+	certFile := flag.String("cert", "", "TLS certificate file (default <data dir>/server.crt)")
+	keyFile := flag.String("key", "", "TLS key file (default <data dir>/server.key)")
 	flag.Parse()
-	addrSet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "addr" {
-			addrSet = true
-		}
-	})
+
 	// "dev" binds the loopback interface unless an address was given.
-	if flag.Arg(0) == "dev" && !addrSet {
-		*addr = "localhost:8000"
+	if *addr == "" {
+		host := ""
+		if flag.Arg(0) == "dev" {
+			host = "localhost"
+		}
+		if *useTLS {
+			*addr = host + ":8443"
+		} else {
+			*addr = host + ":8000"
+		}
 	}
 
 	password := os.Getenv("TAM_PWD")
@@ -57,6 +66,26 @@ func main() {
 		WriteTimeout:      2 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
-	log.Printf("tam-server listening on %s (data in %s)", *addr, dataDir)
-	log.Fatal(srv.ListenAndServe())
+
+	if !*useTLS {
+		log.Printf("tam-server listening on http://%s (data in %s)", *addr, dataDir)
+		log.Fatal(srv.ListenAndServe())
+	}
+
+	if *certFile == "" {
+		*certFile = filepath.Join(dataDir, "server.crt")
+	}
+	if *keyFile == "" {
+		*keyFile = filepath.Join(dataDir, "server.key")
+	}
+	hostname, _ := os.Hostname()
+	created, err := tlscert.EnsurePair(*certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", *certFile)
+	}
+	log.Printf("tam-server listening on https://%s (data in %s)", *addr, dataDir)
+	log.Fatal(srv.ListenAndServeTLS(*certFile, *keyFile))
 }

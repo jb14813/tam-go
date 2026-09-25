@@ -1,4 +1,0 @@
-*:8443 {
-  tls internal
-  reverse_proxy {$TAM_SERVER:localhost}:8000
-}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Ticket Auction Manager — Server — Classic</title>
+  <desc id="desc">Gold ticket on a deep navy rounded tile; cyan and mint distinguish the server stack. Layered tickets identify the shared-record server.</desc>
+  <g id="background"><rect width="128" height="128" rx="27" fill="#101C33"/></g>
+  <g id="icon"><g transform="rotate(-14 64 65)"><path d="M 23 83 V 100 Q 23 108 31 108 H 97 Q 105 108 105 100 V 96 H 34 V 83 Z" fill="#35D5A7" /><path d="M 23 67 V 84 Q 23 92 31 92 H 97 Q 105 92 105 84 V 80 H 34 V 67 Z" fill="#40BAF5" /><path d="M 28 22 H 100 Q 105 22 105 27 V 40 A 9 9 0 0 0 105 58 V 71 Q 105 76 100 76 H 28 Q 23 76 23 71 V 58 A 9 9 0 0 0 23 40 V 27 Q 23 22 28 22 Z" fill="#FFC72C" /><path d="M 64 33 L 68.42 42.916 L 79.217 44.056 L 71.152 51.324 L 73.405 61.944 L 64 56.52 L 54.595 61.944 L 56.848 51.324 L 48.783 44.056 L 59.58 42.916 Z" fill="#101C33" /></g></g>
+</svg>

@@ -47,8 +47,9 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 |---|---|---|
 | `TAM_DATA_DIR` | environment, both daemons | `./data` |
 | `TAM_PWD` | environment, tam-server | `changeme` (a warning is logged; set it before exposing the server) |
-| `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server |
-| `dev` | positional argument, tam-server | binds `localhost:8000` instead of every interface |
+| `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server (`:8443` with `-tls`) |
+| `dev` | positional argument, tam-server | binds localhost instead of every interface |
+| `-tls`, `-cert`, `-key` | flags, tam-server | HTTPS with the given PEM files, or a self-signed pair created in the data directory |
 
 `tam-client` keeps `settings.json` in the data directory. It is safe to edit by hand while the daemon runs; the edit is picked up on the next request. A file that fails to parse is logged and the last good settings stay in effect until it is fixed or saved again from the Settings page.
 
@@ -70,23 +71,24 @@ A data folder from the original app is a drop-in: the tables and views are the s
 
 ## Remote mode
 
-1. Run `tam-server` where every laptop can reach it, with `TAM_PWD` set. With Docker: `TAM_PWD=change-this docker compose up -d` starts the server on port 8000 and a Caddy reverse proxy with a self-signed certificate on port 8443.
+1. Run `tam-server` where every laptop can reach it, with `TAM_PWD` set. For HTTPS start it with `-tls`: it listens on port 8443 and, on first start, writes a self-signed certificate (`server.crt`, `server.key`) into its data directory; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Without `-tls` it speaks plain HTTP on port 8000. Windows asks once whether to allow the program through the firewall.
 2. On each client, open Settings and enter the server's host name, the port (8000 for plain HTTP, 8443 for TLS) and the TLS toggle, then Save.
 3. Open Auth Keys, log in with `TAM_PWD`, create a key for this laptop and press Use. The key is stored in `settings.json` and sent as the `TAM-KEY` header on every server call.
 4. Data entered from now on goes to the server and is mirrored locally. Backup/Restore can push the local prefixes, tickets or baskets to the server and download the server's data.
 
-The client accepts the server's self-signed certificate, matching the original deployment; put a real certificate on the proxy if the server is reachable from outside the venue network.
+The client accepts the server's self-signed certificate, matching the original deployment (which ran a Caddy proxy with a self-signed certificate in front of the server); use a real certificate if the server is reachable from outside the venue network.
 
-## Docker
+## Deployment
 
-```bash
-TAM_PWD=change-this docker compose up -d           # server + reverse proxy
-docker compose -f compose.client.yml up -d         # client on 127.0.0.1:3080
-```
+Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime involved. The original's Docker, Caddy, portable-Node and NixOS deployment files are therefore not carried over; the server's `-tls` flag replaces the reverse proxy.
 
-Data lives in `./data` (server) and `./data-client` (client). The bind mounts carry the `:Z` label the original used, so they work with SELinux and podman.
+| Original | Here |
+|---|---|
+| `dbob16/tam-client` container on port 3000 | `tam-client` (or `tam-client.exe`) on port 3080 |
+| `dbob16/tam-server` container plus a Caddy proxy on 8443 | `tam-server -tls` on 8443, or `tam-server` on 8000 |
+| Data volume `/data` | the `data` folder next to the program, or `TAM_DATA_DIR` |
 
-Not carried over from the original's deployment folder: the versioned image build scripts and the generated `dist/` bundle with its podman fallback scripts, the portable Node bundle (meaningless for a static binary) and the NixOS kiosk module. To reuse the NixOS module, point its container at an image built from `Dockerfile.client` and change its port from 3000 to 3080.
+On Windows the executables carry the TAM icons and version information; `go generate ./cmd/...` regenerates the resource files with [go-winres](https://github.com/tc-hib/go-winres) after changing `icon.ico`.
 
 ## API
 
@@ -157,6 +159,6 @@ On 2026-09-25, on Windows 11 with Go 1.27.1 and pnpm 12:
 - `go vet`, `gofmt -l` and `go test ./...` are clean. The client tests drive the real server handler as the remote, so the proxy contract is tested end to end.
 - Standalone, through the browser: adding prefixes, selecting a prefix on the main menu, loading a ticket range and saving names, saving basket descriptions, entering a winning ticket with the buyer looked up live, winners by name, winners by basket, ticket counts, ticket search, print sheets, saving settings.
 - Remote mode, through the browser: pointing the client at `tam-server dev` with `TAM_PWD=testpw`; the main menu shows Remote, Authenticated and Healthy; a wrong password on Auth Keys is rejected; creating a key and pressing Use; pushing prefixes, tickets and baskets; entering tickets against the server (confirmed on the server with curl and the key); remote backup download.
-- Not verified here: the Docker images and the Caddy proxy, because the Docker daemon was not running on the build machine. The files mirror the original's deployment.
+- Remote mode over HTTPS: `tam-server -tls dev` creating its certificate on first start, and the client with Remote TLS on and port 8443 reporting Authenticated and Healthy.
 
 A second, adversarial pass then reviewed the package against the original with the original FastAPI server and the original SvelteKit client running as oracles, sending identical request suites to both implementations, and mixed the daemons (Go client against the original server, original client against the Go server). It found and led to fixes for: full page loads on navigation (the original's `data-sveltekit-reload`, without which pending rows were lost when leaving a form), a push that the original server rejected because unused lists were sent as `null`, a new connection pool per proxied request, a settings save that could be read half-written, numeric ids sent as strings by the original client, executable bits lost in the zip, and the smaller wire and documentation differences listed above. Attacks that held up: SQL injection through every parameter, path traversal on the web app, cross-site writes, oversized and malformed bodies, hundreds of concurrent and same-row writes, key deletion and server outage in remote mode.

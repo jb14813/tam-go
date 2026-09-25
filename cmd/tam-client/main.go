@@ -1,5 +1,7 @@
 // Command tam-client serves the Ticket Auction Manager web app and its API
 // on a venue laptop, against a local database or a remote tam-server.
+//
+//go:generate go-winres simply --icon icon.ico --manifest cli --arch amd64 --product-name "Ticket Auction Manager" --file-description "Ticket Auction Manager client" --original-filename tam-client.exe --file-version 0.0.1 --product-version 0.0.1 --copyright "Copyright (c) 2026 Dilan Gilluly. MIT License." --out rsrc
 package main
 
 import (
