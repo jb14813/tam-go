@@ -1,42 +1,9 @@
-# sv
+# TAM web app
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The SvelteKit single-page app served by `tam-client` under `/web`. It talks to the client's JSON API at `/api` on the same origin.
 
-## Creating a project
+- `pnpm install --frozen-lockfile` once, then `pnpm build` writes the static build into `../cmd/tam-client/dist`, which `tam-client` embeds at compile time (`go build ./cmd/tam-client` must run after the web build; `../build.sh client` does both).
+- `pnpm dev` starts Vite on http://localhost:5173/web/ for working on the pages; `vite.config.js` proxies `/api` to a `tam-client` running on `localhost:3080`, so start that first (`../run.sh client` or the binary).
+- The app is a pure client-side SPA (`ssr = false`, `prerender = false`, fallback `index.html`, base path `/web`). Every link is a full page load (`data-sveltekit-reload` in `app.html`), which is what lets the forms save pending rows when you leave a page.
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-pnpm dlx sv@0.17.1 create --template minimal --no-types --add tailwindcss="plugins:none" sveltekit-adapter="adapter:static" --install pnpm frontend
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+Pages live in `src/routes`, shared pieces in `src/lib/client` (`api.js` for fetch helpers, `styles.js` for the Tailwind class maps, `components/` for the header, pager, command and search bars).

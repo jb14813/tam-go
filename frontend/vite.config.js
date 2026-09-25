@@ -4,6 +4,10 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+	// `pnpm dev` only: forward the API to a running tam-client.
+	server: {
+		proxy: { '/api': 'http://localhost:3080' }
+	},
 	plugins: [
 		tailwindcss(),
 		sveltekit({

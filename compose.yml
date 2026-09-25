@@ -12,7 +12,7 @@ services:
     environment:
       - "TAM_PWD=${TAM_PWD:-changeme}"
     volumes:
-      - "./data:/data"
+      - "./data:/data:Z"
     ports:
       - "8000:8000"
   tam-rp:

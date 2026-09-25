@@ -15,13 +15,13 @@ Ticket Auction Manager (TAM) runs in-person penny socials and benefit auctions: 
 
 ## Quick start
 
-1. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder next to it.
+1. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere. Prebuilt binaries from a release zip are under `build/<os>-<arch>/`; on Linux or macOS run `chmod +x` on them if your unzip tool dropped the executable bit.
 2. Open http://localhost:3080/.
 3. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
 
 ## Building from source
 
-Requirements: Go 1.27 or newer, Node 24 or newer with pnpm (the scripts fall back to `npx pnpm` when pnpm is not installed).
+Requirements: Go 1.27.1 or newer (the version in `go.mod`), Node 24 or newer with pnpm (the scripts fall back to `npx pnpm` when pnpm is not installed).
 
 ```bash
 ./build.sh all          # web app + tam-client + tam-server into ./build
@@ -35,9 +35,11 @@ Development:
 
 ```bash
 ./run.sh server         # tam-server on localhost:8000, password "changeme"
-./run.sh client         # builds the web app, then tam-client on localhost:3080
+./run.sh client         # installs and builds the web app, then tam-client on localhost:3080
 go test ./...           # store, server and client tests, including remote mode
 ```
+
+For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost:5173/web/ and proxies `/api` to a running `tam-client`.
 
 ## Configuration
 
@@ -78,7 +80,9 @@ TAM_PWD=change-this docker compose up -d           # server + reverse proxy
 docker compose -f compose.client.yml up -d         # client on 127.0.0.1:3080
 ```
 
-Data lives in `./data` (server) and `./data-client` (client).
+Data lives in `./data` (server) and `./data-client` (client). The bind mounts carry the `:Z` label the original used, so they work with SELinux and podman.
+
+Not carried over from the original's deployment folder: the versioned image build scripts and the generated `dist/` bundle with its podman fallback scripts, the portable Node bundle (meaningless for a static binary) and the NixOS kiosk module. To reuse the NixOS module, point its container at an image built from `Dockerfile.client` and change its port from 3000 to 3080.
 
 ## API
 
@@ -112,11 +116,14 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white); the contact preference stays free text as in the original.
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
 - Every link is a full page load (`data-sveltekit-reload`, as in the original), so pending rows on the forms are saved when you leave the page and each prefix starts with a clean form.
+- The client listens on port 3080 instead of the original's 3000.
+- Request bodies are capped at 64 MiB (the original ran Node with no limit); that is far above any realistic backup file.
 
 ## Layout
 
 ```
 cmd/tam-client, cmd/tam-server   entry points
+internal/env                     data directory from TAM_DATA_DIR
 internal/db                      SQLite open + schema (tables and views of the original)
 internal/store                   every query, typed models
 internal/config                  settings.json

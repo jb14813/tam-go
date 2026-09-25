@@ -13,7 +13,7 @@ fi
 
 case "${1:-}" in
   client)
-    (cd frontend && $pnpm_cmd build)
+    (cd frontend && $pnpm_cmd install --frozen-lockfile && $pnpm_cmd build)
     go run ./cmd/tam-client/
     ;;
   server)
