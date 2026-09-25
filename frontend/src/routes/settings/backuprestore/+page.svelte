@@ -102,7 +102,8 @@
 		try {
 			res = await fetch(`/api/backuprestore/push/${target}`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' }
+				headers: { 'Content-Type': 'application/json' },
+				body: '{}'
 			});
 		} catch {
 			setResult(`Error pushing ${targetStr}. ${API_UNREACHABLE}.`);

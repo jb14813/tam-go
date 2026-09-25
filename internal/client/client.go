@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/httpx"
@@ -17,14 +18,21 @@ import (
 )
 
 type handler struct {
-	st           *store.Store
-	settingsPath string
+	st  *store.Store
+	cfg *config.File
+
+	// One remote client (one connection pool) per server address and TLS
+	// setting; the access key is applied per request.
+	rcMu   sync.Mutex
+	rc     *remote.Client
+	rcBase string
+	rcTLS  bool
 }
 
 // NewHandler returns the client handler. dist is the built web app, served
 // under /web with index.html as the fallback for client-side routes.
 func NewHandler(st *store.Store, settingsPath string, dist fs.FS) http.Handler {
-	h := &handler{st: st, settingsPath: settingsPath}
+	h := &handler{st: st, cfg: config.Open(settingsPath)}
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /{$}", http.RedirectHandler("/web/", http.StatusFound))
@@ -74,7 +82,7 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS) http.Handler {
 	mux.HandleFunc("POST /api/backuprestore/remote", guard(h.importRemote))
 	mux.HandleFunc("POST /api/backuprestore/push/{target}", guard(h.push))
 
-	return mux
+	return httpx.JSONErrors(mux, "/api")
 }
 
 // guard refuses writes that a browser reports as coming from another site.
@@ -88,24 +96,27 @@ func guard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// settings loads the settings file for this request. A broken file is
-// logged and defaults are used, so the app keeps working.
+// settings returns the current settings; a hand edit of the file is picked
+// up without a restart and a broken file keeps the last good values.
 func (h *handler) settings() config.Settings {
-	s, err := config.Load(h.settingsPath)
-	if err != nil {
-		log.Printf("%v (using defaults)", err)
-	}
-	return s
+	return h.cfg.Get()
 }
 
 // remote returns a client for the configured server, or nil in standalone
-// mode.
+// mode. The connection pool is kept across requests and rebuilt only when
+// the server address or TLS setting changes.
 func (h *handler) remote(s config.Settings) *remote.Client {
 	base := s.RemoteURL()
 	if base == "" {
 		return nil
 	}
-	return remote.New(base, s.RemoteKey, s.RemoteTLS)
+	h.rcMu.Lock()
+	defer h.rcMu.Unlock()
+	if h.rc == nil || h.rcBase != base || h.rcTLS != s.RemoteTLS {
+		h.rc = remote.New(base, "", s.RemoteTLS)
+		h.rcBase, h.rcTLS = base, s.RemoteTLS
+	}
+	return h.rc.WithKey(s.RemoteKey)
 }
 
 // --- single page app ---
@@ -132,6 +143,12 @@ func (s *spa) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			info, statErr := f.Stat()
 			f.Close()
 			if statErr == nil && !info.IsDir() {
+				// Hashed bundle files never change; everything else may.
+				if strings.HasPrefix(rel, "_app/immutable/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				http.StripPrefix("/web/", s.files).ServeHTTP(w, r)
 				return
 			}

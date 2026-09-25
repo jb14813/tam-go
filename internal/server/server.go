@@ -17,7 +17,8 @@ type handler struct {
 
 // NewHandler returns the server API. Data routes require a TAM-KEY header
 // that matches a stored access key; key management requires a TAM-PW header
-// equal to password.
+// equal to password. Unknown paths and wrong methods under /api answer
+// {"detail": ...} like the original.
 func NewHandler(st *store.Store, password string) http.Handler {
 	h := &handler{st: st, password: password}
 	mux := http.NewServeMux()
@@ -62,14 +63,14 @@ func NewHandler(st *store.Store, password string) http.Handler {
 	mux.Handle("GET /api/backuprestore", key(h.exportBackup))
 	mux.Handle("POST /api/backuprestore", key(h.importBackup))
 
-	return mux
+	return httpx.JSONErrors(mux, "/api")
 }
 
 func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ok, err := h.st.KeyExists(r.Header.Get("TAM-KEY"))
 		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteInternal(w, err)
 			return
 		}
 		if !ok {
@@ -94,19 +95,37 @@ func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
 func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	authed, err := h.st.KeyExists(r.Header.Get("TAM-KEY"))
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"whoami": "TAM Server", "authenticated": authed, "healthy": true})
 }
 
-// respond writes a list (or an error) produced by a store call.
+// respond writes a value (or a generic error) produced by a store call.
 func respond[T any](w http.ResponseWriter, v T, err error) {
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
+// decodeList reads a JSON list body, validates it and answers the error
+// itself when something is wrong. A JSON null becomes an empty list.
+func decodeList[T any](w http.ResponseWriter, r *http.Request, validate func([]T) error) ([]T, bool) {
+	var items []T
+	if err := httpx.DecodeJSON(w, r, &items); err != nil {
+		httpx.WriteDecodeError(w, err)
+		return nil, false
+	}
+	if items == nil {
+		items = []T{}
+	}
+	if err := validate(items); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return nil, false
+	}
+	return items, true
 }
 
 // asList mirrors the original single-item endpoints, which answer with a
@@ -148,8 +167,8 @@ func (h *handler) createKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Description string `json:"description"`
 	}
-	if err := httpx.DecodeJSON(r, &req); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteDecodeError(w, err)
 		return
 	}
 	k, err := h.st.CreateKey(req.Description)
@@ -162,16 +181,16 @@ func (h *handler) deleteKey(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "key_to_del is required")
 		return
 	}
-	n, err := h.st.DeleteKey(key)
+	gone, err := h.st.DeleteKey(key)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
-	if n == 0 {
+	if gone == nil {
 		httpx.WriteError(w, http.StatusNotFound, "Key not found")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, store.AuthKey{AuthKey: key})
+	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
 // --- prefixes ---
@@ -182,17 +201,12 @@ func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	var ps []store.Prefix
-	if err := httpx.DecodeJSON(r, &ps); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := store.ValidatePrefixes(ps); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	ps, ok := decodeList(w, r, store.ValidatePrefixes)
+	if !ok {
 		return
 	}
 	if err := h.st.UpsertPrefixes(ps); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ps)
@@ -204,16 +218,16 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "p is required")
 		return
 	}
-	n, err := h.st.DeletePrefix(name)
+	gone, err := h.st.DeletePrefix(name)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
-	if n == 0 {
+	if gone == nil {
 		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, store.Prefix{Prefix: name})
+	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
 // --- tickets ---
@@ -249,17 +263,12 @@ func (h *handler) ticketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
-	var ts []store.Ticket
-	if err := httpx.DecodeJSON(r, &ts); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := store.ValidateTickets(ts); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	ts, ok := decodeList(w, r, store.ValidateTickets)
+	if !ok {
 		return
 	}
 	if err := h.st.UpsertTickets(ts); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ts)
@@ -304,17 +313,12 @@ func (h *handler) basketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
-	var bs []store.Basket
-	if err := httpx.DecodeJSON(r, &bs); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := store.ValidateBaskets(bs); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	bs, ok := decodeList(w, r, store.ValidateBaskets)
+	if !ok {
 		return
 	}
 	if err := h.st.UpsertBaskets(bs); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)
@@ -353,17 +357,12 @@ func (h *handler) drawingRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
-	var bs []store.Basket
-	if err := httpx.DecodeJSON(r, &bs); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := store.ValidateBaskets(bs); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	bs, ok := decodeList(w, r, store.ValidateBaskets)
+	if !ok {
 		return
 	}
 	if err := h.st.UpsertWinning(bs); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)
@@ -395,8 +394,8 @@ func (h *handler) exportBackup(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
 	var bf store.BackupFile
-	if err := httpx.DecodeJSON(r, &bf); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	if err := httpx.DecodeJSON(w, r, &bf); err != nil {
+		httpx.WriteDecodeError(w, err)
 		return
 	}
 	if err := store.ValidateBackup(&bf); err != nil {
@@ -404,7 +403,7 @@ func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.st.Import(bf); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Backup file imported successfully."})

@@ -15,6 +15,7 @@ import (
 
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
@@ -129,6 +130,17 @@ func TestSPA(t *testing.T) {
 	if code, body := f.do("GET", "/web/_app/immutable/x.js", nil, nil); code != 200 || !strings.Contains(string(body), "console.log") {
 		t.Fatalf("asset = %d %q", code, body)
 	}
+	res, err := http.Get(f.url + "/web/_app/immutable/x.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if cc := res.Header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Fatalf("hashed bundle files must be cacheable, got Cache-Control %q", cc)
+	}
+	if code, body := f.do("GET", "/api/nope", nil, nil); code != 404 || !strings.Contains(string(body), `"detail"`) {
+		t.Fatalf("unknown api path = %d %q", code, body)
+	}
 	if code, _ := f.do("GET", "/web/_app/immutable/missing.js", nil, nil); code != 404 {
 		t.Fatalf("missing asset = %d, want 404", code)
 	}
@@ -226,10 +238,18 @@ func TestSettings(t *testing.T) {
 		t.Fatal("rejected saves must not touch the file")
 	}
 
+	// A hand edit is picked up; a broken file keeps the last good settings.
+	edited := s
+	edited.VenueName = "Edited by hand"
+	config.Save(f.settings, edited)
+	_, body = f.do("GET", "/api/settings", nil, nil)
+	if decode[config.Settings](t, body).VenueName != "Edited by hand" {
+		t.Fatalf("hand edit not picked up: %s", body)
+	}
 	os.WriteFile(f.settings, []byte(`{"venue_name": "Typo",}`), 0o644)
 	code, body = f.do("GET", "/api/settings", nil, nil)
-	if code != 200 || decode[config.Settings](t, body) != config.Defaults() {
-		t.Fatalf("malformed file: %d %s", code, body)
+	if code != 200 || decode[config.Settings](t, body).VenueName != "Edited by hand" {
+		t.Fatalf("malformed file should keep the last good settings: %d %s", code, body)
 	}
 }
 
@@ -311,17 +331,33 @@ func TestRemoteMode(t *testing.T) {
 		t.Fatalf("delete key = %d", code)
 	}
 
+	// A prefix that exists only locally is still removed locally when the
+	// server answers 404.
+	f.st.UpsertPrefixes([]store.Prefix{{Prefix: "LOCALONLY", Color: "red", Weight: 1}})
+	if code, _ = f.do("DELETE", "/api/prefixes?p=LOCALONLY", nil, nil); code != 200 {
+		t.Fatalf("delete of a local-only prefix = %d, want 200", code)
+	}
+	if ps, _ := f.st.ListPrefixes(); len(ps) != 0 {
+		t.Fatalf("local-only prefix must be gone: %v", ps)
+	}
+	if code, _ = f.do("DELETE", "/api/prefixes?p=NOWHERE", nil, nil); code != 404 {
+		t.Fatalf("delete of a prefix nobody has = %d, want 404", code)
+	}
+
 	// Push and remote backup.
 	f.st.UpsertBaskets([]store.Basket{{Prefix: "A", BID: 5, Description: "Local basket"}})
-	code, body = f.do("POST", "/api/backuprestore/push/baskets", nil, nil)
+	code, body = f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil)
 	if code != 200 || !strings.Contains(string(body), "Baskets pushed") {
 		t.Fatalf("push = %d %s", code, body)
 	}
 	if rb, _ := rst.Basket("A", 5); rb == nil {
 		t.Fatal("push did not reach the remote store")
 	}
-	if code, _ = f.do("POST", "/api/backuprestore/push/keys", nil, nil); code != 400 {
+	if code, _ = f.do("POST", "/api/backuprestore/push/keys", `{}`, nil); code != 400 {
 		t.Fatalf("push bad target = %d", code)
+	}
+	if code, _ = f.do("POST", "/api/backuprestore/push/baskets", nil, nil); code != 400 {
+		t.Fatalf("push without a JSON body (a plain form post) = %d, want 400", code)
 	}
 	_, body = f.do("GET", "/api/backuprestore/remote", nil, nil)
 	if bf := decode[store.BackupFile](t, body); len(bf.Baskets) != 1 || len(bf.Tickets) != 1 {
@@ -366,12 +402,71 @@ func TestRemoteMode(t *testing.T) {
 	}
 }
 
+// TestPushSendsEveryList pins the wire shape the original server requires:
+// all three lists present, never null.
+func TestPushSendsEveryList(t *testing.T) {
+	f := newFixture(t)
+	var got map[string]json.RawMessage
+	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/backuprestore" {
+			json.NewDecoder(r.Body).Decode(&got)
+			httpx.WriteJSON(w, 200, map[string]string{"message": "ok"})
+			return
+		}
+		httpx.WriteJSON(w, 200, map[string]any{"whoami": "TAM Server", "authenticated": true, "healthy": true})
+	}))
+	defer rs.Close()
+	u, _ := url.Parse(rs.URL)
+	s := config.Defaults()
+	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), "K"
+	config.Save(f.settings, s)
+	f.st.UpsertBaskets([]store.Basket{{Prefix: "A", BID: 1, Description: "B"}})
+
+	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
+		t.Fatalf("push = %d %s", code, body)
+	}
+	for _, k := range []string{"prefixes", "baskets", "tickets"} {
+		v, ok := got[k]
+		if !ok || strings.TrimSpace(string(v)) == "null" {
+			t.Fatalf("push body must contain a %s list, got %s", k, got[k])
+		}
+	}
+	if !strings.Contains(string(got["baskets"]), `"description":"B"`) {
+		t.Fatalf("pushed baskets = %s", got["baskets"])
+	}
+}
+
+// TestRemoteClientIsReused pins the connection pool across requests.
+func TestRemoteClientIsReused(t *testing.T) {
+	h := &handler{}
+	s := config.Defaults()
+	s.RemoteServer, s.RemotePort, s.RemoteKey = "tam.lan", "8000", "K1"
+	if h.remote(s) == nil {
+		t.Fatal("remote mode should return a client")
+	}
+	first := h.rc
+	s.RemoteKey = "K2"
+	h.remote(s)
+	if h.rc != first {
+		t.Fatal("a changed key must not rebuild the connection pool")
+	}
+	s.RemotePort = "8443"
+	h.remote(s)
+	if h.rc == first {
+		t.Fatal("a changed server address must rebuild the connection pool")
+	}
+	s.RemoteServer = ""
+	if h.remote(s) != nil {
+		t.Fatal("standalone mode must return nil")
+	}
+}
+
 func TestStandaloneAuthAndPush(t *testing.T) {
 	f := newFixture(t)
 	if code, _ := f.do("GET", "/api/auth", nil, map[string]string{"TAM-PWD": "x"}); code != 500 {
 		t.Fatalf("auth standalone = %d, want 500", code)
 	}
-	if code, _ := f.do("POST", "/api/backuprestore/push/tickets", nil, nil); code != 500 {
+	if code, _ := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 500 {
 		t.Fatalf("push standalone = %d, want 500", code)
 	}
 	code, body := f.do("GET", "/api/backuprestore/remote", nil, nil)

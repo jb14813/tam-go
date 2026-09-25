@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
@@ -149,8 +150,9 @@ func TestKeyLifecycle(t *testing.T) {
 		t.Fatalf("ListKeys = %v", list)
 	}
 
-	if code, _ = a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil); code != 200 {
-		t.Fatalf("delete key: %d", code)
+	code, body = a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil)
+	if code != 200 || decode[store.AuthKey](t, body).Description != "laptop" {
+		t.Fatalf("delete key should echo the deleted row: %d %s", code, body)
 	}
 	if code, _ = a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil); code != 404 {
 		t.Fatalf("delete missing key: %d, want 404", code)
@@ -194,14 +196,47 @@ func TestPrefixes(t *testing.T) {
 		t.Fatalf("text/plain body: %d, want 400", code)
 	}
 
-	if code, _ = a.keyed("DELETE", "/api/prefixes?p=A", nil); code != 200 {
-		t.Fatalf("delete: %d", code)
+	code, body = a.keyed("DELETE", "/api/prefixes?p=A", nil)
+	if code != 200 || decode[store.Prefix](t, body).Color != "red" {
+		t.Fatalf("delete should echo the deleted row: %d %s", code, body)
 	}
 	if code, _ = a.keyed("DELETE", "/api/prefixes?p=A", nil); code != 404 {
 		t.Fatalf("delete missing: %d, want 404", code)
 	}
 	if code, _ = a.keyed("DELETE", "/api/prefixes", nil); code != 400 {
 		t.Fatalf("delete without p: %d, want 400", code)
+	}
+
+	// The original accepted numeric strings and integral floats.
+	if code, _ = a.keyed("POST", "/api/prefixes", `[{"prefix":"S","color":"red","weight":"3"},{"prefix":"F","color":"red","weight":4.0}]`); code != 200 {
+		t.Fatalf("numeric string weight: %d", code)
+	}
+	_, body = a.keyed("GET", "/api/prefixes", nil)
+	if ps = decode[[]store.Prefix](t, body); len(ps) != 3 {
+		t.Fatalf("after numeric string post: %v", ps)
+	}
+	// A JSON null body is an empty list, never a null answer.
+	if code, body = a.keyed("POST", "/api/prefixes", `null`); code != 200 || strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("null body = %d %q", code, body)
+	}
+}
+
+func TestErrorsAreJSON(t *testing.T) {
+	a := newAPI(t)
+	if code, body := a.keyed("GET", "/api/nope", nil); code != 404 || strings.TrimSpace(string(body)) != `{"detail":"Not Found"}` {
+		t.Fatalf("unknown path = %d %q", code, body)
+	}
+	if code, body := a.keyed("DELETE", "/api/tickets", nil); code != 405 || strings.TrimSpace(string(body)) != `{"detail":"Method Not Allowed"}` {
+		t.Fatalf("wrong method = %d %q", code, body)
+	}
+	if code, _ := a.keyed("GET", "/api/", nil); code != 200 {
+		t.Fatalf("GET /api/ = %d, want 200", code)
+	}
+	if code, body := a.keyed("POST", "/api/tickets", `[{"prefix":"A","first_name":"no id"}]`); code != 400 || !strings.Contains(string(body), "t_id is required") {
+		t.Fatalf("missing t_id = %d %s", code, body)
+	}
+	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":"12","pref":"CALL"}]`); code != 200 {
+		t.Fatalf("string t_id from the original client = %d, want 200", code)
 	}
 }
 
@@ -238,8 +273,8 @@ func TestTicketsBasketsDrawingReports(t *testing.T) {
 	if code, _ = a.keyed("GET", "/api/tickets/A/x", nil); code != 400 {
 		t.Fatalf("non-integer id: %d", code)
 	}
-	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"A/B","t_id":3,"pref":"CALL"}]`); code != 400 {
-		t.Fatalf("prefix with a slash: %d, want 400", code)
+	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"  ","t_id":3,"pref":"CALL"}]`); code != 400 {
+		t.Fatalf("blank prefix: %d, want 400", code)
 	}
 	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":-3,"pref":"CALL"}]`); code != 400 {
 		t.Fatalf("negative id: %d, want 400", code)
@@ -337,5 +372,16 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 	if code, _ := a.keyed("PUT", "/api/prefixes", `[]`); code != 405 {
 		t.Fatalf("PUT /api/prefixes = %d, want 405", code)
+	}
+}
+
+func TestOversizedBodyIs413(t *testing.T) {
+	old := httpx.MaxBody
+	httpx.MaxBody = 256
+	defer func() { httpx.MaxBody = old }()
+	a := newAPI(t)
+	big := `[{"prefix":"A","t_id":1,"first_name":"` + strings.Repeat("x", 400) + `","pref":"CALL"}]`
+	if code, _ := a.keyed("POST", "/api/tickets", big); code != 413 {
+		t.Fatalf("oversized body = %d, want 413", code)
 	}
 }

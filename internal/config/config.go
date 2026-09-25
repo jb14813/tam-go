@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Settings is the settings.json document. The JSON names are shared with
@@ -65,13 +69,121 @@ func Load(path string) (Settings, error) {
 	return s, nil
 }
 
-// Save writes the settings file, indented, with the usual permissions.
+// Save writes the settings file. The document goes to a temporary file
+// that then replaces the real one, so a crash mid-write leaves the old
+// file intact. Windows refuses the replace while another process holds the
+// file open; the document is then written in place.
 func Save(path string, s Settings) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	data = append(data, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return os.WriteFile(path, data, 0o644)
+	}
+	return nil
+}
+
+// File is the settings document with an in-memory copy. Readers never see
+// a half-written file: saves happen under the write lock, and the file is
+// re-read only when its modification time or size changed, which is how a
+// hand edit is picked up while the daemon runs.
+type File struct {
+	path   string
+	mu     sync.RWMutex
+	cur    Settings
+	loaded bool
+	mtime  time.Time
+	size   int64
+}
+
+// Open loads the settings file (creating it with defaults when missing)
+// and returns the live document. A broken file is logged; defaults are used
+// until it is fixed.
+func Open(path string) *File {
+	f := &File{path: path}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.reload(); err != nil {
+		log.Printf("%v (using defaults)", err)
+	}
+	return f
+}
+
+// reload reads the file and remembers its stat. The caller holds mu for
+// writing. When the file cannot be used, the last good settings stay.
+func (f *File) reload() error {
+	s, err := Load(f.path)
+	if info, statErr := os.Stat(f.path); statErr == nil {
+		f.mtime, f.size = info.ModTime(), info.Size()
+	}
+	if err != nil {
+		if !f.loaded {
+			f.cur = s
+		}
+		return err
+	}
+	f.cur, f.loaded = s, true
+	return nil
+}
+
+// changedOnDisk reports whether the file differs from what was last read.
+func (f *File) changedOnDisk() bool {
+	info, err := os.Stat(f.path)
+	if err != nil {
+		return true
+	}
+	return !info.ModTime().Equal(f.mtime) || info.Size() != f.size
+}
+
+// Get returns the current settings.
+func (f *File) Get() Settings {
+	f.mu.RLock()
+	if !f.changedOnDisk() {
+		s := f.cur
+		f.mu.RUnlock()
+		return s
+	}
+	f.mu.RUnlock()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.changedOnDisk() {
+		if err := f.reload(); err != nil {
+			log.Printf("%v (keeping the last good settings)", err)
+		}
+	}
+	return f.cur
+}
+
+// Update applies fn to the current settings and saves the result. fn runs
+// under the lock, so concurrent updates never lose each other's fields.
+func (f *File) Update(fn func(Settings) (Settings, error)) (Settings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.changedOnDisk() {
+		if err := f.reload(); err != nil {
+			log.Printf("%v (keeping the last good settings)", err)
+		}
+	}
+	next, err := fn(f.cur)
+	if err != nil {
+		return f.cur, err
+	}
+	if err := Save(f.path, next); err != nil {
+		return f.cur, err
+	}
+	f.cur, f.loaded = next, true
+	if info, err := os.Stat(f.path); err == nil {
+		f.mtime, f.size = info.ModTime(), info.Size()
+	}
+	return next, nil
 }
 
 var knownKeys = map[string]bool{
@@ -127,6 +239,9 @@ func Validate(s Settings) error {
 		if strings.ContainsAny(host, `/\?#@ `) || strings.Contains(host, "://") {
 			return errors.New("remote_server must be a host name or IP address, without scheme, port or path")
 		}
+		if s.RemotePort == "" {
+			return errors.New("remote_port is required when remote_server is set")
+		}
 	}
 	if p := s.RemotePort; p != "" {
 		n, err := strconv.Atoi(p)
@@ -141,7 +256,7 @@ func Validate(s Settings) error {
 }
 
 // RemoteURL returns the base URL of the remote server, or "" in standalone
-// mode.
+// mode. IPv6 addresses are bracketed.
 func (s Settings) RemoteURL() string {
 	host := strings.TrimSpace(s.RemoteServer)
 	if host == "" {
@@ -155,5 +270,5 @@ func (s Settings) RemoteURL() string {
 	if port == "" {
 		port = "8000"
 	}
-	return scheme + "://" + host + ":" + port
+	return scheme + "://" + net.JoinHostPort(host, port)
 }

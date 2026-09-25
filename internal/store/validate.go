@@ -22,8 +22,10 @@ func validColor(c string) bool {
 	return false
 }
 
-// ValidatePrefixName trims a prefix name and rejects names that cannot be
-// used in a URL path segment or a sheet header.
+// ValidatePrefixName trims a new prefix name and rejects names that cannot
+// be used in a URL path segment or a sheet header. It applies when prefixes
+// are created; tickets and baskets only need a non-empty prefix, so data
+// from an original database with an unusual prefix stays writable.
 func ValidatePrefixName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -44,55 +46,53 @@ func ValidatePrefixName(name string) (string, error) {
 }
 
 // ValidatePrefixes trims names and rejects empty or unusable names, unknown
-// colours and negative weights.
+// colours and negative weights. Errors name the offending row.
 func ValidatePrefixes(ps []Prefix) error {
 	for i := range ps {
 		name, err := ValidatePrefixName(ps[i].Prefix)
 		if err != nil {
-			return err
+			return fmt.Errorf("prefix %d: %w", i+1, err)
 		}
 		ps[i].Prefix = name
 		if !validColor(ps[i].Color) {
-			return fmt.Errorf("color %q is not one of %s", ps[i].Color, strings.Join(Colors, ", "))
+			return fmt.Errorf("prefix %d (%s): color %q is not one of %s", i+1, name, ps[i].Color, strings.Join(Colors, ", "))
 		}
 		if ps[i].Weight < 0 {
-			return errors.New("weight must be zero or more")
+			return fmt.Errorf("prefix %d (%s): weight must be zero or more", i+1, name)
 		}
 	}
 	return nil
 }
 
-// ValidateTickets rejects tickets with an unusable prefix or a negative id.
+// ValidateTickets rejects tickets without a prefix or with a negative id.
 // The contact preference is free text, as in the original; the pages send
 // CALL or TEXT.
 func ValidateTickets(ts []Ticket) error {
 	for i := range ts {
-		name, err := ValidatePrefixName(ts[i].Prefix)
-		if err != nil {
-			return fmt.Errorf("ticket: %w", err)
+		ts[i].Prefix = strings.TrimSpace(ts[i].Prefix)
+		if ts[i].Prefix == "" {
+			return fmt.Errorf("ticket %d: prefix must not be empty", i+1)
 		}
-		ts[i].Prefix = name
 		if ts[i].TID < 0 {
-			return errors.New("ticket id must be zero or more")
+			return fmt.Errorf("ticket %d (%s/%d): id must be zero or more", i+1, ts[i].Prefix, ts[i].TID)
 		}
 		ts[i].Pref = strings.TrimSpace(ts[i].Pref)
 	}
 	return nil
 }
 
-// ValidateBaskets rejects baskets with an unusable prefix or negative ids.
+// ValidateBaskets rejects baskets without a prefix or with negative ids.
 func ValidateBaskets(bs []Basket) error {
 	for i := range bs {
-		name, err := ValidatePrefixName(bs[i].Prefix)
-		if err != nil {
-			return fmt.Errorf("basket: %w", err)
+		bs[i].Prefix = strings.TrimSpace(bs[i].Prefix)
+		if bs[i].Prefix == "" {
+			return fmt.Errorf("basket %d: prefix must not be empty", i+1)
 		}
-		bs[i].Prefix = name
 		if bs[i].BID < 0 {
-			return errors.New("basket id must be zero or more")
+			return fmt.Errorf("basket %d (%s/%d): id must be zero or more", i+1, bs[i].Prefix, bs[i].BID)
 		}
 		if bs[i].WinningTicket < 0 {
-			return errors.New("winning ticket must be zero or more")
+			return fmt.Errorf("basket %d (%s/%d): winning ticket must be zero or more", i+1, bs[i].Prefix, bs[i].BID)
 		}
 	}
 	return nil

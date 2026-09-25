@@ -88,13 +88,21 @@ func (s *Store) UpsertPrefixes(ps []Prefix) error {
 	})
 }
 
-// DeletePrefix removes a prefix and reports how many rows matched.
-func (s *Store) DeletePrefix(name string) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM prefixes WHERE prefix = ?`, name)
-	if err != nil {
-		return 0, err
+// DeletePrefix removes a prefix and returns the deleted row, or nil when
+// there was none.
+func (s *Store) DeletePrefix(name string) (*Prefix, error) {
+	var p Prefix
+	var color sql.NullString
+	var weight sql.NullInt64
+	err := s.db.QueryRow(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, name).Scan(&p.Prefix, &color, &weight)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	return res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	p.Color, p.Weight = nstr(color), nint(weight)
+	return &p, nil
 }
 
 // execEach prepares query once inside tx and executes it n times with the
@@ -175,13 +183,20 @@ func (s *Store) CreateKey(description string) (AuthKey, error) {
 	return AuthKey{}, errors.New("could not generate a unique key")
 }
 
-// DeleteKey removes a key and reports how many rows matched.
-func (s *Store) DeleteKey(key string) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM auth_keys WHERE auth_key = ?`, key)
-	if err != nil {
-		return 0, err
+// DeleteKey removes a key and returns the deleted row, or nil when there
+// was none.
+func (s *Store) DeleteKey(key string) (*AuthKey, error) {
+	var k AuthKey
+	var desc sql.NullString
+	err := s.db.QueryRow(`DELETE FROM auth_keys WHERE auth_key = ? RETURNING auth_key, description`, key).Scan(&k.AuthKey, &desc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	return res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	k.Description = nstr(desc)
+	return &k, nil
 }
 
 // KeyExists reports whether key is a valid access key.
@@ -204,7 +219,7 @@ func (s *Store) KeyExists(key string) (bool, error) {
 
 // Export returns every prefix, basket and ticket.
 func (s *Store) Export() (BackupFile, error) {
-	var bf BackupFile
+	bf := NewBackupFile()
 	var err error
 	if bf.Prefixes, err = s.ListPrefixes(); err != nil {
 		return bf, err

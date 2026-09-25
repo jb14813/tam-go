@@ -78,8 +78,10 @@ func TestMigrateOverDatabaseFromTheOriginalApp(t *testing.T) {
 			if err := sqldb.QueryRow(`SELECT COUNT(*) FROM auth_keys`).Scan(&keys); err != nil {
 				t.Fatalf("auth_keys must exist after migration: %v", err)
 			}
+			// The views are recreated, so the original server's "Totals" label
+			// becomes "Total" everywhere.
 			var total int
-			if err := sqldb.QueryRow(`SELECT total_buys FROM report_counts WHERE prefix IN ('Total', 'Totals')`).Scan(&total); err != nil || total != 1 {
+			if err := sqldb.QueryRow(`SELECT total_buys FROM report_counts WHERE prefix = 'Total'`).Scan(&total); err != nil || total != 1 {
 				t.Fatalf("counts view over existing data: %d %v", total, err)
 			}
 		})

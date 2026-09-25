@@ -47,14 +47,15 @@ func TestPrefixes(t *testing.T) {
 		t.Fatalf("upsert did not update colour: %v", got)
 	}
 
-	n, err := s.DeletePrefix("A")
+	deleted, err := s.DeletePrefix("A")
 	must(t, err)
-	if n != 1 {
-		t.Fatalf("DeletePrefix affected %d rows, want 1", n)
+	if deleted == nil || deleted.Color != "green" || deleted.Weight != 1 {
+		t.Fatalf("DeletePrefix should return the deleted row, got %+v", deleted)
 	}
-	n, _ = s.DeletePrefix("A")
-	if n != 0 {
-		t.Fatalf("second DeletePrefix affected %d rows, want 0", n)
+	deleted, err = s.DeletePrefix("A")
+	must(t, err)
+	if deleted != nil {
+		t.Fatalf("second DeletePrefix should return nil, got %+v", deleted)
 	}
 
 	empty := newTestStore(t)
@@ -149,11 +150,16 @@ func TestValidation(t *testing.T) {
 		t.Fatalf("ValidatePrefixes trims: %v %+v", err, ok)
 	}
 
-	if err := ValidateTickets([]Ticket{{"A/B", 1, "", "", "", "CALL"}}); err == nil {
-		t.Error("ticket with a slash prefix should fail")
+	// Tickets only need a non-empty prefix, so an original database with an
+	// unusual prefix stays writable.
+	if err := ValidateTickets([]Ticket{{"A/B", 1, "", "", "", "CALL"}}); err != nil {
+		t.Errorf("ticket under an existing slash prefix must be accepted: %v", err)
 	}
-	if err := ValidateTickets([]Ticket{{"A", -1, "", "", "", "CALL"}}); err == nil {
-		t.Error("ticket with a negative id should fail")
+	if err := ValidateTickets([]Ticket{{" ", 1, "", "", "", "CALL"}}); err == nil {
+		t.Error("ticket with a blank prefix should fail")
+	}
+	if err := ValidateTickets([]Ticket{{"A", -1, "", "", "", "CALL"}}); err == nil || !strings.Contains(err.Error(), "ticket 1 (A/-1)") {
+		t.Errorf("ticket with a negative id should fail naming the row, got %v", err)
 	}
 	anyPref := []Ticket{{"A", 1, "", "", "", " call "}}
 	if err := ValidateTickets(anyPref); err != nil || anyPref[0].Pref != "call" {
@@ -292,12 +298,16 @@ func TestAuthKeys(t *testing.T) {
 	if len(list) != 2 || list[0].Description != "laptop 1" {
 		t.Fatalf("ListKeys = %v", list)
 	}
-	n, _ := s.DeleteKey(k.AuthKey)
-	if n != 1 {
-		t.Fatalf("DeleteKey affected %d", n)
+	gone, err := s.DeleteKey(k.AuthKey)
+	must(t, err)
+	if gone == nil || gone.Description != "laptop 1" {
+		t.Fatalf("DeleteKey should return the deleted row, got %+v", gone)
 	}
 	if ok, _ := s.KeyExists(k.AuthKey); ok {
 		t.Fatal("deleted key still exists")
+	}
+	if gone, _ = s.DeleteKey(k.AuthKey); gone != nil {
+		t.Fatalf("deleting a missing key should return nil, got %+v", gone)
 	}
 }
 

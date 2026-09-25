@@ -3,8 +3,12 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -96,6 +100,7 @@ func TestValidate(t *testing.T) {
 		{RemoteServer: "tam.lan/api", RemotePort: "8000", DefaultPref: "CALL"},
 		{RemoteServer: "tam lan", RemotePort: "8000", DefaultPref: "CALL"},
 		{RemoteServer: "user@tam.lan", RemotePort: "8000", DefaultPref: "CALL"},
+		{RemoteServer: "tam.lan", RemotePort: "", DefaultPref: "CALL"},
 	} {
 		if err := Validate(bad); err == nil {
 			t.Errorf("Validate(%+v) should fail", bad)
@@ -128,5 +133,86 @@ func TestRemoteURL(t *testing.T) {
 	s = Settings{RemoteServer: " srv ", RemotePort: ""}
 	if got := s.RemoteURL(); got != "http://srv:8000" {
 		t.Fatalf("RemoteURL = %q", got)
+	}
+	s = Settings{RemoteServer: "::1", RemotePort: "8101"}
+	if got := s.RemoteURL(); got != "http://[::1]:8101" {
+		t.Fatalf("RemoteURL with IPv6 = %q", got)
+	}
+}
+
+func TestFileConcurrentGetAndUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	f := Open(path)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var broken atomic.Int32
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Every version ever saved has a venue name and a port.
+				if s := f.Get(); s.VenueName == "" || s.RemotePort == "" {
+					broken.Add(1)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		want := fmt.Sprintf("Venue %d", i)
+		got, err := f.Update(func(s Settings) (Settings, error) {
+			s.VenueName = want
+			return s, nil
+		})
+		if err != nil || got.VenueName != want {
+			t.Fatalf("update %d: %+v %v", i, got, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if n := broken.Load(); n > 0 {
+		t.Fatalf("%d reads saw broken settings during saves", n)
+	}
+	if s := f.Get(); s.VenueName != "Venue 199" {
+		t.Fatalf("last update lost in memory: %+v", s)
+	}
+	if s, err := Load(path); err != nil || s.VenueName != "Venue 199" {
+		t.Fatalf("last update lost on disk: %+v %v", s, err)
+	}
+	if _, err := os.Stat(path + ".tmp"); err == nil {
+		t.Fatal("temporary file left behind")
+	}
+}
+
+func TestFilePicksUpHandEditsAndKeepsLastGood(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	f := Open(path)
+	if f.Get() != Defaults() {
+		t.Fatalf("fresh file = %+v", f.Get())
+	}
+	edited := Defaults()
+	edited.VenueName = "Edited by hand"
+	if err := Save(path, edited); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.Get(); s.VenueName != "Edited by hand" {
+		t.Fatalf("hand edit not picked up: %+v", s)
+	}
+	os.WriteFile(path, []byte(`{"venue_name": "Typo",}`), 0o644)
+	if s := f.Get(); s.VenueName != "Edited by hand" {
+		t.Fatalf("a broken file must keep the last good settings, got %+v", s)
+	}
+	_, err := f.Update(func(s Settings) (Settings, error) { return s, errors.New("rejected") })
+	if err == nil {
+		t.Fatal("Update must return fn's error")
+	}
+	after, _ := os.ReadFile(path)
+	if !strings.Contains(string(after), "Typo") {
+		t.Fatal("a rejected update must not write the file")
 	}
 }

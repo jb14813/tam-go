@@ -41,6 +41,14 @@ func New(baseURL, key string, insecureTLS bool) *Client {
 	}
 }
 
+// WithKey returns a client that sends key and shares this client's
+// connection pool, so a changed access key does not open new sockets.
+func (c *Client) WithKey(key string) *Client {
+	cp := *c
+	cp.key = key
+	return &cp
+}
+
 // Response is what the remote server answered.
 type Response struct {
 	Status int

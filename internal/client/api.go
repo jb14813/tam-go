@@ -2,7 +2,9 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,8 +30,10 @@ func forward(w http.ResponseWriter, res *remote.Response) {
 	httpx.WriteError(w, res.Status, http.StatusText(res.Status))
 }
 
+// unreachable answers 502 and keeps the transport detail in the log.
 func unreachable(w http.ResponseWriter, err error) {
-	httpx.WriteError(w, http.StatusBadGateway, "Remote server unreachable: "+err.Error())
+	log.Printf("remote server: %v", err)
+	httpx.WriteError(w, http.StatusBadGateway, "Remote server unreachable")
 }
 
 // listOr answers with a list from the remote server (empty on any failure,
@@ -46,7 +50,7 @@ func listOr[T any](w http.ResponseWriter, rc *remote.Client, remotePath string, 
 	}
 	out, err := local()
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
@@ -66,7 +70,7 @@ func singleOr[T any](w http.ResponseWriter, rc *remote.Client, remotePath string
 	}
 	row, err := local()
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	if row == nil {
@@ -106,7 +110,7 @@ func rangeOr[T any](w http.ResponseWriter, r *http.Request, rc *remote.Client, r
 	} else {
 		rows, err = local(from, to)
 		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteInternal(w, err)
 			return
 		}
 	}
@@ -130,8 +134,8 @@ func rangeOr[T any](w http.ResponseWriter, r *http.Request, rc *remote.Client, r
 func writeThrough[T any](w http.ResponseWriter, r *http.Request, rc *remote.Client, remotePath string,
 	validate func([]T) error, local func([]T) error) {
 	var items []T
-	if err := httpx.DecodeJSON(r, &items); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	if err := httpx.DecodeJSON(w, r, &items); err != nil {
+		httpx.WriteDecodeError(w, err)
 		return
 	}
 	if items == nil {
@@ -153,7 +157,7 @@ func writeThrough[T any](w http.ResponseWriter, r *http.Request, rc *remote.Clie
 		}
 	}
 	if err := local(items); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, items)
@@ -181,24 +185,34 @@ func (h *handler) getSettings(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, h.settings())
 }
 
+// rejected marks a settings patch the user has to fix (a 400), as opposed
+// to a failure writing the file (a 500).
+type rejected struct{ error }
+
 func (h *handler) postSettings(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]json.RawMessage
-	if err := httpx.DecodeJSON(r, &patch); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	if err := httpx.DecodeJSON(w, r, &patch); err != nil {
+		httpx.WriteDecodeError(w, err)
 		return
 	}
-	merged, err := config.Merge(h.settings(), patch)
+	merged, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
+		next, err := config.Merge(cur, patch)
+		if err != nil {
+			return cur, rejected{err}
+		}
+		next = config.Normalize(next)
+		if err := config.Validate(next); err != nil {
+			return cur, rejected{err}
+		}
+		return next, nil
+	})
+	var bad rejected
+	if errors.As(err, &bad) {
+		httpx.WriteError(w, http.StatusBadRequest, bad.Error())
+		return
+	}
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	merged = config.Normalize(merged)
-	if err := config.Validate(merged); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := config.Save(h.settingsPath, merged); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not write settings: "+err.Error())
+		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, merged)
@@ -219,8 +233,8 @@ func (h *handler) proxyAuth(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Description string `json:"description"`
 		}
-		if err := httpx.DecodeJSON(r, &req); err != nil {
-			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		if err := httpx.DecodeJSON(w, r, &req); err != nil {
+			httpx.WriteDecodeError(w, err)
 			return
 		}
 		body = req
@@ -253,6 +267,9 @@ func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
 	writeThrough(w, r, h.remote(h.settings()), "/api/prefixes", store.ValidatePrefixes, h.st.UpsertPrefixes)
 }
 
+// deletePrefix removes a prefix on the server (in remote mode) and in the
+// local mirror. A prefix the server no longer has is still removed locally;
+// 404 only when neither side had it.
 func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("p")
 	if name == "" {
@@ -260,27 +277,33 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rc := h.remote(h.settings())
+	remoteHadIt := false
 	if rc != nil {
 		res, err := rc.Delete("/api/prefixes?p=" + url.QueryEscape(name))
 		if err != nil {
 			unreachable(w, err)
 			return
 		}
-		if !res.OK() {
+		if res.OK() {
+			remoteHadIt = true
+		} else if res.Status != http.StatusNotFound {
 			forward(w, res)
 			return
 		}
 	}
-	n, err := h.st.DeletePrefix(name)
+	gone, err := h.st.DeletePrefix(name)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
-	if n == 0 && rc == nil {
-		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
-		return
+	if gone == nil {
+		if !remoteHadIt {
+			httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
+			return
+		}
+		gone = &store.Prefix{Prefix: name}
 	}
-	httpx.WriteJSON(w, http.StatusOK, store.Prefix{Prefix: name})
+	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
 // --- tickets ---
@@ -454,7 +477,7 @@ func (h *handler) reportCounts(w http.ResponseWriter, r *http.Request) {
 func (h *handler) exportLocal(w http.ResponseWriter, r *http.Request) {
 	bf, err := h.st.Export()
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bf)
@@ -462,8 +485,8 @@ func (h *handler) exportLocal(w http.ResponseWriter, r *http.Request) {
 
 func decodeBackup(w http.ResponseWriter, r *http.Request) (store.BackupFile, bool) {
 	var bf store.BackupFile
-	if err := httpx.DecodeJSON(r, &bf); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+	if err := httpx.DecodeJSON(w, r, &bf); err != nil {
+		httpx.WriteDecodeError(w, err)
 		return bf, false
 	}
 	if err := store.ValidateBackup(&bf); err != nil {
@@ -479,7 +502,7 @@ func (h *handler) importLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.st.Import(bf); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Data loaded successfully."})
@@ -530,10 +553,17 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Backup file imported successfully."})
 }
 
-// push sends one local table to the server.
+// push sends one local table to the server. The page sends an empty JSON
+// object as the body; requiring it keeps the Content-Type barrier that
+// stops cross-site form posts.
 func (h *handler) push(w http.ResponseWriter, r *http.Request) {
+	var ignored json.RawMessage
+	if err := httpx.DecodeJSON(w, r, &ignored); err != nil {
+		httpx.WriteDecodeError(w, err)
+		return
+	}
 	target := r.PathValue("target")
-	var bf store.BackupFile
+	bf := store.NewBackupFile()
 	var err error
 	switch target {
 	case "prefixes":
@@ -547,7 +577,7 @@ func (h *handler) push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteInternal(w, err)
 		return
 	}
 	rc := h.remote(h.settings())

@@ -19,7 +19,14 @@ import (
 func main() {
 	addr := flag.String("addr", ":8000", "address to listen on")
 	flag.Parse()
-	if flag.Arg(0) == "dev" {
+	addrSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "addr" {
+			addrSet = true
+		}
+	})
+	// "dev" binds the loopback interface unless an address was given.
+	if flag.Arg(0) == "dev" && !addrSet {
 		*addr = "localhost:8000"
 	}
 
@@ -46,6 +53,8 @@ func main() {
 		Addr:              *addr,
 		Handler:           server.NewHandler(store.New(sqldb), password),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
 	log.Printf("tam-server listening on %s (data in %s)", *addr, dataDir)
