@@ -7,6 +7,39 @@
 	const pageTitle = 'Main Menu | TAM';
 	const { data } = $props();
 	let adminMode = $state(false);
+	let stopped = $state(false);
+	let shutdownError = $state('');
+
+	async function shutdown() {
+		if (
+			!confirm(
+				'Stop the TAM client on this computer? The pages will stop working until it is started again.'
+			)
+		)
+			return;
+		let res;
+		try {
+			res = await fetch('/api/shutdown', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: '{}'
+			});
+		} catch {
+			shutdownError = 'Could not reach the TAM client.';
+			return;
+		}
+		if (res.ok) {
+			stopped = true;
+		} else {
+			let detail = `Error Code: ${res.status}`;
+			try {
+				detail = (await res.json()).detail || detail;
+			} catch {
+				// keep the status text
+			}
+			shutdownError = detail;
+		}
+	}
 	let prefixes = $derived(data.prefixes);
 	let curPrefix = $state('');
 	let pColor = $derived.by(() => {
@@ -122,7 +155,15 @@
 			<div class="flex flex-row gap-1">
 				<a href={resolve('/settings')} class={bS.gray}>Settings</a>
 				<a href={resolve('/search/tickets')} class={bS.gray}>Search Tickets</a>
+				<button class={bS.red} onclick={shutdown} disabled={stopped}>Shut Down TAM</button>
 			</div>
+			{#if stopped}
+				<p class="py-1 font-bold">
+					The TAM client has stopped. You can close this tab; start the program again to continue.
+				</p>
+			{:else if shutdownError}
+				<p class="py-1 {tS.red}">{shutdownError}</p>
+			{/if}
 		</div>
 	{/if}
 

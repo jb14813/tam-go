@@ -16,7 +16,7 @@ Ticket Auction Manager (TAM) runs in-person penny socials and benefit auctions: 
 ## Quick start
 
 1. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere. Prebuilt binaries from a release zip are under `build/<os>-<arch>/`; on Linux or macOS run `chmod +x` on them if your unzip tool dropped the executable bit.
-2. Open http://localhost:3080/.
+2. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). Keep the console window open while the event runs. To stop it, press `Alt+A` on the main menu and use **Shut Down TAM**, close the console window, or press Ctrl+C in it. Closing the browser tab alone leaves it running.
 3. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
 
 ## Building from source
@@ -48,6 +48,7 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 | `TAM_DATA_DIR` | environment, both daemons | `./data` |
 | `TAM_PWD` | environment, tam-server | `changeme` (a warning is logged; set it before exposing the server) |
 | `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server (`:8443` with `-tls`) |
+| `-open` | flag, tam-client | `true`: open the web app in the default browser on start |
 | `dev` | positional argument, tam-server | binds localhost instead of every interface |
 | `-tls`, `-cert`, `-key` | flags, tam-server | HTTPS with the given PEM files, or a self-signed pair created in the data directory |
 

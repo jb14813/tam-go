@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/db"
@@ -458,6 +459,41 @@ func TestRemoteClientIsReused(t *testing.T) {
 	s.RemoteServer = ""
 	if h.remote(s) != nil {
 		t.Fatal("standalone mode must return nil")
+	}
+}
+
+func TestShutdownRoute(t *testing.T) {
+	plain := newFixture(t)
+	if code, _ := plain.do("POST", "/api/shutdown", `{}`, nil); code != 501 {
+		t.Fatalf("without a hook = %d, want 501", code)
+	}
+
+	called := make(chan struct{}, 1)
+	st := newStore(t, "local.db")
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	ts := httptest.NewServer(NewHandler(st, settings, testDist, WithShutdown(func() { called <- struct{}{} })))
+	t.Cleanup(ts.Close)
+	f := &fixture{t: t, url: ts.URL, st: st, settings: settings}
+
+	if code, _ := f.do("POST", "/api/shutdown", nil, nil); code != 400 {
+		t.Fatalf("a plain form post must not stop the app: %d, want 400", code)
+	}
+	if code, _ := f.do("POST", "/api/shutdown", `{}`, map[string]string{"Sec-Fetch-Site": "cross-site"}); code != 403 {
+		t.Fatalf("cross-site = %d, want 403", code)
+	}
+	select {
+	case <-called:
+		t.Fatal("rejected requests must not stop the app")
+	default:
+	}
+	code, body := f.do("POST", "/api/shutdown", `{}`, nil)
+	if code != 200 || !strings.Contains(string(body), "shutting down") {
+		t.Fatalf("shutdown = %d %s", code, body)
+	}
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the shutdown hook was not called")
 	}
 }
 

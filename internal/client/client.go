@@ -4,6 +4,7 @@
 package client
 
 import (
+	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
@@ -21,6 +22,9 @@ type handler struct {
 	st  *store.Store
 	cfg *config.File
 
+	// shutdown, when set, is called after POST /api/shutdown has answered.
+	shutdown func()
+
 	// One remote client (one connection pool) per server address and TLS
 	// setting; the access key is applied per request.
 	rcMu   sync.Mutex
@@ -29,11 +33,25 @@ type handler struct {
 	rcTLS  bool
 }
 
+// Option configures NewHandler.
+type Option func(*handler)
+
+// WithShutdown enables POST /api/shutdown, the "Shut Down TAM" button on the
+// main menu: fn runs after the request has been answered and should stop
+// the program.
+func WithShutdown(fn func()) Option {
+	return func(h *handler) { h.shutdown = fn }
+}
+
 // NewHandler returns the client handler. dist is the built web app, served
 // under /web with index.html as the fallback for client-side routes.
-func NewHandler(st *store.Store, settingsPath string, dist fs.FS) http.Handler {
+func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) http.Handler {
 	h := &handler{st: st, cfg: config.Open(settingsPath)}
+	for _, opt := range opts {
+		opt(h)
+	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/shutdown", guard(h.shutdownHandler))
 
 	mux.Handle("GET /{$}", http.RedirectHandler("/web/", http.StatusFound))
 	mux.Handle("GET /web/", newSPA(dist))
@@ -83,6 +101,23 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS) http.Handler {
 	mux.HandleFunc("POST /api/backuprestore/push/{target}", guard(h.push))
 
 	return httpx.JSONErrors(mux, "/api")
+}
+
+// shutdownHandler stops the program on request from the main menu. The
+// empty JSON body the page sends keeps the Content-Type barrier that stops
+// cross-site form posts.
+func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
+	var ignored json.RawMessage
+	if err := httpx.DecodeJSON(w, r, &ignored); err != nil {
+		httpx.WriteDecodeError(w, err)
+		return
+	}
+	if h.shutdown == nil {
+		httpx.WriteError(w, http.StatusNotImplemented, "Shutdown is not available in this setup")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "TAM client is shutting down."})
+	go h.shutdown()
 }
 
 // guard refuses writes that a browser reports as coming from another site.
