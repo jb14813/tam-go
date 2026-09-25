@@ -54,9 +54,9 @@
 		pagerFromUpdate() {
 			pager.idTo = pager.idFrom + (itemsLength - 1);
 		},
-		async save() {
+		async save(opts = {}) {
 			if (itemsBuffer.length > 0) {
-				const res = await postJSON('/api/tickets', itemsBuffer);
+				const res = await postJSON('/api/tickets', itemsBuffer, { keepalive: !!opts.keepalive });
 				if (res.ok) {
 					itemsBuffer.forEach((i) => (i.changed = false));
 				} else {
@@ -143,7 +143,7 @@
 
 	$effect(() => {
 		const saveOnUnload = () => {
-			if (itemsBuffer.length > 0) functions.save();
+			if (itemsBuffer.length > 0) functions.save({ keepalive: true });
 		};
 		window.addEventListener('beforeunload', saveOnUnload);
 		return () => {

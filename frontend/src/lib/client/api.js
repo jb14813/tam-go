@@ -45,10 +45,16 @@ export async function getJSON(url, { fetch: doFetch = globalThis.fetch, headers 
  * POST a JSON body (always with `Content-Type: application/json`).
  * Returns the raw Response so callers can check `res.ok` and read the body.
  */
-export function postJSON(url, body, { fetch: doFetch = globalThis.fetch, headers = {} } = {}) {
+export function postJSON(
+	url,
+	body,
+	{ fetch: doFetch = globalThis.fetch, headers = {}, keepalive = false } = {}
+) {
 	return doFetch(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', ...headers },
-		body: JSON.stringify(body)
+		body: JSON.stringify(body),
+		// keepalive lets a save started from beforeunload outlive the page.
+		keepalive
 	});
 }

@@ -6,7 +6,9 @@
 		<meta name="text-scale" content="scale" />
 		%sveltekit.head%
 	</head>
-	<body>
+	<!-- data-sveltekit-reload: every link is a full page load, as in the original.
+	     That resets page state per prefix and lets the forms save pending rows on unload. -->
+	<body data-sveltekit-reload>
 		<div style="display: contents" data-sveltekit-preload-data="off">%sveltekit.body%</div>
 	</body>
 </html>

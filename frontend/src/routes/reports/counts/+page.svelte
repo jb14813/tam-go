@@ -10,6 +10,9 @@
 	let lastRefreshed = $state('');
 	let interval = $state('0');
 
+	// alive is cleared when the page goes away so a refresh that was in
+	// flight cannot schedule the next one.
+	let alive = true;
 	const loadCounts = async () => {
 		const rtnData = {};
 		let res;
@@ -18,6 +21,7 @@
 		} catch {
 			return;
 		}
+		if (!alive) return;
 		if (res.ok) {
 			prefixes.forEach((p) => (rtnData[p.prefix] = { ...p }));
 			const resData = await res.json();
@@ -35,8 +39,10 @@
 	const pageTitle = 'Ticket Counts | TAM';
 
 	$effect(() => {
+		alive = true;
 		untrack(() => loadCounts());
 		return () => {
+			alive = false;
 			clearTimeout(currentTimeout);
 		};
 	});

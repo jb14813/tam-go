@@ -156,7 +156,7 @@
 		</tr>
 	</thead>
 	<tbody>
-		{#each items as item, idx (item.t_id)}
+		{#each items as item, idx (`${item.prefix}/${item.t_id}`)}
 			<tr
 				class="{tS[colorMap[item.prefix]]} focus-within:font-bold {rBS[prefix.color]}"
 				onfocusin={(e) => {

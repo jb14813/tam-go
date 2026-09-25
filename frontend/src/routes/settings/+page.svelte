@@ -15,6 +15,9 @@
 	});
 
 	const pageTitle = 'Settings | TAM';
+
+	let reloadTimer;
+	$effect(() => () => clearTimeout(reloadTimer));
 </script>
 
 <svelte:head>
@@ -105,7 +108,8 @@
 						settings = { ...resData };
 						status.message = 'Settings saved successfully!';
 						status.color = 'green';
-						setTimeout(() => window.location.reload(), 3000);
+						clearTimeout(reloadTimer);
+						reloadTimer = setTimeout(() => window.location.reload(), 3000);
 					}
 				}}>Save</button
 			>

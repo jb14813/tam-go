@@ -1,12 +1,13 @@
-import { getJSON, API_UNREACHABLE } from '$lib/client/api';
+import { getJSON, errorMessage } from '$lib/client/api';
 
 export const load = async ({ fetch }) => {
 	let error = '';
 	const safe = async (url, fallback) => {
 		try {
 			return await getJSON(url, { fetch });
-		} catch {
-			error = API_UNREACHABLE;
+		} catch (e) {
+			// An unreachable API and an API error both end up here; show the real reason.
+			error = errorMessage(e);
 			return fallback;
 		}
 	};
