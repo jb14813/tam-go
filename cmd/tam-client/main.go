@@ -45,6 +45,7 @@ func main() {
 		Addr:              *addr,
 		Handler:           client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	log.Printf("tam-client listening on http://%s/ (data in %s)", *addr, dataDir)
 	log.Fatal(srv.ListenAndServe())

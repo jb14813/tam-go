@@ -111,9 +111,24 @@ func Merge(current Settings, patch map[string]json.RawMessage) (Settings, error)
 	return s, nil
 }
 
+// Normalize trims the text fields so a stray space never ends up in a URL.
+func Normalize(s Settings) Settings {
+	s.RemoteServer = strings.TrimSpace(s.RemoteServer)
+	s.RemoteKey = strings.TrimSpace(s.RemoteKey)
+	s.RemotePort = strings.TrimSpace(s.RemotePort)
+	s.DefaultPref = strings.TrimSpace(s.DefaultPref)
+	s.VenueName = strings.TrimSpace(s.VenueName)
+	return s
+}
+
 // Validate checks the values that other code relies on.
 func Validate(s Settings) error {
-	if p := strings.TrimSpace(s.RemotePort); p != "" {
+	if host := s.RemoteServer; host != "" {
+		if strings.ContainsAny(host, `/\?#@ `) || strings.Contains(host, "://") {
+			return errors.New("remote_server must be a host name or IP address, without scheme, port or path")
+		}
+	}
+	if p := s.RemotePort; p != "" {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {
 			return errors.New("remote_port must be a number between 1 and 65535")

@@ -92,10 +92,28 @@ func TestValidate(t *testing.T) {
 		{RemotePort: "70000", DefaultPref: "CALL"},
 		{RemotePort: "8000", DefaultPref: "PHONE"},
 		{RemotePort: "8000", DefaultPref: ""},
+		{RemoteServer: "http://tam.lan", RemotePort: "8000", DefaultPref: "CALL"},
+		{RemoteServer: "tam.lan/api", RemotePort: "8000", DefaultPref: "CALL"},
+		{RemoteServer: "tam lan", RemotePort: "8000", DefaultPref: "CALL"},
+		{RemoteServer: "user@tam.lan", RemotePort: "8000", DefaultPref: "CALL"},
 	} {
 		if err := Validate(bad); err == nil {
 			t.Errorf("Validate(%+v) should fail", bad)
 		}
+	}
+	for _, good := range []string{"tam.lan", "192.168.1.10", "localhost", ""} {
+		s := Defaults()
+		s.RemoteServer = good
+		if err := Validate(s); err != nil {
+			t.Errorf("Validate(remote_server=%q) = %v", good, err)
+		}
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	s := Normalize(Settings{RemoteServer: " tam.lan ", RemotePort: " 8443 ", VenueName: " Hall ", DefaultPref: "CALL", RemoteKey: " K "})
+	if s.RemoteServer != "tam.lan" || s.RemotePort != "8443" || s.VenueName != "Hall" || s.RemoteKey != "K" {
+		t.Fatalf("Normalize = %+v", s)
 	}
 }
 

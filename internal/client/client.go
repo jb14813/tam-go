@@ -31,6 +31,7 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS) http.Handler {
 	mux.Handle("GET /web/", newSPA(dist))
 
 	mux.HandleFunc("GET /api", h.root)
+	mux.HandleFunc("GET /api/{$}", h.root)
 	mux.HandleFunc("GET /api/settings", h.getSettings)
 	mux.HandleFunc("POST /api/settings", guard(h.postSettings))
 

@@ -46,6 +46,7 @@ func main() {
 		Addr:              *addr,
 		Handler:           server.NewHandler(store.New(sqldb), password),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	log.Printf("tam-server listening on %s (data in %s)", *addr, dataDir)
 	log.Fatal(srv.ListenAndServe())

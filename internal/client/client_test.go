@@ -172,7 +172,7 @@ func TestStandalonePrefixesAndTickets(t *testing.T) {
 		t.Fatalf("range cap = %d rows, want 301", len(rng))
 	}
 
-	if code, _ = f.do("POST", "/api/tickets", `[{"prefix":"A","t_id":3,"weight":1.5,"pref":"CALL"},{"prefix":"A","t_id":4,"pref":"PHONE"}]`, nil); code != 400 {
+	if code, _ = f.do("POST", "/api/tickets", `[{"prefix":"A","t_id":3,"pref":"CALL"},{"prefix":"A","t_id":1.5,"pref":"CALL"}]`, nil); code != 400 {
 		t.Fatalf("invalid ticket batch: %d", code)
 	}
 	if one, _ := f.st.Ticket("A", 3); one != nil {
@@ -209,14 +209,14 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("defaults = %+v", s)
 	}
 
-	code, body := f.do("POST", "/api/settings", `{"venue_name":"Hall"}`, nil)
+	code, body := f.do("POST", "/api/settings", `{"venue_name":" Hall ","remote_port":" 8443 "}`, nil)
 	s := decode[config.Settings](t, body)
-	if code != 200 || s.VenueName != "Hall" || s.RemotePort != "8000" || s.DefaultPref != "CALL" {
+	if code != 200 || s.VenueName != "Hall" || s.RemotePort != "8443" || s.DefaultPref != "CALL" {
 		t.Fatalf("partial save = %d %+v", code, s)
 	}
 
 	before, _ := os.ReadFile(f.settings)
-	for _, bad := range []string{`nope`, `{"remote_port":"abc"}`, `{"default_pref":"PHONE"}`, `{"colour":"x"}`, `{"remote_tls":"yes"}`} {
+	for _, bad := range []string{`nope`, `{"remote_port":"abc"}`, `{"default_pref":"PHONE"}`, `{"colour":"x"}`, `{"remote_tls":"yes"}`, `{"remote_server":"http://tam.lan"}`, `{"remote_server":"tam.lan/api"}`} {
 		if code, _ := f.do("POST", "/api/settings", bad, nil); code != 400 {
 			t.Errorf("POST %s = %d, want 400", bad, code)
 		}

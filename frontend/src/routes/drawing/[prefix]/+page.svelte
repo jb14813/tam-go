@@ -208,6 +208,9 @@
 									ticket.first_name || '',
 									ticket.phone_number || ''
 								];
+							} else {
+								// A cleared or invalid ticket number has no winner.
+								[item.last_name, item.first_name, item.phone_number] = ['', '', ''];
 							}
 						}}
 						bind:value={item.winning_ticket}

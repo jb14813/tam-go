@@ -23,6 +23,7 @@ func NewHandler(st *store.Store, password string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api", h.root)
+	mux.HandleFunc("GET /api/{$}", h.root)
 
 	mux.Handle("GET /api/auth", h.requirePassword(h.listKeys))
 	mux.Handle("POST /api/auth", h.requirePassword(h.createKey))

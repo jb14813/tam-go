@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"ticket-auction-manager/tam-go/internal/db"
@@ -118,6 +119,59 @@ func TestTickets(t *testing.T) {
 	found, _ = s.SearchTickets("", "", "")
 	if len(found) != 4 {
 		t.Fatalf("empty search should match everything, got %d", len(found))
+	}
+
+	// LIKE wildcards typed by a user are literal characters.
+	must(t, s.UpsertTickets([]Ticket{{"C", 1, "50%", "a_b", "x", "CALL"}}))
+	if found, _ = s.SearchTickets("%", "", ""); len(found) != 1 || found[0].FirstName != "50%" {
+		t.Fatalf("search for a literal percent = %v", found)
+	}
+	if found, _ = s.SearchTickets("", "_", ""); len(found) != 1 || found[0].LastName != "a_b" {
+		t.Fatalf("search for a literal underscore = %v", found)
+	}
+	if found, _ = s.SearchTickets("", "a\\b", ""); len(found) != 0 {
+		t.Fatalf("search for a literal backslash = %v", found)
+	}
+}
+
+func TestValidation(t *testing.T) {
+	long := strings.Repeat("L", 101)
+	for _, bad := range []Prefix{
+		{"", "red", 1}, {"   ", "red", 1}, {"A/B", "red", 1}, {`A\B`, "red", 1}, {"A\tB", "red", 1},
+		{long, "red", 1}, {"A", "chartreuse", 1}, {"A", "red", -1},
+	} {
+		if err := ValidatePrefixes([]Prefix{bad}); err == nil {
+			t.Errorf("ValidatePrefixes(%+v) should fail", bad)
+		}
+	}
+	ok := []Prefix{{" A ", "red", 0}}
+	if err := ValidatePrefixes(ok); err != nil || ok[0].Prefix != "A" {
+		t.Fatalf("ValidatePrefixes trims: %v %+v", err, ok)
+	}
+
+	if err := ValidateTickets([]Ticket{{"A/B", 1, "", "", "", "CALL"}}); err == nil {
+		t.Error("ticket with a slash prefix should fail")
+	}
+	if err := ValidateTickets([]Ticket{{"A", -1, "", "", "", "CALL"}}); err == nil {
+		t.Error("ticket with a negative id should fail")
+	}
+	anyPref := []Ticket{{"A", 1, "", "", "", " call "}}
+	if err := ValidateTickets(anyPref); err != nil || anyPref[0].Pref != "call" {
+		t.Fatalf("pref is free text like the original: %v %+v", err, anyPref)
+	}
+	if err := ValidateBaskets([]Basket{{"A", 1, "", "", -1}}); err == nil {
+		t.Error("basket with a negative winning ticket should fail")
+	}
+
+	bf := BackupFile{Prefixes: []Prefix{{"OLD", "gray", 1}}, Tickets: []Ticket{{"OLD", 1, "", "", "", "call"}}}
+	if err := ValidateBackup(&bf); err != nil {
+		t.Fatalf("a backup from the original app must restore: %v", err)
+	}
+	if bf.Prefixes[0].Color != "white" || bf.Baskets == nil {
+		t.Fatalf("ValidateBackup should normalise colours and nil lists: %+v", bf)
+	}
+	if err := ValidateBackup(&BackupFile{Prefixes: []Prefix{{"", "red", 1}}}); err == nil {
+		t.Error("a backup with an empty prefix name should fail")
 	}
 }
 

@@ -238,8 +238,11 @@ func TestTicketsBasketsDrawingReports(t *testing.T) {
 	if code, _ = a.keyed("GET", "/api/tickets/A/x", nil); code != 400 {
 		t.Fatalf("non-integer id: %d", code)
 	}
-	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":3,"pref":"PHONE"}]`); code != 400 {
-		t.Fatalf("bad pref: %d", code)
+	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"A/B","t_id":3,"pref":"CALL"}]`); code != 400 {
+		t.Fatalf("prefix with a slash: %d, want 400", code)
+	}
+	if code, _ = a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":-3,"pref":"CALL"}]`); code != 400 {
+		t.Fatalf("negative id: %d, want 400", code)
 	}
 
 	code, body = a.keyed("POST", "/api/baskets", []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", Donors: "Smiths"}})

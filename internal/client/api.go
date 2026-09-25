@@ -192,6 +192,7 @@ func (h *handler) postSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	merged = config.Normalize(merged)
 	if err := config.Validate(merged); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
