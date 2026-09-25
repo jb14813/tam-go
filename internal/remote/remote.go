@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,15 +22,22 @@ type Client struct {
 // New returns a client for baseURL (for example https://tam.lan:8443). When
 // insecureTLS is set the server certificate is not verified, which matches
 // the original's policy for the self-signed Caddy certificate.
+//
+// Connecting is given five seconds, so an unreachable server fails fast; a
+// whole request is given thirty, so a large backup push over slow Wi-Fi is
+// not cut off.
 func New(baseURL, key string, insecureTLS bool) *Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = 5 * time.Second
+	tr.ResponseHeaderTimeout = 10 * time.Second
 	if insecureTLS {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // mirrors the original deployment
 	}
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"),
 		key:  key,
-		http: &http.Client{Timeout: 5 * time.Second, Transport: tr},
+		http: &http.Client{Timeout: 30 * time.Second, Transport: tr},
 	}
 }
 
