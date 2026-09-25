@@ -1,2 +1,4 @@
 /data/
+/data-client/
+/build/
 /cmd/tam-client/dist/
