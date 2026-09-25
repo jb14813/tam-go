@@ -16,7 +16,7 @@ Ticket Auction Manager (TAM) runs in-person penny socials and benefit auctions: 
 ## Quick start
 
 1. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere. Prebuilt binaries from a release zip are under `build/<os>-<arch>/`; on Linux or macOS run `chmod +x` on them if your unzip tool dropped the executable bit.
-2. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). Keep the console window open while the event runs. To stop it, press `Alt+A` on the main menu and use **Shut Down TAM**, close the console window, or press Ctrl+C in it. Closing the browser tab alone leaves it running.
+2. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). On Windows a TAM icon sits in the notification area next to the clock while it runs (under the `^` overflow unless you pin it): left-click it to open the app again, right-click it for **Open TAM** and **Shut Down TAM**. The console window it started with stays open too, titled "Ticket Auction Manager - client" in the taskbar; closing it or pressing Ctrl+C in it also stops the program cleanly, as does **Shut Down TAM** under `Alt+A` on the main menu. Closing the browser tab alone leaves it running.
 3. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
 
 ## Building from source
@@ -49,6 +49,7 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 | `TAM_PWD` | environment, tam-server | `changeme` (a warning is logged; set it before exposing the server) |
 | `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server (`:8443` with `-tls`) |
 | `-open` | flag, tam-client | `true`: open the web app in the default browser on start |
+| `-tray` | flag, both daemons | `true` on Windows: a TAM icon in the notification area with Open (client) and Shut Down entries; use `-tray=false` for services and scripts. Other systems have no icon and stop on Ctrl+C or SIGTERM |
 | `dev` | positional argument, tam-server | binds localhost instead of every interface |
 | `-tls`, `-cert`, `-key` | flags, tam-server | HTTPS with the given PEM files, or a self-signed pair created in the data directory |
 
@@ -72,7 +73,7 @@ A data folder from the original app is a drop-in: the tables and views are the s
 
 ## Remote mode
 
-1. Run `tam-server` where every laptop can reach it, with `TAM_PWD` set. For HTTPS start it with `-tls`: it listens on port 8443 and, on first start, writes a self-signed certificate (`server.crt`, `server.key`) into its data directory; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Without `-tls` it speaks plain HTTP on port 8000. Windows asks once whether to allow the program through the firewall.
+1. Run `tam-server` where every laptop can reach it, with `TAM_PWD` set. For HTTPS start it with `-tls`: it listens on port 8443 and, on first start, writes a self-signed certificate (`server.crt`, `server.key`) into its data directory; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Without `-tls` it speaks plain HTTP on port 8000. Windows asks once whether to allow the program through the firewall. To stop it, right-click its icon in the notification area and choose **Shut Down TAM Server**, close its console window, or press Ctrl+C in it; the clients' **Shut Down TAM** button only stops the client it is pressed on.
 2. On each client, open Settings and enter the server's host name, the port (8000 for plain HTTP, 8443 for TLS) and the TLS toggle, then Save.
 3. Open Auth Keys, log in with `TAM_PWD`, create a key for this laptop and press Use. The key is stored in `settings.json` and sent as the `TAM-KEY` header on every server call.
 4. Data entered from now on goes to the server and is mirrored locally. Backup/Restore can push the local prefixes, tickets or baskets to the server and download the server's data.
@@ -124,6 +125,7 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
 - Every link is a full page load (`data-sveltekit-reload`, as in the original), so pending rows on the forms are saved when you leave the page and each prefix starts with a clean form.
 - The client listens on port 3080 instead of the original's 3000.
+- Both programs run as plain desktop programs rather than containers: on Windows they show a TAM icon in the notification area with Shut Down (and, for the client, Open) entries, the client opens the browser on start and has a **Shut Down TAM** button under `Alt+A`, and Ctrl+C or a closed console window stops either one cleanly.
 - Request bodies are capped at 64 MiB (the original ran Node with no limit); that is far above any realistic backup file. A larger body answers 413.
 - Validation errors answer 400 where FastAPI answered 422. Unknown paths and wrong methods under `/api` answer `{"detail": ...}` as the original did. `HEAD` is accepted on every GET route.
 - `DELETE /api/prefixes` and `DELETE /api/auth` echo the deleted row; a missing row is 404. In remote mode a prefix the server no longer has is still removed from the local mirror.
@@ -146,6 +148,7 @@ internal/httpx                   JSON helpers, request guards
 internal/remote                  HTTP client for tam-server
 internal/server                  tam-server API
 internal/client                  tam-client API and web app serving
+internal/desktop                 browser opening, console title, Ctrl+C handling, Windows notification-area icon
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
 

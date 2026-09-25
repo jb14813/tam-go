@@ -12,14 +12,14 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/client"
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/env"
 	"ticket-auction-manager/tam-go/internal/store"
 )
@@ -27,10 +27,15 @@ import (
 //go:embed all:dist
 var distFS embed.FS
 
+//go:embed icon.ico
+var iconICO []byte
+
 func main() {
 	addr := flag.String("addr", "localhost:3080", "address to listen on")
 	open := flag.Bool("open", true, "open the web app in the default browser once it is listening")
+	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with Open and Shut Down entries (Windows)")
 	flag.Parse()
+	desktop.SetConsoleTitle("Ticket Auction Manager - client")
 
 	dataDir, err := env.DataDir()
 	if err != nil {
@@ -49,13 +54,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var srv *http.Server
+	// stop ends the program cleanly. The page's Shut Down button, the tray
+	// icon, Ctrl+C, and closing the console window all come through here.
+	var (
+		srv      *http.Server
+		stopOnce sync.Once
+	)
 	stop := func() {
-		// Let the "shutting down" answer reach the page, then stop serving.
-		time.Sleep(300 * time.Millisecond)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		srv.Shutdown(ctx)
+		stopOnce.Do(func() {
+			go func() {
+				// Let the "shutting down" answer reach the page first.
+				time.Sleep(300 * time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				srv.Shutdown(ctx)
+			}()
+		})
 	}
 	srv = &http.Server{
 		Handler:           client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist, client.WithShutdown(stop)),
@@ -75,13 +89,35 @@ func main() {
 	if *open {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
-			if err := openBrowser(url); err != nil {
+			if err := desktop.OpenBrowser(url); err != nil {
 				log.Printf("could not open the browser (%v); open %s yourself", err, url)
 			}
 		}()
 	}
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		defer close(done)
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			serveErr = err
+		}
+	}()
+	go desktop.StopOnSignal(stop, done)
+
+	if *useTray {
+		desktop.Tray(desktop.Options{
+			Tooltip:   "Ticket Auction Manager - client on " + url,
+			Icon:      iconICO,
+			OpenURL:   url,
+			QuitLabel: "Shut Down TAM",
+			Quit:      stop,
+		}, done)
+	} else {
+		<-done
+	}
+	if serveErr != nil {
+		log.Fatal(serveErr)
 	}
 	log.Print("tam-client stopped")
 }
@@ -94,18 +130,4 @@ func browserHost(a *net.TCPAddr) string {
 		host = a.IP.String()
 	}
 	return net.JoinHostPort(host, strconv.Itoa(a.Port))
-}
-
-// openBrowser asks the operating system to open url in the default browser.
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
 }

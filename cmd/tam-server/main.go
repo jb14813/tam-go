@@ -5,26 +5,36 @@
 package main
 
 import (
+	"context"
+	_ "embed"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/env"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/tlscert"
 )
 
+//go:embed icon.ico
+var iconICO []byte
+
 func main() {
 	addr := flag.String("addr", "", "address to listen on (default :8000, or :8443 with -tls)")
 	useTLS := flag.Bool("tls", false, "serve HTTPS; a self-signed certificate is created in the data directory when none is given")
 	certFile := flag.String("cert", "", "TLS certificate file (default <data dir>/server.crt)")
 	keyFile := flag.String("key", "", "TLS key file (default <data dir>/server.key)")
+	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with a Shut Down entry (Windows)")
 	flag.Parse()
+	desktop.SetConsoleTitle("Ticket Auction Manager - server")
 
 	// "dev" binds the loopback interface unless an address was given.
 	if *addr == "" {
@@ -58,8 +68,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := &http.Server{
-		Addr:              *addr,
+	// stop ends the program cleanly: the tray icon, Ctrl+C, and closing the
+	// console window all come through here.
+	var (
+		srv      *http.Server
+		stopOnce sync.Once
+	)
+	stop := func() {
+		stopOnce.Do(func() {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				srv.Shutdown(ctx)
+			}()
+		})
+	}
+	srv = &http.Server{
 		Handler:           server.NewHandler(store.New(sqldb), password),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute,
@@ -67,25 +91,59 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 	}
 
-	if !*useTLS {
-		log.Printf("tam-server listening on http://%s (data in %s)", *addr, dataDir)
-		log.Fatal(srv.ListenAndServe())
+	scheme := "http"
+	if *useTLS {
+		scheme = "https"
+		if *certFile == "" {
+			*certFile = filepath.Join(dataDir, "server.crt")
+		}
+		if *keyFile == "" {
+			*keyFile = filepath.Join(dataDir, "server.key")
+		}
+		hostname, _ := os.Hostname()
+		created, err := tlscert.EnsurePair(*certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if created {
+			log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", *certFile)
+		}
 	}
 
-	if *certFile == "" {
-		*certFile = filepath.Join(dataDir, "server.crt")
-	}
-	if *keyFile == "" {
-		*keyFile = filepath.Join(dataDir, "server.key")
-	}
-	hostname, _ := os.Hostname()
-	created, err := tlscert.EnsurePair(*certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
+	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if created {
-		log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", *certFile)
+	log.Printf("tam-server listening on %s://%s (data in %s)", scheme, *addr, dataDir)
+
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		defer close(done)
+		var err error
+		if *useTLS {
+			err = srv.ServeTLS(ln, *certFile, *keyFile)
+		} else {
+			err = srv.Serve(ln)
+		}
+		if err != nil && err != http.ErrServerClosed {
+			serveErr = err
+		}
+	}()
+	go desktop.StopOnSignal(stop, done)
+
+	if *useTray {
+		desktop.Tray(desktop.Options{
+			Tooltip:   "Ticket Auction Manager - server on " + *addr,
+			Icon:      iconICO,
+			QuitLabel: "Shut Down TAM Server",
+			Quit:      stop,
+		}, done)
+	} else {
+		<-done
 	}
-	log.Printf("tam-server listening on https://%s (data in %s)", *addr, dataDir)
-	log.Fatal(srv.ListenAndServeTLS(*certFile, *keyFile))
+	if serveErr != nil {
+		log.Fatal(serveErr)
+	}
+	log.Print("tam-server stopped")
 }
