@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  tam-client as a launchd agent: started at login, restarted after a crash,
+  with its data (and its log, tam-client.log) in
+  ~/Library/Application Support/tam-client. launchd expands no ~ or $HOME in
+  a plist, so the program is started through /bin/sh, which does. It does
+  not open the browser by itself here: open http://localhost:3080/ when you
+  need it. The commands to install it are in README.md next to this file
+  (INSTALL.md in the release archive).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.ticket-auction-manager.tam-client</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>TAM_DATA_DIR="$HOME/Library/Application Support/tam-client" exec /usr/local/bin/tam-client -addr localhost:3080 -open=false -tray=false</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+</dict>
+</plist>
