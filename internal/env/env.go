@@ -19,7 +19,7 @@ func GetDataDir() string {
 func GetDBPath() string {
 	base_dir := GetDataDir()
 	var FileName string
-	Daemon := os.Getenv("TAM_DAEMON")
+	Daemon := GetDaemon()
 	switch Daemon {
 	case "Client":
 		FileName = "tam-local.db"
@@ -34,4 +34,9 @@ func GetConfigPath() string {
 	base_dir := GetDataDir()
 	val := path.Join(base_dir, "settings.json")
 	return val
+}
+
+func GetDaemon() string {
+	daemon := os.Getenv("TAM_DAEMON")
+	return daemon
 }

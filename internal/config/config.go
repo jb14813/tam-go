@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"ticket-auction-manager/tam-go/internal/env"
@@ -46,6 +47,28 @@ func GetAllSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(200)
 	json.NewEncoder(w).Encode(fileData)
+}
+
+func GetRemoteURL(s ConfigFile) string {
+	var (
+		httpstr   string
+		serverstr string
+		port      string
+	)
+	if s.RemoteServer != "" {
+		switch s.RemoteTLS {
+		case true:
+			httpstr = "https"
+		case false:
+			httpstr = "http"
+		}
+		serverstr = s.RemoteServer
+		port = s.RemotePort
+		NewURL := fmt.Sprintf("%s://%s:%s/", httpstr, serverstr, port)
+		return NewURL
+	} else {
+		return ""
+	}
 }
 
 func SaveAllSettings(w http.ResponseWriter, r *http.Request) {

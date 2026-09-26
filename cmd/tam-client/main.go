@@ -11,12 +11,17 @@ import (
 	"ticket-auction-manager/tam-go/internal/prefixes"
 )
 
-//go:embed all:dist/*
+//go:embed all:dist
 var filesystem embed.FS
+
+//go:embed asciiart.txt
+var ASCIIart string
 
 func init() {
 	os.Setenv("TAM_DAEMON", "Client")
 	db.InitDB()
+	fmt.Println("Database initialized.")
+	fmt.Println(ASCIIart)
 }
 
 func main() {
@@ -36,6 +41,6 @@ func main() {
 	clientSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
 	clientSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
 
-	fmt.Println("Listening on http://localhost:3080/")
+	fmt.Println("http://localhost:3080/")
 	http.ListenAndServe("localhost:3080", clientSrv)
 }
