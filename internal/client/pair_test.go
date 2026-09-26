@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/config"
+	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
@@ -159,5 +161,28 @@ func TestQueuedDeleteAndFailedList(t *testing.T) {
 	}
 	if _, fl := pending(t, f.st); fl != 0 {
 		t.Fatalf("failed after discard = %d", fl)
+	}
+}
+
+// TestServersListsOneEntryPerServer: a server seen on two of its addresses
+// shows once in the list the Settings page gets.
+func TestServersListsOneEntryPerServer(t *testing.T) {
+	f := newFixture(t)
+	f.h.sweepMu.Lock()
+	f.h.swept = []discovery.Server{
+		{Name: "dup-test", Host: "192.0.2.10", Port: "8000"},
+		{Name: "dup-test", Host: "198.51.100.10", Port: "8000"},
+	}
+	f.h.sweptAt = time.Now()
+	f.h.sweepMu.Unlock()
+	_, body := f.do("GET", "/api/servers", nil, nil)
+	n := 0
+	for _, s := range decode[[]discovery.Server](t, body) {
+		if s.Name == "dup-test" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("dup-test listed %d times: %s", n, body)
 	}
 }

@@ -39,21 +39,17 @@ const sweepEvery = 10 * time.Second
 // themselves (mDNS) and, for networks that drop multicast, the ones found by
 // asking the standard ports on every address of the local /24 networks.
 // The sweep runs in the background and takes a few seconds; its result
-// shows up on the Settings page's next poll.
+// shows up on the Settings page's next poll. A server seen at several
+// addresses is listed once, at the address this laptop shares a network
+// with.
 func (h *handler) servers(w http.ResponseWriter, r *http.Request) {
 	announced, err := discovery.Browse(r.Context(), browseWait)
 	if err != nil {
 		log.Printf("discovery: %v", err)
 	}
-	seen := map[string]bool{}
-	out := []discovery.Server{}
-	for _, s := range append(announced, h.sweep()...) {
-		key := net.JoinHostPort(s.Host, s.Port)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, s)
+	out := discovery.Collapse(append(announced, h.sweep()...), discovery.LocalNetworks())
+	if out == nil {
+		out = []discovery.Server{}
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
