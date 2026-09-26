@@ -113,26 +113,3 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 		t.Fatalf("counts after clear = %d, %d", p, f)
 	}
 }
-
-func TestReplacePrefixes(t *testing.T) {
-	s := newOutboxStore(t)
-	if err := s.UpsertPrefixes([]Prefix{{Prefix: "A", Color: "red", Weight: 1}, {Prefix: "B", Color: "blue", Weight: 2}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplacePrefixes([]Prefix{{Prefix: "B", Color: "green", Weight: 1}, {Prefix: "C", Color: "white", Weight: 2}}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.ListPrefixes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].Prefix != "B" || got[0].Color != "green" || got[1].Prefix != "C" {
-		t.Fatalf("after replace: %+v", got)
-	}
-	if err := s.ReplacePrefixes(nil); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := s.ListPrefixes(); len(got) != 0 {
-		t.Fatalf("replace with nothing must empty the table: %+v", got)
-	}
-}

@@ -422,10 +422,8 @@ func (s *Syncer) pull(rc *remote.Client) {
 		log.Printf("server %s: sent an invalid backup: %v", s.name(), err)
 		return
 	}
-	if err := s.st.ReplacePrefixes(bf.Prefixes); err != nil {
-		log.Printf("mirror: %v", err)
-		return
-	}
+	// Import only adds and updates: a laptop's own standalone rows are never
+	// deleted by a pull, so pairing (and unpairing) never loses local data.
 	if err := s.st.Import(bf); err != nil {
 		log.Printf("mirror: %v", err)
 		return

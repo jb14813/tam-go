@@ -352,7 +352,7 @@ func (h *handler) proxyAuth(w http.ResponseWriter, r *http.Request) {
 // --- prefixes ---
 
 func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
-	listOr(h, w, h.remote(h.settings()), "/api/prefixes", h.st.ReplacePrefixes, h.st.ListPrefixes)
+	listOr(h, w, h.remote(h.settings()), "/api/prefixes", h.st.UpsertPrefixes, h.st.ListPrefixes)
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {

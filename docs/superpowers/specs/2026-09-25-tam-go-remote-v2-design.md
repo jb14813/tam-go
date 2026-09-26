@@ -53,7 +53,7 @@ Five pieces, each usable on its own:
 
 Today every request in remote mode goes to the server and the local mirror is written after a successful save. The new behaviour:
 
-**Reads.** Connected: fetch from the server as now, upsert the rows into the mirror, answer with the server's rows (prefix lists replace the mirror's set, because prefixes are the only rows that can be deleted). Not connected: answer from the mirror. On startup in remote mode, and on every reconnect, the client pulls the server's full backup (`/api/backuprestore/remote`, 0.25 s at event size) into the mirror so a laptop that goes offline later has everything.
+**Reads.** Connected: fetch from the server as now, upsert the rows into the mirror and answer with the server's rows (the mirror only ever adds or updates, so a laptop's own standalone rows survive pairing; a prefix deleted on another laptop lingers in this mirror only while offline). Not connected: answer from the mirror. On startup in remote mode, and on every reconnect, the client pulls the server's full backup (`/api/backuprestore/remote`, 0.25 s at event size) into the mirror so a laptop that goes offline later has everything.
 
 **Writes.** Validate, write the mirror, then send to the server with a 5 s timeout.
 
