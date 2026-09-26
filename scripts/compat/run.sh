@@ -26,12 +26,21 @@ fi
 pnpm_cmd="pnpm"
 command -v pnpm >/dev/null 2>&1 || pnpm_cmd="npx --yes pnpm@latest"
 PASSWORD=compat-secret
+# Every run starts from empty data folders; a client left paired by an
+# earlier run would otherwise answer as its server.
+rm -rf "$WORK/orig-server-data" "$WORK/go-server-data" "$WORK/go-client-data" "$WORK/orig-client-data"
 
 pids=()
 cleanup() {
   for pid in "${pids[@]:-}"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Git Bash: make sure the native programs behind the wrappers are gone.
+      powershell.exe -NoProfile -Command "foreach (\$port in 8010, 8011, 3010, 3011) { Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { \$p = Get-Process -Id \$_.OwningProcess -ErrorAction SilentlyContinue; if (\$p -and \$p.ProcessName -in 'python','node','tam-server','tam-client') { Stop-Process -Id \$p.Id } } }" 2>/dev/null || true
+      ;;
+  esac
 }
 trap cleanup EXIT
 
@@ -59,7 +68,7 @@ if [ -x "$VENV/bin/python" ]; then VPY="$VENV/bin/python"; else VPY="$VENV/Scrip
 "$VPY" -m pip install -q -r "$ORIG/api/app/requirements.txt"
 mkdir -p "$WORK/orig-server-data"
 (cd "$ORIG/api/app" && TAM_PWD=$PASSWORD TAM_DATA_DIR="$WORK/orig-server-data" \
-  "$VPY" -m uvicorn main:app --host 127.0.0.1 --port 8010 >"$WORK/orig-server.log" 2>&1) &
+  exec "$VPY" -m uvicorn main:app --host 127.0.0.1 --port 8010 >"$WORK/orig-server.log" 2>&1) &
 pids+=($!)
 wait_http http://127.0.0.1:8010/api "X-None: 1" "TAM Server"
 echo "--- Go client tests against the original server"
@@ -71,9 +80,9 @@ case "$(go env GOOS)" in windows) ext=".exe" ;; esac
 go build -o "$WORK/tam-server$ext" ./cmd/tam-server/
 go build -o "$WORK/tam-client$ext" ./cmd/tam-client/
 mkdir -p "$WORK/go-server-data" "$WORK/go-client-data" "$WORK/orig-client-data"
-(TAM_PWD=$PASSWORD TAM_DATA_DIR="$WORK/go-server-data" "$WORK/tam-server$ext" -addr 127.0.0.1:8011 -tray=false >"$WORK/go-server.log" 2>&1) &
+(TAM_PWD=$PASSWORD TAM_DATA_DIR="$WORK/go-server-data" exec "$WORK/tam-server$ext" -addr 127.0.0.1:8011 -tray=false -announce=false >"$WORK/go-server.log" 2>&1) &
 pids+=($!)
-(TAM_DATA_DIR="$WORK/go-client-data" "$WORK/tam-client$ext" -addr 127.0.0.1:3011 -open=false -tray=false >"$WORK/go-client.log" 2>&1) &
+(TAM_DATA_DIR="$WORK/go-client-data" exec "$WORK/tam-client$ext" -addr 127.0.0.1:3011 -open=false -tray=false >"$WORK/go-client.log" 2>&1) &
 pids+=($!)
 
 echo "--- building the original client"
@@ -84,10 +93,10 @@ echo "--- building the original client"
 # The original client invents its request id at startup and hands it to its
 # pages; drive.py reads it from the rendered main menu.
 (cd "$ORIG/client" && PORT=3010 HOST=127.0.0.1 ORIGIN=http://127.0.0.1:3010 TAM_DATA_DIR="$WORK/orig-client-data" \
-  node build >"$WORK/orig-client.log" 2>&1) &
+  exec node build >"$WORK/orig-client.log" 2>&1) &
 pids+=($!)
 wait_http http://127.0.0.1:8011/api "X-None: 1" "TAM Server"
-wait_http http://127.0.0.1:3011/api "X-None: 1" "TAM Client"
+wait_http http://127.0.0.1:3011/api "X-None: 1" "whoami"
 wait_http http://127.0.0.1:3010/ "X-None: 1" "tamClientID"
 
 echo "--- driving both clients against the Go server"
