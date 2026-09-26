@@ -41,7 +41,15 @@ jobs:
         run: |
           pre=""
           case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" $pre --generate-notes \
+          # The description: docs/release-notes.md with the version filled in,
+          # then the list of changes GitHub generates.
+          sed -e "s#{VERSION}#$GITHUB_REF_NAME#g" -e "s#{REPO}#$GITHUB_REPOSITORY#g" docs/release-notes.md > build/release-notes.md
+          printf '
+## Changes
+
+' >> build/release-notes.md
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body >> build/release-notes.md
+          gh release create "$GITHUB_REF_NAME" $pre --title "Ticket Auction Manager $GITHUB_REF_NAME" --notes-file build/release-notes.md \
             build/tam-server-*.exe build/tam-client-*.exe \
             build/tam-server-*.zip build/tam-server-*.tar.gz build/tam-client-*.zip build/tam-client-*.tar.gz \
             build/*.deb build/*.rpm
