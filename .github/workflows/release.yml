@@ -36,4 +36,4 @@ jobs:
       - name: Create the GitHub release with the archives
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" build/tam-server-*.zip build/tam-server-*.tar.gz build/tam-client-*.zip build/tam-client-*.tar.gz --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" build/tam-server-*.exe build/tam-client-*.exe build/tam-server-*.zip build/tam-server-*.tar.gz build/tam-client-*.zip build/tam-client-*.tar.gz --generate-notes

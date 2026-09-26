@@ -9,7 +9,8 @@
 #                         build/<os>-<arch>/, and one archive per program
 #                         and target in build/: tam-server-<version>-<os>-
 #                         <arch>.zip and tam-client-<version>-<os>-<arch>.zip
-#                         for windows, .tar.gz for the others
+#                         for windows (plus the bare .exe under the same
+#                         name), .tar.gz for the others
 #
 # Cross-compile one target by setting GOOS and GOARCH, for example:
 #   GOOS=linux GOARCH=amd64 ./build.sh all
@@ -125,6 +126,10 @@ package_program() {
       "$(python_cmd)" -c 'import shutil, sys; shutil.make_archive(sys.argv[1] + "/" + sys.argv[2], "zip", root_dir=sys.argv[1], base_dir=sys.argv[2])' build "$name"
     fi
     echo "wrote build/$name.zip"
+    # The program alone as well: on Windows one file is all it takes, so a
+    # download that is double-clicked runs without unpacking anything.
+    cp "build/$os-$arch/$program$ext" "build/$name$ext"
+    echo "wrote build/$name$ext"
   else
     rm -f "build/$name.tar.gz"
     if command -v tar >/dev/null 2>&1 && ! on_windows_shell; then

@@ -43,6 +43,8 @@ server reports it on `GET /api` and the admin page.
   then one archive per program and target (`tam-server-<version>-<os>-<arch>`
   and `tam-client-...`, `.zip` on Windows, `.tar.gz` elsewhere) containing that
   program, README.md, LICENSE.md and its deploy files for that system.
+  On Windows the bare program is published next to its zip, so one
+  download that is double-clicked runs without unpacking.
 - CI: cross-compile check for all six targets on every push; a `release`
   workflow on tags `v*` builds the archives and attaches them to the
   GitHub release.
