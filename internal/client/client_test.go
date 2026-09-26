@@ -56,7 +56,7 @@ func newServerStore(t *testing.T) *store.Store {
 }
 
 // testTimings make the syncer react within a test's patience.
-var testTimings = tamsync.Timings{Heartbeat: time.Millisecond, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
+var testTimings = tamsync.Timings{Heartbeat: 0, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
 
 func pending(t *testing.T, st *store.Store) (int, int) {
 	t.Helper()

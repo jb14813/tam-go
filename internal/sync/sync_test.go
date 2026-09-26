@@ -98,7 +98,7 @@ func newSyncer(t *testing.T, serverURL string) (*Syncer, *store.Store) {
 		}
 		return remote.New(s.RemoteURL(), s.RemoteKey, false)
 	}
-	tm := Timings{Heartbeat: time.Millisecond, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
+	tm := Timings{Heartbeat: 0, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
 	return New(st, cfg, client, tm), st
 }
 
