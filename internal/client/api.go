@@ -658,7 +658,7 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := rc.Post("/api/backuprestore", bf)
+	res, err := restoreInto(rc, bf)
 	if err != nil {
 		h.unreachable(w, err)
 		return
@@ -668,6 +668,19 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Backup file imported successfully."})
+}
+
+// restoreInto sends a backup to the server, then the winning tickets a
+// second time through the drawing route. The original server's restore
+// leaves the winning ticket of a basket it already has untouched, and the
+// drawing route is what sets it on every server, so the restore comes out
+// complete on both.
+func restoreInto(rc *remote.Client, bf store.BackupFile) (*remote.Response, error) {
+	res, err := rc.Post("/api/backuprestore", bf)
+	if err != nil || !res.OK() || len(bf.Baskets) == 0 {
+		return res, err
+	}
+	return rc.Post("/api/drawing", bf.Baskets)
 }
 
 // push sends one local table to the server. The page sends an empty JSON
@@ -702,7 +715,7 @@ func (h *handler) push(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "Server not set.")
 		return
 	}
-	res, err := rc.Post("/api/backuprestore", bf)
+	res, err := restoreInto(rc, bf)
 	if err != nil {
 		h.unreachable(w, err)
 		return

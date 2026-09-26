@@ -170,9 +170,7 @@ func TestCompatEverything(t *testing.T) {
 		t.Fatalf("basket after restore = %+v (a restore overwrites the description)", b)
 	}
 	if b.WinningTicket != 1 {
-		// The original server leaves winning tickets alone on a restore;
-		// tam-server overwrites them. Both are accepted here.
-		t.Logf("this server keeps winning tickets on a restore (got %d): the original's behaviour", b.WinningTicket)
+		t.Fatalf("basket after restore = %+v (the restore carries the winning tickets through the drawing route)", b)
 	}
 	if lt, _ := f.st.Ticket(p, 1); lt == nil || lt.FirstName != "Ann" {
 		t.Fatalf("mirror lacks the saved ticket: %+v", lt)

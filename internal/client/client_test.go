@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -587,5 +589,136 @@ func TestStandaloneAuthAndPush(t *testing.T) {
 	}
 	if ps, _ := other.st.ListPrefixes(); len(ps) != 1 {
 		t.Fatalf("local import result = %v", ps)
+	}
+}
+
+// recorder stands in for a server and records every write it receives.
+type recorder struct {
+	mu            sync.Mutex
+	writes        []recordedWrite
+	drawingStatus int
+}
+
+type recordedWrite struct {
+	path string
+	body []byte
+}
+
+func newRecorder(t *testing.T, f *fixture) *recorder {
+	t.Helper()
+	rec := &recorder{drawingStatus: 200}
+	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, _ := io.ReadAll(r.Body)
+			rec.mu.Lock()
+			rec.writes = append(rec.writes, recordedWrite{r.URL.Path, body})
+			status := rec.drawingStatus
+			rec.mu.Unlock()
+			if r.URL.Path == "/api/drawing" && status != 200 {
+				httpx.WriteError(w, status, "no drawing today")
+				return
+			}
+			httpx.WriteJSON(w, 200, map[string]string{"message": "ok"})
+			return
+		}
+		httpx.WriteJSON(w, 200, map[string]any{"whoami": "TAM Server", "authenticated": true, "healthy": true})
+	}))
+	t.Cleanup(rs.Close)
+	u, _ := url.Parse(rs.URL)
+	s := config.Defaults()
+	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), "K"
+	if err := config.Save(f.settings, s); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func (rec *recorder) refuseDrawing(status int) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.drawingStatus = status
+}
+
+func (rec *recorder) paths() []string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var out []string
+	for _, w := range rec.writes {
+		out = append(out, w.path)
+	}
+	return out
+}
+
+func (rec *recorder) body(path string) []byte {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, w := range rec.writes {
+		if w.path == path {
+			return w.body
+		}
+	}
+	return nil
+}
+
+// A restore into a server carries the winning tickets through the drawing
+// route as well. The original server's restore leaves the winning ticket of
+// a basket it already has untouched; the drawing route sets it on every
+// server, so the restore comes out complete on both.
+func TestRestoreIntoServerCarriesWinningTickets(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder(t, f)
+	bf := store.NewBackupFile()
+	bf.Baskets = []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}, {Prefix: "A", BID: 2, Description: "Spa"}}
+	if code, body := f.do("POST", "/api/backuprestore/remote", bf, nil); code != 200 {
+		t.Fatalf("restore = %d %s", code, body)
+	}
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore", "/api/drawing"}) {
+		t.Fatalf("the server received %v, want the restore and then the drawing", got)
+	}
+	var lines []store.Basket
+	if err := json.Unmarshal(rec.body("/api/drawing"), &lines); err != nil || len(lines) != 2 || lines[0].WinningTicket != 7 || lines[1].BID != 2 || lines[1].WinningTicket != 0 {
+		t.Fatalf("drawing body = %s", rec.body("/api/drawing"))
+	}
+}
+
+func TestPushBasketsCarriesWinningTickets(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder(t, f)
+	if err := f.st.UpsertBaskets([]store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
+		t.Fatalf("push = %d %s", code, body)
+	}
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore", "/api/drawing"}) {
+		t.Fatalf("the server received %v, want the restore and then the drawing", got)
+	}
+	if !strings.Contains(string(rec.body("/api/drawing")), `"winning_ticket":7`) {
+		t.Fatalf("drawing body = %s", rec.body("/api/drawing"))
+	}
+}
+
+// Prefixes and tickets carry no winning tickets, so nothing follows them.
+func TestPushTicketsSendsNoDrawing(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder(t, f)
+	if code, body := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 200 {
+		t.Fatalf("push = %d %s", code, body)
+	}
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore"}) {
+		t.Fatalf("the server received %v, want only the restore", got)
+	}
+}
+
+// A refused drawing means the restore did not complete, and the page must
+// hear that rather than a success.
+func TestRestoreIntoServerReportsARefusedDrawing(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder(t, f)
+	rec.refuseDrawing(500)
+	bf := store.NewBackupFile()
+	bf.Baskets = []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}}
+	if code, body := f.do("POST", "/api/backuprestore/remote", bf, nil); code != 500 || !strings.Contains(string(body), "no drawing today") {
+		t.Fatalf("restore = %d %s, want the server's refusal", code, body)
 	}
 }
