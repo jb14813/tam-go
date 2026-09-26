@@ -194,9 +194,12 @@ internal/server                  tam-server API
 internal/client                  tam-client API and web app serving
 internal/desktop                 browser opening, console title, Ctrl+C handling, Windows notification-area icon
 internal/sync                    connection state, heartbeat, outbox replay, mirror pull (remote mode)
-internal/discovery               mDNS announce (server) and browse (client)
+internal/discovery               mDNS announce (server), browse and subnet sweep (client)
+internal/presence                what the server last saw of each laptop, for the admin page
 internal/admin                   the server's login-protected admin pages and password file
+internal/version                 the version both programs report, stamped at build time
 scripts/compat                   the compatibility run against the original tam
+deploy/linux, deploy/macos, deploy/docker   systemd units and installer, launchd agents, Dockerfile and compose
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
 
