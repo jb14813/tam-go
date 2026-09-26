@@ -4,6 +4,7 @@
 {{with .Data}}
 <table class="facts">
   <tr><th>Address</th><td>{{.Addr}}</td></tr>
+  {{if .Addresses}}<tr><th>Reachable at</th><td>{{range .Addresses}}<div>{{.}}</div>{{end}}</td></tr>{{end}}
   <tr><th>TLS</th><td>{{if .TLS}}on{{else}}off{{end}}</td></tr>
   <tr><th>Data directory</th><td>{{.DataDir}}</td></tr>
   <tr><th>Version</th><td>{{.Version}}</td></tr>

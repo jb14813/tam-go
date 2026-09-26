@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,16 +31,50 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, st)
 }
 
-// servers lists the tam-servers announcing themselves on this network.
+// sweepEvery is how long a subnet sweep's result is reused before the
+// network is asked again; the Settings page polls more often than that.
+const sweepEvery = 10 * time.Second
+
+// servers lists the tam-servers on this network: the ones announcing
+// themselves (mDNS) and, for networks that drop multicast, the ones found by
+// asking the standard ports on every address of the local /24 networks.
+// The sweep runs in the background and takes a few seconds; its result
+// shows up on the Settings page's next poll.
 func (h *handler) servers(w http.ResponseWriter, r *http.Request) {
-	list, err := discovery.Browse(r.Context(), browseWait)
+	announced, err := discovery.Browse(r.Context(), browseWait)
 	if err != nil {
 		log.Printf("discovery: %v", err)
 	}
-	if list == nil {
-		list = []discovery.Server{}
+	seen := map[string]bool{}
+	out := []discovery.Server{}
+	for _, s := range append(announced, h.sweep()...) {
+		key := net.JoinHostPort(s.Host, s.Port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
 	}
-	httpx.WriteJSON(w, http.StatusOK, list)
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// sweep returns the last subnet sweep and starts a fresh one in the
+// background when the last is older than sweepEvery.
+func (h *handler) sweep() []discovery.Server {
+	h.sweepMu.Lock()
+	defer h.sweepMu.Unlock()
+	if !h.sweeping && time.Since(h.sweptAt) >= sweepEvery {
+		h.sweeping = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			found := discovery.Sweep(ctx)
+			h.sweepMu.Lock()
+			h.swept, h.sweptAt, h.sweeping = found, time.Now(), false
+			h.sweepMu.Unlock()
+		}()
+	}
+	return h.swept
 }
 
 type pairRequest struct {

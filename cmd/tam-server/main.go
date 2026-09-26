@@ -37,6 +37,24 @@ var iconICO []byte
 //go:embed asciiart.txt
 var banner string
 
+// reachableURLs lists the addresses a client elsewhere on the network can
+// use: the listen address itself when it names an interface, otherwise
+// this machine's addresses with the listen port.
+func reachableURLs(scheme, addr string) []string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil
+	}
+	if host != "" && host != "0.0.0.0" && host != "::" {
+		return []string{scheme + "://" + net.JoinHostPort(host, port) + "/"}
+	}
+	var out []string
+	for _, ip := range discovery.LocalAddresses() {
+		out = append(out, scheme+"://"+net.JoinHostPort(ip, port)+"/")
+	}
+	return out
+}
+
 // browseAddr turns a listen address into one a browser on this machine can
 // open: ":8000" listens everywhere, so it is reachable as localhost:8000.
 func browseAddr(addr string) string {
@@ -72,6 +90,11 @@ func main() {
 			*addr = host + ":8000"
 		}
 	}
+	scheme := "http"
+	if *useTLS {
+		scheme = "https"
+	}
+	reachable := reachableURLs(scheme, *addr)
 
 	dataDir, err := env.DataDir()
 	if err != nil {
@@ -125,7 +148,7 @@ func main() {
 	}
 	st := store.New(sqldb)
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
 	mux.Handle("/", server.NewHandler(st, password))
@@ -137,9 +160,7 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 	}
 
-	scheme := "http"
 	if *useTLS {
-		scheme = "https"
 		if *certFile == "" {
 			*certFile = filepath.Join(dataDir, "server.crt")
 		}
@@ -162,6 +183,11 @@ func main() {
 	}
 	fmt.Print(banner)
 	fmt.Printf("%s://%s/\n", scheme, browseAddr(*addr))
+	// The addresses a laptop on the network can be pointed at by hand when
+	// the network drops the announcement.
+	for _, u := range reachable {
+		fmt.Println(u)
+	}
 	log.Printf("tam-server listening on %s://%s (data in %s)", scheme, *addr, dataDir)
 	if !password.IsSet() {
 		log.Printf("no password set: open %s://%s/admin to set one", scheme, browseAddr(*addr))

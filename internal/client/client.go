@@ -13,8 +13,10 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/config"
+	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/remote"
 	"ticket-auction-manager/tam-go/internal/store"
@@ -39,6 +41,12 @@ type handler struct {
 
 	timings tamsync.Timings
 	runCtx  context.Context
+
+	// The last subnet sweep for servers, refreshed in the background.
+	sweepMu  sync.Mutex
+	swept    []discovery.Server
+	sweptAt  time.Time
+	sweeping bool
 }
 
 // Option configures NewHandler.

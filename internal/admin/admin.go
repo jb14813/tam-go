@@ -33,11 +33,12 @@ func parsePages(names ...string) map[string]*template.Template {
 
 // Info is what the status page shows about the running server.
 type Info struct {
-	Addr    string    // the listen address
-	TLS     bool      // whether the server speaks HTTPS
-	DataDir string    // where the database, log and server.json live
-	Version string    // the program version
-	Started time.Time // when the server started, for the uptime
+	Addr      string    // the listen address
+	Addresses []string  // the addresses clients can reach this machine at
+	TLS       bool      // whether the server speaks HTTPS
+	DataDir   string    // where the database, log and server.json live
+	Version   string    // the program version
+	Started   time.Time // when the server started, for the uptime
 }
 
 type handler struct {
