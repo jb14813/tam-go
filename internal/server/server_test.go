@@ -518,3 +518,21 @@ func TestOversizedBodyIs413(t *testing.T) {
 		t.Fatalf("oversized body = %d, want 413", code)
 	}
 }
+
+// TestKeyAcceptedUnderTheOriginalClientsSpelling: the original client sends
+// the key as TAM_KEY on its server-backup download, so that spelling counts
+// too, on the data routes and on the root route's authenticated flag.
+func TestKeyAcceptedUnderTheOriginalClientsSpelling(t *testing.T) {
+	a := newAPI(t)
+	underscore := map[string]string{"TAM_KEY": a.key}
+	if code, body := a.do("GET", "/api/backuprestore", nil, underscore); code != 200 {
+		t.Fatalf("backup with TAM_KEY = %d %s", code, body)
+	}
+	_, body := a.do("GET", "/api", nil, underscore)
+	if root := decode[map[string]any](t, body); root["authenticated"] != true {
+		t.Fatalf("root with TAM_KEY = %s", body)
+	}
+	if code, _ := a.do("GET", "/api/backuprestore", nil, map[string]string{"TAM_KEY": "WRONG"}); code != 401 {
+		t.Fatalf("a wrong TAM_KEY must still be refused, got %d", code)
+	}
+}

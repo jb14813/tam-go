@@ -132,7 +132,7 @@ func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 
 func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("TAM-KEY")
+		key := keyOf(r)
 		ok, err := h.st.KeyExists(key)
 		if err != nil {
 			httpx.WriteInternal(w, err)
@@ -145,6 +145,15 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 		h.touch(key)
 		next(w, r)
 	})
+}
+
+// keyOf returns the request's access key. The original client sends it as
+// TAM_KEY on its server-backup download, so that spelling counts too.
+func keyOf(r *http.Request) string {
+	if key := r.Header.Get("TAM-KEY"); key != "" {
+		return key
+	}
+	return r.Header.Get("TAM_KEY")
 }
 
 // touch records the key's last_seen time, at most once per touchEvery so
@@ -187,7 +196,7 @@ func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
 }
 
 func (h *handler) root(w http.ResponseWriter, r *http.Request) {
-	key := r.Header.Get("TAM-KEY")
+	key := keyOf(r)
 	authed, err := h.st.KeyExists(key)
 	if err != nil {
 		httpx.WriteInternal(w, err)

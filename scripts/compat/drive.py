@@ -160,14 +160,11 @@ def main():
     expect(code == 200 and len([t for t in doc if t["prefix"] == p]) == 2, "original search")
 
     # Backups through both.
+    # The original client sends the key as TAM_KEY on this one route; the
+    # Go server accepts that spelling, so the download is complete.
     code, doc = call(orig, "GET", "/api/backuprestore/remote", headers=oh)
-    if code == 200 and isinstance(doc, dict) and "tickets" in doc:
-        expect(any(t["prefix"] == p for t in doc["tickets"]), "original: server backup download")
-    else:
-        # The original client sends the key as TAM_KEY on this one route, so
-        # every server refuses it and the client answers {}. A known bug in
-        # the original, not a compatibility problem.
-        expect(doc == {}, f"original: server backup download answers {{}} (its known TAM_KEY header bug): {doc}")
+    expect(code == 200 and isinstance(doc, dict) and any(t["prefix"] == p for t in doc.get("tickets", [])),
+           f"original: server backup download ({code} {doc if not isinstance(doc, dict) else sorted(doc)})")
     code, doc = call(goc, "GET", "/api/backuprestore/remote")
     expect(code == 200 and any(b["prefix"] == p for b in doc["baskets"]), "go client: server backup download")
     # The original client's push is a HEAD request with no body.
