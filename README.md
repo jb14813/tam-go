@@ -95,7 +95,7 @@ Backup/Restore can still push the local prefixes, tickets or baskets to the serv
 
 ### Compatibility with the original
 
-The API is the original's, so the original `tam-client` (Linux/Docker) and the Go client can share one server, and either server works. `scripts/compat/run.sh` proves it: it starts the original FastAPI server at a pinned commit and runs the Go client's `TestCompat*` tests against it, then starts the Go server with both the original SvelteKit client and the Go client and drives every route through each (`scripts/compat/drive.py`). CI runs it on every push. The one difference it tolerates: the original server leaves winning tickets alone on a restore, while `tam-server` overwrites them.
+The API is the original's, so the original `tam-client` (Linux/Docker) and the Go client can share one server, and either server works. `scripts/compat/run.sh` proves it: it starts the original FastAPI server at a pinned commit and runs the Go client's `TestCompat*` tests against it, then starts the Go server with both the original SvelteKit client and the Go client and drives every route through each (`scripts/compat/drive.py`). CI runs it on every push. Two quirks of the original as published are tolerated: its server leaves winning tickets alone on a restore, and its client's server-backup download answers `{}` because it sends the key as `TAM_KEY`. Fixes for both, and for its local restore skipping tickets that already exist, are submitted as a pull request to ticket-auction-manager/tam; once merged, the pinned commit moves up and the tolerances go.
 
 ## Deployment
 
