@@ -216,3 +216,50 @@ func TestFilePicksUpHandEditsAndKeepsLastGood(t *testing.T) {
 		t.Fatal("a rejected update must not write the file")
 	}
 }
+
+// TestOriginalClientSettingsFileLoads: the file the original client writes
+// (client/src/lib/server/settings/index.js) is read as it is, and what this
+// program writes back keeps every key the original knows, so a data folder
+// can move between the two.
+func TestOriginalClientSettingsFileLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	original := `{
+  "remote_server": "tam.lan",
+  "remote_key": "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+  "remote_port": "8000",
+  "remote_tls": true,
+  "default_pref": "TEXT",
+  "venue_name": "Village Hall",
+  "disable_attrib": true
+}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.RemoteServer != "tam.lan" || s.RemoteKey != "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" || s.RemotePort != "8000" || !s.RemoteTLS ||
+		s.DefaultPref != "TEXT" || s.VenueName != "Village Hall" || !s.DisableAttrib {
+		t.Fatalf("original settings read back as %+v", s)
+	}
+	if s.RemoteURL() != "https://tam.lan:8000" {
+		t.Fatalf("remote URL = %q", s.RemoteURL())
+	}
+	if err := Save(path, s); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"remote_server", "remote_key", "remote_port", "remote_tls", "default_pref", "venue_name", "disable_attrib"} {
+		if _, ok := keys[k]; !ok {
+			t.Fatalf("saved file lost the original's key %q: %s", k, raw)
+		}
+	}
+	if string(keys["remote_port"]) != `"8000"` || string(keys["remote_tls"]) != `true` {
+		t.Fatalf("saved file changed the types the original reads: %s", raw)
+	}
+}
