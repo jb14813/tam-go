@@ -17,8 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"ticket-auction-manager/tam-go/internal/admin"
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/desktop"
+	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/env"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
@@ -28,12 +30,26 @@ import (
 //go:embed icon.ico
 var iconICO []byte
 
+// browseAddr turns a listen address into one a browser on this machine can
+// open: ":8000" listens everywhere, so it is reachable as localhost:8000.
+func browseAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func main() {
 	addr := flag.String("addr", "", "address to listen on (default :8000, or :8443 with -tls)")
 	useTLS := flag.Bool("tls", false, "serve HTTPS; a self-signed certificate is created in the data directory when none is given")
 	certFile := flag.String("cert", "", "TLS certificate file (default <data dir>/server.crt)")
 	keyFile := flag.String("key", "", "TLS key file (default <data dir>/server.key)")
 	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with a Shut Down entry (Windows)")
+	announce := flag.Bool("announce", true, "announce this server on the local network (mDNS) so clients can find it in Settings")
 	flag.Parse()
 	desktop.SetConsoleTitle("Ticket Auction Manager - server")
 
@@ -48,12 +64,6 @@ func main() {
 		} else {
 			*addr = host + ":8000"
 		}
-	}
-
-	password := os.Getenv("TAM_PWD")
-	if password == "" {
-		password = "changeme"
-		log.Print("WARNING: TAM_PWD is not set; the key-management password is \"changeme\". Set TAM_PWD before exposing this server.")
 	}
 
 	dataDir, err := env.DataDir()
@@ -74,6 +84,18 @@ func main() {
 	if err := db.Migrate(sqldb); err != nil {
 		log.Fatal(err)
 	}
+	if err := db.MigrateServer(sqldb); err != nil {
+		log.Fatal(err)
+	}
+
+	// The password comes from server.json in the data directory, which the
+	// admin page writes, or else from TAM_PWD. With neither the server runs
+	// in setup mode: the API refuses to create keys until the admin page
+	// has set a password.
+	password, err := admin.Load(dataDir, os.Getenv("TAM_PWD"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// stop ends the program cleanly: the tray icon, Ctrl+C, and closing the
 	// console window all come through here.
@@ -90,8 +112,18 @@ func main() {
 			}()
 		})
 	}
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		absDataDir = dataDir
+	}
+	st := store.New(sqldb)
+	mux := http.NewServeMux()
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	mux.Handle("/admin", adminPages)
+	mux.Handle("/admin/", adminPages)
+	mux.Handle("/", server.NewHandler(st, password))
 	srv = &http.Server{
-		Handler:           server.NewHandler(store.New(sqldb), password),
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute,
 		WriteTimeout:      2 * time.Minute,
@@ -122,6 +154,22 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("tam-server listening on %s://%s (data in %s)", scheme, *addr, dataDir)
+	if !password.IsSet() {
+		log.Printf("no password set: open %s://%s/admin to set one", scheme, browseAddr(*addr))
+	}
+	if *announce {
+		announceCtx, stopAnnounce := context.WithCancel(context.Background())
+		defer stopAnnounce()
+		name, _ := os.Hostname()
+		if name == "" {
+			name = "TAM Server"
+		}
+		if err := discovery.Announce(announceCtx, name, ln.Addr().(*net.TCPAddr).Port, *useTLS, server.Version); err != nil {
+			log.Printf("not announcing on the network (%v); clients can still type the address", err)
+		} else {
+			log.Printf("announcing as %q on the local network", name)
+		}
+	}
 
 	done := make(chan struct{})
 	var serveErr error

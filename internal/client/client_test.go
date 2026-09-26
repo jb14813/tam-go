@@ -38,6 +38,23 @@ func newStore(t *testing.T, name string) *store.Store {
 	return store.New(sqldb)
 }
 
+// newServerStore is a store with the server's schema, for the remote side.
+func newServerStore(t *testing.T) *store.Store {
+	t.Helper()
+	sqldb, err := db.Open(filepath.Join(t.TempDir(), "remote.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sqldb.Close() })
+	if err := db.Migrate(sqldb); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateServer(sqldb); err != nil {
+		t.Fatal(err)
+	}
+	return store.New(sqldb)
+}
+
 // testTimings make the syncer react within a test's patience.
 var testTimings = tamsync.Timings{Heartbeat: time.Millisecond, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
 
@@ -119,8 +136,8 @@ func decode[T any](t *testing.T, data []byte) T {
 // client's settings at it.
 func remoteFixture(t *testing.T, f *fixture) (*store.Store, *httptest.Server) {
 	t.Helper()
-	rst := newStore(t, "remote.db")
-	rs := httptest.NewServer(server.NewHandler(rst, "secret"))
+	rst := newServerStore(t)
+	rs := httptest.NewServer(server.NewHandler(rst, server.FixedPassword("secret")))
 	t.Cleanup(rs.Close)
 	k, err := rst.CreateKey("client")
 	if err != nil {

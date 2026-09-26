@@ -167,10 +167,14 @@ type ReportCountLine struct {
 	TotalBuys    int    `json:"total_buys"`
 }
 
-// AuthKey is a server access key.
+// AuthKey is a server access key. LastSeen is the time of the key's last
+// authenticated request in RFC 3339, or "" when the key has never been used
+// or the database has no last_seen column; it is left out of the JSON when
+// empty so the wire format stays the original's.
 type AuthKey struct {
 	AuthKey     string `json:"auth_key"`
 	Description string `json:"description"`
+	LastSeen    string `json:"last_seen,omitempty"`
 }
 
 // BackupFile is the backup and restore document. Every list is always

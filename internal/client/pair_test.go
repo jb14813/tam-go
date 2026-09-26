@@ -23,8 +23,8 @@ func TestStatusAndPairing(t *testing.T) {
 		t.Fatalf("unpair while standalone = %d, want 400", code)
 	}
 
-	rst := newStore(t, "remote.db")
-	rs := httptest.NewServer(server.NewHandler(rst, "secret"))
+	rst := newServerStore(t)
+	rs := httptest.NewServer(server.NewHandler(rst, server.FixedPassword("secret")))
 	t.Cleanup(rs.Close)
 	u, _ := url.Parse(rs.URL)
 	pair := func(host, port, password string) (int, []byte) {
@@ -120,7 +120,7 @@ func TestQueuedDeleteAndFailedList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot listen again on %s: %v", addr, err)
 	}
-	rs2 := &httptest.Server{Listener: ln, Config: &http.Server{Handler: server.NewHandler(rst, "secret")}}
+	rs2 := &httptest.Server{Listener: ln, Config: &http.Server{Handler: server.NewHandler(rst, server.FixedPassword("secret"))}}
 	rs2.Start()
 	t.Cleanup(rs2.Close)
 	f.h.sync.Reset()

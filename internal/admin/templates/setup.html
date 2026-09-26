@@ -1,0 +1,15 @@
+{{define "title"}}Set the server password{{end}}
+{{define "content"}}
+<h1>Welcome to TAM Server</h1>
+<p>This server has no password yet. Choose one now: every laptop that pairs with this server asks for it once, and it opens this page.</p>
+<form method="post" action="/admin/setup">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label for="password">New password
+    <input id="password" type="password" name="password" autocomplete="new-password" autofocus required>
+  </label>
+  <label for="confirm">New password again
+    <input id="confirm" type="password" name="confirm" autocomplete="new-password" required>
+  </label>
+  <button type="submit">Set the password</button>
+</form>
+{{end}}

@@ -2,13 +2,16 @@ package server
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/httpx"
@@ -16,13 +19,19 @@ import (
 )
 
 type api struct {
-	t   *testing.T
-	url string
-	st  *store.Store
-	key string
+	t     *testing.T
+	url   string
+	st    *store.Store
+	sqldb *sql.DB
+	key   string
 }
 
-func newAPI(t *testing.T) *api {
+func newAPI(t *testing.T, opts ...Option) *api {
+	t.Helper()
+	return newAPIWithPassword(t, FixedPassword("secret"), opts...)
+}
+
+func newAPIWithPassword(t *testing.T, pw Password, opts ...Option) *api {
 	t.Helper()
 	sqldb, err := db.Open(filepath.Join(t.TempDir(), "remote.db"))
 	if err != nil {
@@ -32,14 +41,17 @@ func newAPI(t *testing.T) *api {
 	if err := db.Migrate(sqldb); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.MigrateServer(sqldb); err != nil {
+		t.Fatal(err)
+	}
 	st := store.New(sqldb)
 	k, err := st.CreateKey("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(NewHandler(st, "secret"))
+	ts := httptest.NewServer(NewHandler(st, pw, opts...))
 	t.Cleanup(ts.Close)
-	return &api{t: t, url: ts.URL, st: st, key: k.AuthKey}
+	return &api{t: t, url: ts.URL, st: st, sqldb: sqldb, key: k.AuthKey}
 }
 
 // do sends a request. body may be nil, a string (sent verbatim as JSON) or
@@ -121,6 +133,127 @@ func TestPasswordProtectsKeyManagement(t *testing.T) {
 	}
 	if code, _ := a.do("GET", "/api/auth", nil, map[string]string{"TAM-KEY": a.key}); code != 401 {
 		t.Fatalf("a data key must not open key management: %d", code)
+	}
+}
+
+// settable is a Password that can be set later, like the admin package's,
+// so a test can watch the API leave setup mode.
+type settable struct{ pw Password }
+
+func (s *settable) IsSet() bool             { return s.pw.IsSet() }
+func (s *settable) Check(plain string) bool { return s.pw.Check(plain) }
+
+func TestKeyManagementIs503WhilePasswordUnset(t *testing.T) {
+	pw := &settable{pw: FixedPassword("")}
+	a := newAPIWithPassword(t, pw)
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		var body any
+		if method == "POST" {
+			body = map[string]string{"description": "laptop"}
+		}
+		code, res := a.do(method, "/api/auth?key_to_del=X", body, map[string]string{"TAM-PW": ""})
+		if code != 503 || strings.TrimSpace(string(res)) != `{"detail":"server password not set"}` {
+			t.Fatalf("%s /api/auth while unset = %d %s", method, code, res)
+		}
+	}
+	// Data routes and the root keep working; only pairing waits.
+	if code, _ := a.keyed("GET", "/api/prefixes", nil); code != 200 {
+		t.Fatalf("data route while unset = %d", code)
+	}
+	if code, _ := a.do("GET", "/api", nil, nil); code != 200 {
+		t.Fatalf("root while unset = %d", code)
+	}
+
+	pw.pw = FixedPassword("later")
+	if code, _ := a.do("GET", "/api/auth", nil, map[string]string{"TAM-PW": "later"}); code != 200 {
+		t.Fatalf("after the password is set = %d", code)
+	}
+	if code, _ := a.do("GET", "/api/auth", nil, map[string]string{"TAM-PW": "secret"}); code != 401 {
+		t.Fatalf("old password after the change = %d", code)
+	}
+}
+
+func TestFixedPassword(t *testing.T) {
+	pw := FixedPassword("secret")
+	if !pw.IsSet() || !pw.Check("secret") || pw.Check("Secret") || pw.Check("") {
+		t.Fatal("FixedPassword(secret) misbehaves")
+	}
+	if unset := FixedPassword(""); unset.IsSet() || unset.Check("") {
+		t.Fatal("an empty FixedPassword must be unset and never match")
+	}
+}
+
+func TestRootReportsNameAndVersion(t *testing.T) {
+	a := newAPI(t)
+	_, body := a.do("GET", "/api", nil, nil)
+	root := decode[map[string]any](t, body)
+	hostname, _ := os.Hostname()
+	if root["name"] != hostname || root["version"] != Version || root["whoami"] != "TAM Server" || root["healthy"] != true || root["authenticated"] != false {
+		t.Fatalf("root = %v", root)
+	}
+	if len(root) != 5 {
+		t.Fatalf("root has %d fields, want whoami, authenticated, healthy, name and version: %v", len(root), root)
+	}
+
+	named := newAPI(t, WithInfo(Info{Name: "main-laptop", Version: "9.9.9"}))
+	_, body = named.do("GET", "/api/", nil, nil)
+	if root = decode[map[string]any](t, body); root["name"] != "main-laptop" || root["version"] != "9.9.9" {
+		t.Fatalf("root with WithInfo = %v", root)
+	}
+}
+
+func TestKeyRoutesTouchLastSeenOncePerInterval(t *testing.T) {
+	a := newAPI(t)
+	lastSeen := func() string {
+		t.Helper()
+		ks, err := a.st.ListKeys()
+		if err != nil || len(ks) != 1 {
+			t.Fatalf("ListKeys = %v %v", ks, err)
+		}
+		return ks[0].LastSeen
+	}
+	if lastSeen() != "" {
+		t.Fatal("an unused key must have no last_seen")
+	}
+	if code, _ := a.do("GET", "/api", nil, nil); code != 200 {
+		t.Fatalf("root = %d", code)
+	}
+	if lastSeen() != "" {
+		t.Fatal("the root without a key must not touch last_seen")
+	}
+
+	// The client's heartbeat is GET /api with its key.
+	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": a.key})
+	first := lastSeen()
+	if seen, err := time.Parse(time.RFC3339, first); err != nil || time.Since(seen) > 5*time.Second {
+		t.Fatalf("last_seen after the heartbeat = %q (%v)", first, err)
+	}
+
+	// Within the interval nothing is written, even when the stored value
+	// changed underneath.
+	if _, err := a.sqldb.Exec(`UPDATE auth_keys SET last_seen = '2000-01-01T00:00:00Z'`); err != nil {
+		t.Fatal(err)
+	}
+	a.keyed("POST", "/api/tickets", `[]`)
+	if lastSeen() != "2000-01-01T00:00:00Z" {
+		t.Fatalf("last_seen was written again within the interval: %q", lastSeen())
+	}
+
+	// A wrong key touches nothing.
+	a.do("GET", "/api/prefixes", nil, map[string]string{"TAM-KEY": "WRONG"})
+	if lastSeen() != "2000-01-01T00:00:00Z" {
+		t.Fatal("a rejected key must not touch last_seen")
+	}
+
+	old := touchEvery
+	touchEvery = 0
+	defer func() { touchEvery = old }()
+	a.keyed("GET", "/api/baskets", nil)
+	if seen, err := time.Parse(time.RFC3339, lastSeen()); err != nil || time.Since(seen) > 5*time.Second {
+		t.Fatalf("last_seen after the interval = %q (%v)", lastSeen(), err)
+	}
+	if code, body := a.pw("GET", "/api/auth", nil); code != 200 || !strings.Contains(string(body), `"last_seen":"`) {
+		t.Fatalf("GET /api/auth should carry last_seen once a key was used: %d %s", code, body)
 	}
 }
 

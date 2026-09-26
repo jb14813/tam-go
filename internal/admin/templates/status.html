@@ -1,0 +1,26 @@
+{{define "title"}}Status{{end}}
+{{define "content"}}
+<h1>Status</h1>
+{{with .Data}}
+<table class="facts">
+  <tr><th>Address</th><td>{{.Addr}}</td></tr>
+  <tr><th>TLS</th><td>{{if .TLS}}on{{else}}off{{end}}</td></tr>
+  <tr><th>Data directory</th><td>{{.DataDir}}</td></tr>
+  <tr><th>Version</th><td>{{.Version}}</td></tr>
+  <tr><th>Running for</th><td>{{.Uptime}}</td></tr>
+  <tr><th>Prefixes</th><td>{{.Prefixes}}</td></tr>
+  <tr><th>Tickets</th><td>{{.Tickets}}</td></tr>
+  <tr><th>Baskets</th><td>{{.Baskets}}</td></tr>
+</table>
+<h2>Paired laptops</h2>
+{{if .Keys}}
+<table>
+  <tr><th>Laptop</th><th>Last seen</th></tr>
+  {{range .Keys}}<tr><td>{{.Description}}</td><td>{{.LastSeen}}</td></tr>
+  {{end}}
+</table>
+{{else}}
+<p>No laptop has paired yet. Pair one from its Settings page, or <a href="/admin/keys">create a key</a> here.</p>
+{{end}}
+{{end}}
+{{end}}

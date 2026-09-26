@@ -81,14 +81,16 @@ echo "--- building the original client"
 # directory must exist before the build and be the same one it runs with.
 (cd "$ORIG/client" && $pnpm_cmd install --frozen-lockfile >"$WORK/orig-client-install.log" 2>&1 \
   && TAM_DATA_DIR="$WORK/orig-client-data" $pnpm_cmd build >"$WORK/orig-client-build.log" 2>&1)
-(cd "$ORIG/client" && PORT=3010 HOST=127.0.0.1 ORIGIN=http://127.0.0.1:3010 TAM_DATA_DIR="$WORK/orig-client-data" PUBLIC_TAM_CLIENT_ID=compat \
+# The original client invents its request id at startup and hands it to its
+# pages; drive.py reads it from the rendered main menu.
+(cd "$ORIG/client" && PORT=3010 HOST=127.0.0.1 ORIGIN=http://127.0.0.1:3010 TAM_DATA_DIR="$WORK/orig-client-data" \
   node build >"$WORK/orig-client.log" 2>&1) &
 pids+=($!)
 wait_http http://127.0.0.1:8011/api "X-None: 1" "TAM Server"
 wait_http http://127.0.0.1:3011/api "X-None: 1" "TAM Client"
-wait_http http://127.0.0.1:3010/api "TAM-CLIENT-ID: compat" "TAM Client"
+wait_http http://127.0.0.1:3010/ "X-None: 1" "tamClientID"
 
 echo "--- driving both clients against the Go server"
-"$PY" scripts/compat/drive.py --original http://127.0.0.1:3010 --client-id compat \
+"$PY" scripts/compat/drive.py --original http://127.0.0.1:3010 \
   --go-client http://127.0.0.1:3011 --server-host 127.0.0.1 --server-port 8011 --password $PASSWORD
 echo "compat run passed"

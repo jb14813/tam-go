@@ -9,6 +9,7 @@ the other, so a mismatch in the wire format shows up as a failed check.
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -46,6 +47,22 @@ def wait_for(base, headers, want):
     sys.exit(f"{base} did not come up as {want}")
 
 
+def detect_client_id(base):
+    """The original client makes up its TAM-CLIENT-ID when it starts and
+    hands it to its pages, so read it from the rendered main menu."""
+    for _ in range(120):
+        try:
+            with urllib.request.urlopen(base + "/", timeout=10) as r:
+                html = r.read().decode(errors="replace")
+            m = re.search(r'tamClientID\s*:\s*"([0-9a-fA-F-]{36})"', html)
+            if m:
+                return m.group(1)
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            pass
+        time.sleep(0.5)
+    sys.exit(f"could not read the client id from {base}/")
+
+
 checks = 0
 
 
@@ -60,7 +77,7 @@ def expect(cond, what):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--original", required=True, help="base URL of the original client")
-    ap.add_argument("--client-id", required=True, help="its PUBLIC_TAM_CLIENT_ID")
+    ap.add_argument("--client-id", default="", help="its TAM-CLIENT-ID; read from its main menu when omitted")
     ap.add_argument("--go-client", required=True, help="base URL of tam-client")
     ap.add_argument("--server-host", required=True)
     ap.add_argument("--server-port", required=True)
@@ -68,7 +85,8 @@ def main():
     a = ap.parse_args()
 
     orig = a.original
-    oh = {"TAM-CLIENT-ID": a.client_id}
+    client_id = a.client_id or detect_client_id(orig)
+    oh = {"TAM-CLIENT-ID": client_id}
     goc = a.go_client
     p = f"X{int(time.time()) % 100000}"
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 )
 
 // Store wraps one shared *sql.DB.
@@ -141,9 +142,42 @@ func generateKey() (string, error) {
 	return string(buf), nil
 }
 
+// hasLastSeen reports whether auth_keys has the last_seen column that
+// db.MigrateServer adds. The client's database never gets it.
+func (s *Store) hasLastSeen() (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(auth_keys)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, typ        string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == "last_seen" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // ListKeys returns every access key ordered by description, then key.
+// LastSeen is filled in when the database has the column.
 func (s *Store) ListKeys() ([]AuthKey, error) {
-	rows, err := s.db.Query(`SELECT auth_key, description FROM auth_keys ORDER BY description, auth_key`)
+	withSeen, err := s.hasLastSeen()
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT auth_key, description, NULL FROM auth_keys ORDER BY description, auth_key`
+	if withSeen {
+		query = `SELECT auth_key, description, last_seen FROM auth_keys ORDER BY description, auth_key`
+	}
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -151,14 +185,21 @@ func (s *Store) ListKeys() ([]AuthKey, error) {
 	out := []AuthKey{}
 	for rows.Next() {
 		var k AuthKey
-		var desc sql.NullString
-		if err := rows.Scan(&k.AuthKey, &desc); err != nil {
+		var desc, seen sql.NullString
+		if err := rows.Scan(&k.AuthKey, &desc, &seen); err != nil {
 			return nil, err
 		}
-		k.Description = nstr(desc)
+		k.Description, k.LastSeen = nstr(desc), nstr(seen)
 		out = append(out, k)
 	}
 	return out, rows.Err()
+}
+
+// TouchKey records now as the key's last_seen time. It needs the column
+// db.MigrateServer adds; a missing key is not an error.
+func (s *Store) TouchKey(key string) error {
+	_, err := s.db.Exec(`UPDATE auth_keys SET last_seen = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
+	return err
 }
 
 // CreateKey stores a new random 32-character key with a description.
@@ -213,6 +254,14 @@ func (s *Store) KeyExists(key string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// --- status ---
+
+// Counts returns the number of prefixes, tickets and baskets.
+func (s *Store) Counts() (prefixes, tickets, baskets int, err error) {
+	err = s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM prefixes), (SELECT COUNT(*) FROM tickets), (SELECT COUNT(*) FROM baskets)`).Scan(&prefixes, &tickets, &baskets)
+	return prefixes, tickets, baskets, err
 }
 
 // --- backup and restore ---

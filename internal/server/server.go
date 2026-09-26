@@ -4,23 +4,87 @@ package server
 
 import (
 	"crypto/subtle"
+	"log"
 	"net/http"
+	"os"
+	"sync"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
+// Version is the program version reported by GET /api.
+const Version = "0.0.1"
+
+// Password is the server password that protects key management. The admin
+// package's Password implements it; FixedPassword is enough for tests.
+type Password interface {
+	// IsSet reports whether a password exists at all. While it is false the
+	// key routes answer 503 so nobody can pair with an unconfigured server.
+	IsSet() bool
+	// Check reports whether plain is the password. An empty plain never
+	// matches.
+	Check(plain string) bool
+}
+
+type fixedPassword string
+
+func (p fixedPassword) IsSet() bool { return p != "" }
+
+func (p fixedPassword) Check(plain string) bool {
+	return plain != "" && subtle.ConstantTimeCompare([]byte(plain), []byte(p)) == 1
+}
+
+// FixedPassword returns a Password that is the given string; "" is an unset
+// password.
+func FixedPassword(s string) Password { return fixedPassword(s) }
+
+// Info describes the server to its clients in the GET /api answer.
+type Info struct {
+	Name    string // shown to clients when pairing; defaults to the host name
+	Version string // defaults to Version
+}
+
+// Option configures NewHandler.
+type Option func(*handler)
+
+// WithInfo sets the name and version GET /api reports. Empty fields keep
+// their defaults.
+func WithInfo(info Info) Option {
+	return func(h *handler) {
+		if info.Name != "" {
+			h.info.Name = info.Name
+		}
+		if info.Version != "" {
+			h.info.Version = info.Version
+		}
+	}
+}
+
+// touchEvery is how often at most a key's last_seen is written. It is a
+// variable so tests can lower it.
+var touchEvery = time.Minute
+
 type handler struct {
-	st       *store.Store
-	password string
+	st   *store.Store
+	pw   Password
+	info Info
+
+	mu      sync.Mutex
+	touched map[string]time.Time // key -> last time last_seen was written
 }
 
 // NewHandler returns the server API. Data routes require a TAM-KEY header
 // that matches a stored access key; key management requires a TAM-PW header
-// equal to password. Unknown paths and wrong methods under /api answer
-// {"detail": ...} like the original.
-func NewHandler(st *store.Store, password string) http.Handler {
-	h := &handler{st: st, password: password}
+// that pw accepts, and answers 503 while no password is set. Unknown paths
+// and wrong methods under /api answer {"detail": ...} like the original.
+func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
+	hostname, _ := os.Hostname()
+	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: Version}, touched: map[string]time.Time{}}
+	for _, opt := range opts {
+		opt(h)
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api", h.root)
@@ -68,7 +132,8 @@ func NewHandler(st *store.Store, password string) http.Handler {
 
 func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, err := h.st.KeyExists(r.Header.Get("TAM-KEY"))
+		key := r.Header.Get("TAM-KEY")
+		ok, err := h.st.KeyExists(key)
 		if err != nil {
 			httpx.WriteInternal(w, err)
 			return
@@ -77,14 +142,43 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 			httpx.WriteError(w, http.StatusUnauthorized, "Invalid Key")
 			return
 		}
+		h.touch(key)
 		next(w, r)
 	})
 }
 
+// touch records the key's last_seen time, at most once per touchEvery so
+// the heartbeat of every laptop does not turn into a write every 5 s. A
+// failure is logged and never fails the request; last_seen is informational.
+func (h *handler) touch(key string) {
+	now := time.Now()
+	h.mu.Lock()
+	last, seen := h.touched[key]
+	if seen && now.Sub(last) < touchEvery {
+		h.mu.Unlock()
+		return
+	}
+	h.touched[key] = now
+	h.mu.Unlock()
+	if err := h.st.TouchKey(key); err != nil {
+		log.Printf("record last_seen for a key: %v", err)
+	}
+}
+
+// forget drops the throttle entry of a deleted key.
+func (h *handler) forget(key string) {
+	h.mu.Lock()
+	delete(h.touched, key)
+	h.mu.Unlock()
+}
+
 func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		given := r.Header.Get("TAM-PW")
-		if given == "" || subtle.ConstantTimeCompare([]byte(given), []byte(h.password)) != 1 {
+		if !h.pw.IsSet() {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "server password not set")
+			return
+		}
+		if !h.pw.Check(r.Header.Get("TAM-PW")) {
 			httpx.WriteError(w, http.StatusUnauthorized, "Invalid Password")
 			return
 		}
@@ -93,12 +187,19 @@ func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
 }
 
 func (h *handler) root(w http.ResponseWriter, r *http.Request) {
-	authed, err := h.st.KeyExists(r.Header.Get("TAM-KEY"))
+	key := r.Header.Get("TAM-KEY")
+	authed, err := h.st.KeyExists(key)
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"whoami": "TAM Server", "authenticated": authed, "healthy": true})
+	if authed {
+		h.touch(key) // the client's heartbeat is this route
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"whoami": "TAM Server", "authenticated": authed, "healthy": true,
+		"name": h.info.Name, "version": h.info.Version,
+	})
 }
 
 // respond writes a value (or a generic error) produced by a store call.
@@ -190,6 +291,7 @@ func (h *handler) deleteKey(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "Key not found")
 		return
 	}
+	h.forget(key)
 	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
