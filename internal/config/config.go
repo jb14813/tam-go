@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"ticket-auction-manager/tam-go/internal/env"
@@ -33,14 +34,9 @@ func ReadConfigFile() ConfigFile {
 	return rtnConf
 }
 
-func WriteConfigFile(nf ConfigFile) {
+func WriteConfigFile(nf []byte) ConfigFile {
 	exConf := ReadConfigFile()
-	newData, err := json.Marshal(nf)
-	if err != nil {
-		panic(err)
-	}
-	err = json.Unmarshal(newData, &exConf)
-	fmt.Println(exConf)
+	err := json.Unmarshal(nf, &exConf)
 	if err != nil {
 		panic(err)
 	}
@@ -49,6 +45,7 @@ func WriteConfigFile(nf ConfigFile) {
 		panic(err)
 	}
 	os.WriteFile(Path, encFile, 0644)
+	return exConf
 }
 
 func GetAllSettings(w http.ResponseWriter, r *http.Request) {
@@ -82,13 +79,14 @@ func GetRemoteURL(s ConfigFile) string {
 }
 
 func SaveAllSettings(w http.ResponseWriter, r *http.Request) {
-	var newConfig ConfigFile
-	json.NewDecoder(r.Body).Decode(&newConfig)
-
-	WriteConfigFile(newConfig)
+	nf, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Cannot convert body to bytes.", http.StatusInternalServerError)
+	}
+	UpdatedFile := WriteConfigFile(nf)
 	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(200)
-	json.NewEncoder(w).Encode(newConfig)
+	json.NewEncoder(w).Encode(UpdatedFile)
 }
 
 type ConfigFile struct {

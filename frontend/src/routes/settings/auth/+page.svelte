@@ -2,6 +2,7 @@
   import HeaderBar from "$lib/client/components/HeaderBar.svelte";
   import { resolve } from "$app/paths";
   import { bS, iS, tS } from "$lib/client/styles";
+    import { handlers } from "$lib/client/handlers";
 
   const pageTitle = "Auth Keys | TAM";
 
@@ -23,7 +24,10 @@
       auth.toggle = true;
       const resData = await res.json();
       authKeys = [...resData];
-      curKey = data.authKey;
+      const settings = await handlers.get('/api/settings');
+      if (settings) {
+        curKey = settings.remote_key
+      }
     } else {
       errorStatus = "Invalid Password!";
       setTimeout(() => (errorStatus = ""), 7000);
