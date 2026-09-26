@@ -58,3 +58,29 @@ export function postJSON(
 		keepalive
 	});
 }
+
+/**
+ * GET a JSON endpoint for polling: never throws. Returns `{ status, data }`
+ * with the HTTP status (0 when the client could not be reached) and the parsed
+ * body (null when the body is not JSON).
+ */
+export async function pollJSON(url, { fetch: doFetch = globalThis.fetch } = {}) {
+	let res;
+	try {
+		res = await doFetch(url);
+	} catch {
+		return { status: 0, data: null };
+	}
+	let data = null;
+	try {
+		data = await res.json();
+	} catch {
+		// body was not JSON
+	}
+	return { status: res.status, data };
+}
+
+/** "1 save" / "2 saves" */
+export function saves(n) {
+	return `${n} save${n === 1 ? '' : 's'}`;
+}
