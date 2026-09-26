@@ -12,10 +12,8 @@ import (
 
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
+	"ticket-auction-manager/tam-go/internal/version"
 )
-
-// Version is the program version reported by GET /api.
-const Version = "0.0.1"
 
 // Password is the server password that protects key management. The admin
 // package's Password implements it; FixedPassword is enough for tests.
@@ -43,7 +41,7 @@ func FixedPassword(s string) Password { return fixedPassword(s) }
 // Info describes the server to its clients in the GET /api answer.
 type Info struct {
 	Name    string // shown to clients when pairing; defaults to the host name
-	Version string // defaults to Version
+	Version string // defaults to version.Version
 }
 
 // Option configures NewHandler.
@@ -81,7 +79,7 @@ type handler struct {
 // and wrong methods under /api answer {"detail": ...} like the original.
 func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 	hostname, _ := os.Hostname()
-	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: Version}, touched: map[string]time.Time{}}
+	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: version.Version}, touched: map[string]time.Time{}}
 	for _, opt := range opts {
 		opt(h)
 	}

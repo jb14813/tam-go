@@ -26,6 +26,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/tlscert"
+	"ticket-auction-manager/tam-go/internal/version"
 )
 
 //go:embed icon.ico
@@ -148,7 +149,7 @@ func main() {
 	}
 	st := store.New(sqldb)
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now()})
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
 	mux.Handle("/", server.NewHandler(st, password))
@@ -199,7 +200,7 @@ func main() {
 		if name == "" {
 			name = "TAM Server"
 		}
-		if err := discovery.Announce(announceCtx, name, ln.Addr().(*net.TCPAddr).Port, *useTLS, server.Version); err != nil {
+		if err := discovery.Announce(announceCtx, name, ln.Addr().(*net.TCPAddr).Port, *useTLS, version.Version); err != nil {
 			log.Printf("not announcing on the network (%v); clients can still type the address", err)
 		} else {
 			log.Printf("announcing as %q on the local network", name)

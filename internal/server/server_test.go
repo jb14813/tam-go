@@ -16,6 +16,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
+	"ticket-auction-manager/tam-go/internal/version"
 )
 
 type api struct {
@@ -188,7 +189,7 @@ func TestRootReportsNameAndVersion(t *testing.T) {
 	_, body := a.do("GET", "/api", nil, nil)
 	root := decode[map[string]any](t, body)
 	hostname, _ := os.Hostname()
-	if root["name"] != hostname || root["version"] != Version || root["whoami"] != "TAM Server" || root["healthy"] != true || root["authenticated"] != false {
+	if root["name"] != hostname || root["version"] != version.Version || root["whoami"] != "TAM Server" || root["healthy"] != true || root["authenticated"] != false {
 		t.Fatalf("root = %v", root)
 	}
 	if len(root) != 5 {
@@ -534,5 +535,18 @@ func TestKeyAcceptedUnderTheOriginalClientsSpelling(t *testing.T) {
 	}
 	if code, _ := a.do("GET", "/api/backuprestore", nil, map[string]string{"TAM_KEY": "WRONG"}); code != 401 {
 		t.Fatalf("a wrong TAM_KEY must still be refused, got %d", code)
+	}
+}
+
+// TestRootReportsTheBuildVersion: the version comes from the version
+// package, which the release build stamps.
+func TestRootReportsTheBuildVersion(t *testing.T) {
+	old := version.Version
+	version.Version = "9.9.9-test"
+	t.Cleanup(func() { version.Version = old })
+	a := newAPI(t)
+	_, body := a.do("GET", "/api", nil, nil)
+	if root := decode[map[string]any](t, body); root["version"] != "9.9.9-test" {
+		t.Fatalf("root = %s, want the stamped version", body)
 	}
 }
