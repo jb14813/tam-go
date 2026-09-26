@@ -50,6 +50,7 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 | `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server (`:8443` with `-tls`) |
 | `-open` | flag, tam-client | `true`: open the web app in the default browser on start |
 | `-tray` | flag, both daemons | `true` on Windows: a TAM icon in the notification area with Open (client) and Shut Down entries; use `-tray=false` for services and scripts. Other systems have no icon and stop on Ctrl+C or SIGTERM |
+| `-announce` | flag, tam-server | `true`: announce the server on the local network (mDNS) so clients can find it in Settings |
 | `dev` | positional argument, tam-server | binds localhost instead of every interface |
 | `-tls`, `-cert`, `-key` | flags, tam-server | HTTPS with the given PEM files, or a self-signed pair created in the data directory |
 
@@ -73,12 +74,28 @@ A data folder from the original app is a drop-in: the tables and views are the s
 
 ## Remote mode
 
-1. Run `tam-server` where every laptop can reach it, with `TAM_PWD` set. For HTTPS start it with `-tls`: it listens on port 8443 and, on first start, writes a self-signed certificate (`server.crt`, `server.key`) into its data directory; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Without `-tls` it speaks plain HTTP on port 8000. Windows asks once whether to allow the program through the firewall. To stop it, right-click its icon in the notification area and choose **Shut Down TAM Server**, close its console window, or press Ctrl+C in it; the clients' **Shut Down TAM** button only stops the client it is pressed on.
-2. On each client, open Settings and enter the server's host name, the port (8000 for plain HTTP, 8443 for TLS) and the TLS toggle, then Save.
-3. Open Auth Keys, log in with `TAM_PWD`, create a key for this laptop and press Use. The key is stored in `settings.json` and sent as the `TAM-KEY` header on every server call.
-4. Data entered from now on goes to the server and is mirrored locally. Backup/Restore can push the local prefixes, tickets or baskets to the server and download the server's data.
+Remote mode is for events with several laptops: one `tam-server` holds the data and every client works against it. It is built for laptops that move around and lose wifi: a save never waits for a dead connection and is never lost.
 
-The client accepts the server's self-signed certificate, matching the original deployment (which ran a Caddy proxy with a self-signed certificate in front of the server); use a real certificate if the server is reachable from outside the venue network.
+1. Run `tam-server` on the machine that stays put, where every laptop can reach it. On first start it has no password: open `http://<that machine>:8000/admin` and set one (or start it with `TAM_PWD` set, as the original was). For HTTPS start it with `-tls`: it listens on port 8443 and writes a self-signed certificate (`server.crt`, `server.key`) into its data directory on first start; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Windows asks once whether to allow the program through the firewall. To stop it, right-click its icon in the notification area and choose **Shut Down TAM Server**, close its console window, or press Ctrl+C in it; the clients' **Shut Down TAM** button only stops the client it is pressed on.
+2. On each client press `Alt+A`, open Settings and look at the **Server** section. Servers on the venue network announce themselves and appear there by name (mDNS, `_tam._tcp`); pick one, or type the host name, port and TLS setting when the network blocks multicast. Enter the server password once and press **Pair**. The client creates its own access key on the server, named after the laptop, and over TLS it pins the server's certificate. **Unpair** returns the client to standalone mode with its local data intact. The original way still works too: the remote fields and the Auth Keys page are still there.
+3. A bar on every page then shows where the client stands: green **Connected to <server>**, amber **Reconnecting** or red **Offline** with the number of saves waiting, or red when the server rejected this laptop's key. The main menu footer keeps the original's three lines.
+
+What happens with the connection:
+
+- **Reads** come from the server while it answers and are copied into the laptop's own database on the way. When the server does not answer, the pages read that copy instead, so the forms, reports and search keep working. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything.
+- **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), the rows are stored on the laptop and queued in an outbox; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again drains it.
+- **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A laptop replaying an old edit after another laptop changed the same ticket wins with the older edit.
+- **Refused saves** (the server answered 4xx during a replay) are kept in a failed list, counted in the bar, and can be retried or discarded from Settings.
+
+Backup/Restore can still push the local prefixes, tickets or baskets to the server and download the server's data; those two actions are direct and report failure instead of queueing.
+
+### Server admin page
+
+`tam-server` serves its own pages under `/admin`, protected by the server password: status (address, TLS, data directory, counts, and the paired laptops with the time each was last seen), keys (create and delete), backup download and restore, and a password change. The password hash lives in `server.json` in the data directory and wins over `TAM_PWD`; with neither set the server starts in setup mode, logs the address to open, and refuses to hand out keys until a password exists.
+
+### Compatibility with the original
+
+The API is the original's, so the original `tam-client` (Linux/Docker) and the Go client can share one server, and either server works. `scripts/compat/run.sh` proves it: it starts the original FastAPI server at a pinned commit and runs the Go client's `TestCompat*` tests against it, then starts the Go server with both the original SvelteKit client and the Go client and drives every route through each (`scripts/compat/drive.py`). CI runs it on every push. The one difference it tolerates: the original server leaves winning tickets alone on a restore, while `tam-server` overwrites them.
 
 ## Deployment
 
@@ -108,6 +125,11 @@ Both daemons answer JSON with the original's field names and `{"detail": "..."}`
 | `GET /api/reports/byname/{prefix}`, `/bybasket/{prefix}`, `/counts` | report rows | same |
 | `GET /api/search/tickets?first_name&last_name&phone_number`, `POST` | substring search, upsert | same |
 | `GET/POST /api/backuprestore` | export, import | `/local`, `/remote`, and `POST /push/{prefixes\|tickets\|baskets}` |
+| `GET /api/status` | | `{"mode":"standalone"}` or mode, state (`connected`, `reconnecting`, `offline`, `unauthenticated`), server, server_name, pending, failed, last_ok |
+| `GET /api/servers` | | servers announcing themselves on the network: name, host, port, tls, version |
+| `POST /api/pair`, `POST /api/unpair` | | `{host, port, tls, password}` pairs and stores the key; unpair takes an optional `{password}` to delete the key on the server |
+| `POST /api/outbox/retry`, `POST /api/outbox/discard` | | the failed list back into the queue, or dropped |
+| `/admin/...` | login, status, keys, backup, password (HTML) | |
 
 Writes to the client require `Content-Type: application/json`, and a browser request from another site (`Sec-Fetch-Site: cross-site`) is refused, which replaces the original's per-process client id header.
 
@@ -149,6 +171,10 @@ internal/remote                  HTTP client for tam-server
 internal/server                  tam-server API
 internal/client                  tam-client API and web app serving
 internal/desktop                 browser opening, console title, Ctrl+C handling, Windows notification-area icon
+internal/sync                    connection state, heartbeat, outbox replay, mirror pull (remote mode)
+internal/discovery               mDNS announce (server) and browse (client)
+internal/admin                   the server's login-protected admin pages and password file
+scripts/compat                   the compatibility run against the original tam
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
 
