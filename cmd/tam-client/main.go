@@ -57,6 +57,9 @@ func main() {
 	if err := db.Migrate(sqldb); err != nil {
 		log.Fatal(err)
 	}
+	if err := db.MigrateClient(sqldb); err != nil {
+		log.Fatal(err)
+	}
 	dist, err := fs.Sub(distFS, "dist")
 	if err != nil {
 		log.Fatal(err)
@@ -79,8 +82,12 @@ func main() {
 			}()
 		})
 	}
+	// The heartbeat and outbox replay run until the server stops serving.
+	syncCtx, stopSync := context.WithCancel(context.Background())
+	defer stopSync()
 	srv = &http.Server{
-		Handler:           client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist, client.WithShutdown(stop)),
+		Handler: client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist,
+			client.WithShutdown(stop), client.WithSyncLoop(syncCtx)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute,
 		WriteTimeout:      2 * time.Minute,

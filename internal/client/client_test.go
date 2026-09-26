@@ -19,6 +19,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
+	tamsync "ticket-auction-manager/tam-go/internal/sync"
 )
 
 func newStore(t *testing.T, name string) *store.Store {
@@ -31,7 +32,22 @@ func newStore(t *testing.T, name string) *store.Store {
 	if err := db.Migrate(sqldb); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.MigrateClient(sqldb); err != nil {
+		t.Fatal(err)
+	}
 	return store.New(sqldb)
+}
+
+// testTimings make the syncer react within a test's patience.
+var testTimings = tamsync.Timings{Heartbeat: time.Millisecond, PingTimeout: time.Second, OfflineAfter: 20 * time.Millisecond, Backoff: []time.Duration{time.Millisecond}}
+
+func pending(t *testing.T, st *store.Store) (int, int) {
+	t.Helper()
+	p, f, err := st.OutboxCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p, f
 }
 
 var testDist = fstest.MapFS{
@@ -45,15 +61,17 @@ type fixture struct {
 	url      string
 	st       *store.Store
 	settings string
+	h        *handler
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	st := newStore(t, "local.db")
 	settings := filepath.Join(t.TempDir(), "settings.json")
-	ts := httptest.NewServer(NewHandler(st, settings, testDist))
+	h := newHandler(st, settings, testDist, WithTimings(testTimings))
+	ts := httptest.NewServer(h.routes(testDist))
 	t.Cleanup(ts.Close)
-	return &fixture{t: t, url: ts.URL, st: st, settings: settings}
+	return &fixture{t: t, url: ts.URL, st: st, settings: settings, h: h}
 }
 
 func (f *fixture) do(method, path string, body any, headers map[string]string) (int, []byte) {
@@ -372,34 +390,65 @@ func TestRemoteMode(t *testing.T) {
 		t.Fatalf("remote import result = %v", ps)
 	}
 
-	// A rejected remote write is forwarded and nothing is mirrored.
+	// A rejected key: the save is kept here and queued, the status says the
+	// key was refused, and nothing is lost.
 	s, _ := config.Load(f.settings)
+	goodKey := s.RemoteKey
 	s.RemoteKey = "WRONG"
 	config.Save(f.settings, s)
 	code, body = f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: 9, FirstName: "No", Pref: "CALL"}}, nil)
-	if code != 401 || !strings.Contains(string(body), "Invalid Key") {
-		t.Fatalf("forwarded error = %d %s", code, body)
+	if code != 200 {
+		t.Fatalf("save with a rejected key = %d %s, want 200 (queued)", code, body)
 	}
-	if lt, _ := f.st.Ticket("A", 9); lt != nil {
-		t.Fatal("rejected write must not be mirrored locally")
+	if lt, _ := f.st.Ticket("A", 9); lt == nil {
+		t.Fatal("a queued save must be kept in the mirror")
+	}
+	if p, _ := pending(t, f.st); p != 1 || f.h.sync.State() != tamsync.Unauthenticated {
+		t.Fatalf("pending = %d state = %q, want 1 and unauthenticated", p, f.h.sync.State())
+	}
+	if rt, _ := rst.Ticket("A", 9); rt != nil {
+		t.Fatal("the server must not have the save yet")
 	}
 	_, body = f.do("GET", "/api", nil, nil)
 	if root = decode[map[string]any](t, body); root["authenticated"] != false || root["healthy"] != true {
 		t.Fatalf("root with bad key = %v", root)
 	}
 
-	// Server down: reads answer empty, root reports unhealthy, writes 502.
+	// The key is fixed: the next tick replays the queue.
+	s.RemoteKey = goodKey
+	config.Save(f.settings, s)
+	f.h.sync.Reset()
+	f.h.sync.Tick()
+	if p, _ := pending(t, f.st); p != 0 {
+		t.Fatalf("pending after the key was fixed = %d, want 0", p)
+	}
+	if rt, _ := rst.Ticket("A", 9); rt == nil || rt.FirstName != "No" {
+		t.Fatalf("replayed save missing on the server: %+v", rt)
+	}
+
+	// Server down: reads come from the mirror, root reports unhealthy, and
+	// saves are queued.
 	rs.Close()
+	f.h.sync.Tick()
+	if f.h.sync.State() != tamsync.Reconnecting {
+		t.Fatalf("state with the server down = %q, want reconnecting", f.h.sync.State())
+	}
 	_, body = f.do("GET", "/api", nil, nil)
 	if root = decode[map[string]any](t, body); root["healthy"] != false {
 		t.Fatalf("root with server down = %v", root)
 	}
 	_, body = f.do("GET", "/api/tickets/A/1/2", nil, nil)
-	if rng := decode[[]store.Ticket](t, body); len(rng) != 0 {
-		t.Fatalf("range with server down = %+v, want []", rng)
+	if rng := decode[[]store.Ticket](t, body); len(rng) != 2 || rng[0].FirstName != "Rem" {
+		t.Fatalf("range with server down = %+v, want the mirror's rows", rng)
 	}
-	if code, _ = f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: 9, Pref: "CALL"}}, nil); code != 502 {
-		t.Fatalf("write with server down = %d, want 502", code)
+	if code, _ = f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: 10, FirstName: "Off", Pref: "CALL"}}, nil); code != 200 {
+		t.Fatalf("write with server down = %d, want 200 (queued)", code)
+	}
+	if p, _ := pending(t, f.st); p != 1 {
+		t.Fatalf("pending with server down = %d, want 1", p)
+	}
+	if lt, _ := f.st.Ticket("A", 10); lt == nil || lt.FirstName != "Off" {
+		t.Fatal("an offline save must land in the mirror")
 	}
 }
 

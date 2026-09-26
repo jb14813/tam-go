@@ -1,9 +1,11 @@
 // Package client is the HTTP surface of tam-client: it serves the embedded
 // web app and an /api that works against the local database or, in remote
-// mode, against a tam-server.
+// mode, against a tam-server, with the local database as the mirror that
+// keeps the pages working while the server is away.
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -16,21 +18,27 @@ import (
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/remote"
 	"ticket-auction-manager/tam-go/internal/store"
+	tamsync "ticket-auction-manager/tam-go/internal/sync"
 )
 
 type handler struct {
-	st  *store.Store
-	cfg *config.File
+	st   *store.Store
+	cfg  *config.File
+	sync *tamsync.Syncer
 
 	// shutdown, when set, is called after POST /api/shutdown has answered.
 	shutdown func()
 
-	// One remote client (one connection pool) per server address and TLS
-	// setting; the access key is applied per request.
+	// One remote client (one connection pool) per server address, TLS
+	// setting and pinned certificate; the access key is applied per request.
 	rcMu   sync.Mutex
 	rc     *remote.Client
 	rcBase string
 	rcTLS  bool
+	rcPin  string
+
+	timings tamsync.Timings
+	runCtx  context.Context
 }
 
 // Option configures NewHandler.
@@ -43,13 +51,36 @@ func WithShutdown(fn func()) Option {
 	return func(h *handler) { h.shutdown = fn }
 }
 
+// WithSyncLoop starts the background heartbeat and outbox replay, which
+// run until ctx ends. Without it the server is only contacted by requests.
+func WithSyncLoop(ctx context.Context) Option {
+	return func(h *handler) { h.runCtx = ctx }
+}
+
+// WithTimings shortens the syncer's delays (for tests).
+func WithTimings(t tamsync.Timings) Option {
+	return func(h *handler) { h.timings = t }
+}
+
 // NewHandler returns the client handler. dist is the built web app, served
 // under /web with index.html as the fallback for client-side routes.
 func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) http.Handler {
-	h := &handler{st: st, cfg: config.Open(settingsPath)}
+	return newHandler(st, settingsPath, dist, opts...).routes(dist)
+}
+
+func newHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) *handler {
+	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings()}
 	for _, opt := range opts {
 		opt(h)
 	}
+	h.sync = tamsync.New(st, h.cfg, h.remote, h.timings)
+	if h.runCtx != nil {
+		go h.sync.Run(h.runCtx)
+	}
+	return h
+}
+
+func (h *handler) routes(dist fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/shutdown", guard(h.shutdownHandler))
 
@@ -60,6 +91,13 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option
 	mux.HandleFunc("GET /api/{$}", h.root)
 	mux.HandleFunc("GET /api/settings", h.getSettings)
 	mux.HandleFunc("POST /api/settings", guard(h.postSettings))
+
+	mux.HandleFunc("GET /api/status", h.status)
+	mux.HandleFunc("GET /api/servers", h.servers)
+	mux.HandleFunc("POST /api/pair", guard(h.pair))
+	mux.HandleFunc("POST /api/unpair", guard(h.unpair))
+	mux.HandleFunc("POST /api/outbox/retry", guard(h.retryOutbox))
+	mux.HandleFunc("POST /api/outbox/discard", guard(h.discardOutbox))
 
 	mux.HandleFunc("GET /api/auth", h.proxyAuth)
 	mux.HandleFunc("POST /api/auth", guard(h.proxyAuth))
@@ -140,7 +178,7 @@ func (h *handler) settings() config.Settings {
 
 // remote returns a client for the configured server, or nil in standalone
 // mode. The connection pool is kept across requests and rebuilt only when
-// the server address or TLS setting changes.
+// the server address, TLS setting or pinned certificate changes.
 func (h *handler) remote(s config.Settings) *remote.Client {
 	base := s.RemoteURL()
 	if base == "" {
@@ -148,9 +186,13 @@ func (h *handler) remote(s config.Settings) *remote.Client {
 	}
 	h.rcMu.Lock()
 	defer h.rcMu.Unlock()
-	if h.rc == nil || h.rcBase != base || h.rcTLS != s.RemoteTLS {
-		h.rc = remote.New(base, "", s.RemoteTLS)
-		h.rcBase, h.rcTLS = base, s.RemoteTLS
+	if h.rc == nil || h.rcBase != base || h.rcTLS != s.RemoteTLS || h.rcPin != s.RemoteFingerprint {
+		if s.RemoteTLS && s.RemoteFingerprint != "" {
+			h.rc = remote.NewPinned(base, "", s.RemoteFingerprint)
+		} else {
+			h.rc = remote.New(base, "", s.RemoteTLS)
+		}
+		h.rcBase, h.rcTLS, h.rcPin = base, s.RemoteTLS, s.RemoteFingerprint
 	}
 	return h.rc.WithKey(s.RemoteKey)
 }

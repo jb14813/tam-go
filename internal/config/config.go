@@ -26,6 +26,12 @@ type Settings struct {
 	DefaultPref   string `json:"default_pref"`
 	VenueName     string `json:"venue_name"`
 	DisableAttrib bool   `json:"disable_attrib"`
+
+	// Added by tam-go for pairing: the server's display name and, over
+	// TLS, the SHA-256 fingerprint of the certificate seen when pairing.
+	// The original client never reads them.
+	RemoteName        string `json:"remote_name"`
+	RemoteFingerprint string `json:"remote_fingerprint"`
 }
 
 // Defaults returns the settings of a fresh installation.
@@ -189,6 +195,7 @@ func (f *File) Update(fn func(Settings) (Settings, error)) (Settings, error) {
 var knownKeys = map[string]bool{
 	"remote_server": true, "remote_key": true, "remote_port": true, "remote_tls": true,
 	"default_pref": true, "venue_name": true, "disable_attrib": true,
+	"remote_name": true, "remote_fingerprint": true,
 }
 
 // Merge applies the keys present in patch onto current. Keys that are not
@@ -230,6 +237,8 @@ func Normalize(s Settings) Settings {
 	s.RemotePort = strings.TrimSpace(s.RemotePort)
 	s.DefaultPref = strings.TrimSpace(s.DefaultPref)
 	s.VenueName = strings.TrimSpace(s.VenueName)
+	s.RemoteName = strings.TrimSpace(s.RemoteName)
+	s.RemoteFingerprint = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s.RemoteFingerprint), ":", ""))
 	return s
 }
 
@@ -251,6 +260,11 @@ func Validate(s Settings) error {
 	}
 	if s.DefaultPref != "CALL" && s.DefaultPref != "TEXT" {
 		return errors.New("default_pref must be CALL or TEXT")
+	}
+	if fp := s.RemoteFingerprint; fp != "" {
+		if len(fp) != 64 || strings.Trim(fp, "0123456789abcdef") != "" {
+			return errors.New("remote_fingerprint must be a SHA-256 fingerprint in hex, or empty")
+		}
 	}
 	return nil
 }
