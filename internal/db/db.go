@@ -17,11 +17,24 @@ func CreateDBConn() *sql.DB {
 }
 
 func InitDB() {
+	Daemon := env.GetDaemon()
 	conn := CreateDBConn()
 	defer conn.Close()
-	conn.Exec(`CREATE TABLE IF NOT EXISTS prefixes (
-		prefix VARCHAR(100),
-		color VARCHAR(100),
+	tx, err := conn.Begin()
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback()
+	if Daemon == "Server" {
+		tx.Exec(`CREATE TABLE IF NOT EXISTS auth_keys (
+			auth_key TEXT,
+			description TEXT,
+			PRIMARY KEY (auth_key))`)
+	}
+	tx.Exec(`CREATE TABLE IF NOT EXISTS prefixes (
+		prefix TEXT,
+		color TEXT,
 		weight INT,
 		PRIMARY KEY (prefix))`)
+	tx.Commit()
 }

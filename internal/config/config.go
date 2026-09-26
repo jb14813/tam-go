@@ -34,7 +34,17 @@ func ReadConfigFile() ConfigFile {
 }
 
 func WriteConfigFile(nf ConfigFile) {
-	encFile, err := json.MarshalIndent(nf, "", "  ")
+	exConf := ReadConfigFile()
+	newData, err := json.Marshal(nf)
+	if err != nil {
+		panic(err)
+	}
+	err = json.Unmarshal(newData, &exConf)
+	fmt.Println(exConf)
+	if err != nil {
+		panic(err)
+	}
+	encFile, err := json.MarshalIndent(exConf, "", "  ")
 	if err != nil {
 		panic(err)
 	}

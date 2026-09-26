@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"ticket-auction-manager/tam-go/internal/auth"
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/prefixes"
@@ -40,6 +41,8 @@ func main() {
 	clientSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
 	clientSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
 	clientSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
+	clientSrv.HandleFunc("GET /api/auth", auth.GetKeys)
+	clientSrv.HandleFunc("POST /api/auth", auth.PostAuthKey)
 
 	fmt.Println("http://localhost:3080/")
 	http.ListenAndServe("localhost:3080", clientSrv)

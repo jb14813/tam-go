@@ -6,6 +6,7 @@
     import { handlers } from '$lib/client/handlers';
 
 	let settings = $state({});
+	let origRemoteServer = $state("")
 	let status = $state({
 		message: '',
 		color: 'green'
@@ -15,6 +16,7 @@
 
 	onMount(async () => {
 		settings = await handlers.get('/api/settings');
+		origRemoteServer = settings.remote_server;
 	});
 </script>
 
@@ -26,6 +28,9 @@
 	<HeaderBar>
 		<div>Settings Sections:</div>
 		<a href={resolve('/settings/prefixes')} class={bS.gray}>Prefixes</a>
+		{#if origRemoteServer}
+		<a href={resolve('/settings/auth')} class={bS.gray}>Auth Keys</a>
+		{/if}
 	</HeaderBar>
 	<h1 class="text-xl font-bold">{pageTitle}</h1>
 	<div class="flex flex-col gap-1 w-full py-1">

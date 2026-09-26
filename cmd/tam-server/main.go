@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"ticket-auction-manager/tam-go/internal/auth"
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/prefixes"
 )
@@ -22,6 +23,8 @@ func init() {
 func main() {
 	apiSrv := http.NewServeMux()
 
+	apiSrv.HandleFunc("GET /api/auth", auth.GetKeys)
+	apiSrv.HandleFunc("POST /api/auth", auth.PostAuthKey)
 	apiSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
 	apiSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
 	apiSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)

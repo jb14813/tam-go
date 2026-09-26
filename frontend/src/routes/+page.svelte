@@ -79,6 +79,17 @@
 					>
 				</div>
 			</div>
+			<div class="flex flex-col gap-1 items-center p-1 border border-black rounded">
+				<h2 class="text-lg font-bold">Reports:</h2>
+				<div class="grid grid-cols-2 gap-1 p-1 text-center">
+					<a href="." class={bS[pColor]}
+						>Winners By Name</a
+					>
+					<a href="." class={bS[pColor]}
+						>Winners By Basket</a
+					>
+				</div>
+			</div>
 		{:else}
 			<div class="flex flex-col gap-1 items-center justify-center p-2 border border-black rounded">
 				<h2 class="text-lg font-bold">Please select a prefix to continue.</h2>
