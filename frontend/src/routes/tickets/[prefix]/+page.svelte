@@ -7,7 +7,7 @@
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 
 	let { data } = $props();
-	let { prefix, prefixes } = $derived(data);
+	let { prefix, prefixes, defaultPref } = $derived(data);
 
 	let pageTitle = $derived(`${prefix.prefix} Tickets | TAM`);
 
@@ -47,7 +47,12 @@
 				alert(`Error loading rows: ${errorMessage(e)}`);
 				return;
 			}
-			resData.map((i) => (i.changed = false));
+			resData.forEach((i) => {
+				i.changed = false;
+				// A new row (no data yet, no preference) takes the workstation default.
+				if (!i.pref && !i.first_name && !i.last_name && !i.phone_number) i.pref = defaultPref;
+				if (i.pref == null) i.pref = '';
+			});
 			items = [...resData];
 			setTimeout(() => focusIdx(0));
 		},
@@ -218,22 +223,19 @@
 					/></td
 				>
 				<td class="p-0.5 border"
-					><button
-						class={bS[prefix.color]}
-						onclick={() => {
-							item.pref == 'CALL' ? (item.pref = 'TEXT') : (item.pref = 'CALL');
-							item.changed = true;
-						}}
-						onkeydown={(e) => {
-							if (e.key == 't' || e.key == 'T') {
-								if (item.pref != 'TEXT') item.changed = true;
-								item.pref = 'TEXT';
-							} else if (e.key == 'c' || e.key == 'C') {
-								if (item.pref != 'CALL') item.changed = true;
-								item.pref = 'CALL';
-							}
-						}}>{item.pref}</button
-					></td
+					><select
+						class="{iS.normal} w-full"
+						id="{idx}_fourth"
+						onchange={() => (item.changed = true)}
+						bind:value={item.pref}
+					>
+						{#if item.pref !== 'CALL' && item.pref !== 'TEXT'}
+							<!-- A value from the database that is neither CALL nor TEXT stays as it is. -->
+							<option value={item.pref}>{item.pref || '(blank)'}</option>
+						{/if}
+						<option value="CALL">CALL</option>
+						<option value="TEXT">TEXT</option>
+					</select></td
 				>
 				<td class="p-0.5 border"
 					><button
