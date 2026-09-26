@@ -7,10 +7,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/httpx"
+	"ticket-auction-manager/tam-go/internal/presence"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/version"
 )
@@ -60,26 +63,52 @@ func WithInfo(info Info) Option {
 	}
 }
 
-// touchEvery is how often at most a key's last_seen is written. It is a
-// variable so tests can lower it.
+// WithPresence sets the registry that records what each key's laptop last
+// did: every keyed request is a sighting, an accepted POST or DELETE an
+// update, and the heartbeat's X-TAM-Pending its queued saves. The admin
+// page reads it. Without the option the handler fills a registry nobody
+// reads.
+func WithPresence(reg *presence.Registry) Option {
+	return func(h *handler) {
+		if reg != nil {
+			h.presence = reg
+		}
+	}
+}
+
+// touchEvery is how often at most a key's last_seen and last_update are
+// written. It is a variable so tests can lower it.
 var touchEvery = time.Minute
 
+// maxClientLen caps the program name taken from a request header, which
+// the admin page shows.
+const maxClientLen = 80
+
 type handler struct {
-	st   *store.Store
-	pw   Password
-	info Info
+	st       *store.Store
+	pw       Password
+	info     Info
+	presence *presence.Registry
 
 	mu      sync.Mutex
 	touched map[string]time.Time // key -> last time last_seen was written
+	updated map[string]time.Time // key -> last time last_update was written
 }
 
 // NewHandler returns the server API. Data routes require a TAM-KEY header
 // that matches a stored access key; key management requires a TAM-PW header
 // that pw accepts, and answers 503 while no password is set. Unknown paths
 // and wrong methods under /api answer {"detail": ...} like the original.
+// Every request with a valid key is recorded for the admin page; see
+// WithPresence.
 func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 	hostname, _ := os.Hostname()
-	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: version.Version}, touched: map[string]time.Time{}}
+	h := &handler{
+		st: st, pw: pw, info: Info{Name: hostname, Version: version.Version},
+		presence: presence.New(nil),
+		touched:  map[string]time.Time{},
+		updated:  map[string]time.Time{},
+	}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -141,8 +170,43 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 			return
 		}
 		h.touch(key)
-		next(w, r)
+		h.presence.Seen(key, clientOf(r))
+		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+			next(w, r)
+			return
+		}
+		// A write the handler accepted is an update of the shared data by
+		// that laptop.
+		sw := &statusWriter{ResponseWriter: w}
+		next(sw, r)
+		if sw.status == 0 {
+			sw.status = http.StatusOK
+		}
+		if sw.status/100 == 2 {
+			h.presence.Updated(key)
+			h.markUpdated(key)
+		}
 	})
+}
+
+// statusWriter passes everything through and remembers the status sent.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
 }
 
 // keyOf returns the request's access key. The original client sends it as
@@ -154,29 +218,65 @@ func keyOf(r *http.Request) string {
 	return r.Header.Get("TAM_KEY")
 }
 
+// clientOf names the program behind a request: the X-TAM-Client header
+// tam-client sends, else the first word of the User-Agent, else "unknown".
+func clientOf(r *http.Request) string {
+	name := strings.TrimSpace(r.Header.Get("X-TAM-Client"))
+	if name == "" {
+		if words := strings.Fields(r.UserAgent()); len(words) > 0 {
+			name = words[0]
+		}
+	}
+	if name == "" {
+		return "unknown"
+	}
+	if runes := []rune(name); len(runes) > maxClientLen {
+		name = string(runes[:maxClientLen])
+	}
+	return name
+}
+
 // touch records the key's last_seen time, at most once per touchEvery so
 // the heartbeat of every laptop does not turn into a write every 5 s. A
 // failure is logged and never fails the request; last_seen is informational.
 func (h *handler) touch(key string) {
-	now := time.Now()
-	h.mu.Lock()
-	last, seen := h.touched[key]
-	if seen && now.Sub(last) < touchEvery {
-		h.mu.Unlock()
-		return
-	}
-	h.touched[key] = now
-	h.mu.Unlock()
-	if err := h.st.TouchKey(key); err != nil {
-		log.Printf("record last_seen for a key: %v", err)
+	if h.due(h.touched, key) {
+		if err := h.st.TouchKey(key); err != nil {
+			log.Printf("record last_seen for a key: %v", err)
+		}
 	}
 }
 
-// forget drops the throttle entry of a deleted key.
+// markUpdated records the key's last_update time, throttled like touch.
+func (h *handler) markUpdated(key string) {
+	if h.due(h.updated, key) {
+		if err := h.st.MarkKeyUpdated(key); err != nil {
+			log.Printf("record last_update for a key: %v", err)
+		}
+	}
+}
+
+// due reports whether the key's entry in m is missing or older than
+// touchEvery and, when so, sets it to now.
+func (h *handler) due(m map[string]time.Time, key string) bool {
+	now := time.Now()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if last, ok := m[key]; ok && now.Sub(last) < touchEvery {
+		return false
+	}
+	m[key] = now
+	return true
+}
+
+// forget drops the throttle entries and the presence record of a deleted
+// key.
 func (h *handler) forget(key string) {
 	h.mu.Lock()
 	delete(h.touched, key)
+	delete(h.updated, key)
 	h.mu.Unlock()
+	h.presence.Forget(key)
 }
 
 func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
@@ -201,7 +301,14 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if authed {
-		h.touch(key) // the client's heartbeat is this route
+		// The client's heartbeat is this route; X-TAM-Pending on it says
+		// how many saves still wait on the laptop.
+		h.touch(key)
+		if pending, err := strconv.Atoi(r.Header.Get("X-TAM-Pending")); err == nil && pending >= 0 {
+			h.presence.Heartbeat(key, clientOf(r), pending)
+		} else {
+			h.presence.Seen(key, clientOf(r))
+		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"whoami": "TAM Server", "authenticated": authed, "healthy": true,

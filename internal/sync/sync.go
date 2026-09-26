@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -300,8 +301,17 @@ func (s *Syncer) Tick() {
 	}
 }
 
+// ping is the heartbeat. It tells the server how many saves are queued
+// here (X-TAM-Pending), which its admin page shows; when the count cannot
+// be read the header is left out rather than guessed.
 func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
-	res, err := rc.WithTimeout(s.t.PingTimeout).Get("/api")
+	var headers map[string]string
+	if pending, _, err := s.st.OutboxCounts(); err != nil {
+		log.Printf("outbox: %v", err)
+	} else {
+		headers = map[string]string{"X-TAM-Pending": strconv.Itoa(pending)}
+	}
+	res, err := rc.WithTimeout(s.t.PingTimeout).Do(http.MethodGet, "/api", headers, nil)
 	switch {
 	case err != nil:
 		s.NoteFailure(err)

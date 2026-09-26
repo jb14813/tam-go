@@ -5,21 +5,28 @@ import (
 	"fmt"
 )
 
+// serverColumns are the auth_keys columns only tam-server needs: last_seen
+// records the last authenticated request of a key and last_update its
+// last accepted write.
+var serverColumns = []string{"last_seen", "last_update"}
+
 // MigrateServer applies the schema additions only tam-server needs, after
-// Migrate. Today that is the auth_keys.last_seen column, which records the
-// last authenticated request of a key. The original app never reads it, so
-// a database shared with the original server keeps working. It is safe to
-// run on every start.
+// Migrate: the auth_keys columns in serverColumns. The original app never
+// reads them, so a database shared with the original server keeps working.
+// It is safe to run on every start, and adds only what is missing, so a
+// database from an earlier tam-server gains the newer columns.
 func MigrateServer(sqldb *sql.DB) error {
-	has, err := hasColumn(sqldb, "auth_keys", "last_seen")
-	if err != nil {
-		return err
-	}
-	if has {
-		return nil
-	}
-	if _, err := sqldb.Exec(`ALTER TABLE auth_keys ADD COLUMN last_seen TEXT`); err != nil {
-		return fmt.Errorf("add auth_keys.last_seen: %w", err)
+	for _, column := range serverColumns {
+		has, err := hasColumn(sqldb, "auth_keys", column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := sqldb.Exec(`ALTER TABLE auth_keys ADD COLUMN ` + column + ` TEXT`); err != nil {
+			return fmt.Errorf("add auth_keys.%s: %w", column, err)
+		}
 	}
 	return nil
 }

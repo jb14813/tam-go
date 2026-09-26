@@ -142,14 +142,16 @@ func generateKey() (string, error) {
 	return string(buf), nil
 }
 
-// hasLastSeen reports whether auth_keys has the last_seen column that
-// db.MigrateServer adds. The client's database never gets it.
-func (s *Store) hasLastSeen() (bool, error) {
+// keyColumns reports which of the auth_keys columns that db.MigrateServer
+// adds are present. The client's database never gets them, and a database
+// from an earlier tam-server may have only some.
+func (s *Store) keyColumns() (map[string]bool, error) {
 	rows, err := s.db.Query(`PRAGMA table_info(auth_keys)`)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer rows.Close()
+	have := map[string]bool{}
 	for rows.Next() {
 		var (
 			cid, notNull, pk int
@@ -157,27 +159,27 @@ func (s *Store) hasLastSeen() (bool, error) {
 			dflt             sql.NullString
 		)
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			return false, err
+			return nil, err
 		}
-		if name == "last_seen" {
-			return true, nil
-		}
+		have[name] = true
 	}
-	return false, rows.Err()
+	return have, rows.Err()
 }
 
 // ListKeys returns every access key ordered by description, then key.
-// LastSeen is filled in when the database has the column.
+// LastSeen and LastUpdate are filled in when the database has the columns.
 func (s *Store) ListKeys() ([]AuthKey, error) {
-	withSeen, err := s.hasLastSeen()
+	have, err := s.keyColumns()
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT auth_key, description, NULL FROM auth_keys ORDER BY description, auth_key`
-	if withSeen {
-		query = `SELECT auth_key, description, last_seen FROM auth_keys ORDER BY description, auth_key`
+	column := func(name string) string {
+		if have[name] {
+			return name
+		}
+		return "NULL"
 	}
-	rows, err := s.db.Query(query)
+	rows, err := s.db.Query(`SELECT auth_key, description, ` + column("last_seen") + `, ` + column("last_update") + ` FROM auth_keys ORDER BY description, auth_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -185,11 +187,11 @@ func (s *Store) ListKeys() ([]AuthKey, error) {
 	out := []AuthKey{}
 	for rows.Next() {
 		var k AuthKey
-		var desc, seen sql.NullString
-		if err := rows.Scan(&k.AuthKey, &desc, &seen); err != nil {
+		var desc, seen, updated sql.NullString
+		if err := rows.Scan(&k.AuthKey, &desc, &seen, &updated); err != nil {
 			return nil, err
 		}
-		k.Description, k.LastSeen = nstr(desc), nstr(seen)
+		k.Description, k.LastSeen, k.LastUpdate = nstr(desc), nstr(seen), nstr(updated)
 		out = append(out, k)
 	}
 	return out, rows.Err()
@@ -199,6 +201,14 @@ func (s *Store) ListKeys() ([]AuthKey, error) {
 // db.MigrateServer adds; a missing key is not an error.
 func (s *Store) TouchKey(key string) error {
 	_, err := s.db.Exec(`UPDATE auth_keys SET last_seen = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
+	return err
+}
+
+// MarkKeyUpdated records now as the key's last_update time, the time of
+// its last accepted write. It needs the column db.MigrateServer adds; a
+// missing key is not an error.
+func (s *Store) MarkKeyUpdated(key string) error {
+	_, err := s.db.Exec(`UPDATE auth_keys SET last_update = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
 	return err
 }
 

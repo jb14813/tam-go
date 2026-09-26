@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"ticket-auction-manager/tam-go/internal/version"
 )
 
 // Client talks to one remote server with one access key.
@@ -61,9 +63,10 @@ func (r *Response) OK() bool { return r.Status >= 200 && r.Status < 300 }
 // JSON decodes the body into v.
 func (r *Response) JSON(v any) error { return json.Unmarshal(r.Body, v) }
 
-// Do sends a request with the access key. body, when not nil, is sent as
-// JSON. A transport failure is returned as an error; any HTTP status is
-// returned as a Response.
+// Do sends a request with the access key and an X-TAM-Client header naming
+// this program and its version, which the server's admin page shows. body,
+// when not nil, is sent as JSON. A transport failure is returned as an
+// error; any HTTP status is returned as a Response.
 func (c *Client) Do(method, path string, headers map[string]string, body any) (*Response, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -78,6 +81,7 @@ func (c *Client) Do(method, path string, headers map[string]string, body any) (*
 		return nil, err
 	}
 	req.Header.Set("TAM-KEY", c.key)
+	req.Header.Set("X-TAM-Client", "tam-client/"+version.Version)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

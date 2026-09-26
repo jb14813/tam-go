@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/httpx"
+	"ticket-auction-manager/tam-go/internal/presence"
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
@@ -39,7 +40,16 @@ type Info struct {
 	DataDir   string    // where the database, log and server.json live
 	Version   string    // the program version
 	Started   time.Time // when the server started, for the uptime
+
+	// Presence is the API's record of what each laptop last did, for the
+	// Laptops table. Without it the table shows what the database
+	// remembers.
+	Presence *presence.Registry
 }
+
+// connectedWithin is how recently a laptop must have been seen to count as
+// connected: three of the client's 5 s heartbeats.
+const connectedWithin = 15 * time.Second
 
 type handler struct {
 	st   *store.Store
@@ -137,11 +147,30 @@ type keyRow struct {
 	LastSeen    string
 }
 
+// laptopRow is one paired laptop as the status page and its JSON show it.
+type laptopRow struct {
+	Laptop     string `json:"laptop"`
+	Client     string `json:"client"`      // the program, "" when unknown
+	State      string `json:"state"`       // connected, away for ..., or never
+	LastSeen   string `json:"last_seen"`   // as formatSeen writes it
+	LastUpdate string `json:"last_update"` // as formatSeen writes it
+	Queued     *int   `json:"queued"`      // nil when the laptop never sent a heartbeat
+}
+
 type statusData struct {
 	Info
 	Uptime                     string
 	Prefixes, Tickets, Baskets int
-	Keys                       []keyRow
+	Laptops                    []laptopRow
+}
+
+// statusJSON is the status page for scripts.
+type statusJSON struct {
+	Uptime   string      `json:"uptime"`
+	Prefixes int         `json:"prefixes"`
+	Tickets  int         `json:"tickets"`
+	Baskets  int         `json:"baskets"`
+	Laptops  []laptopRow `json:"laptops"`
 }
 
 type keysData struct {
@@ -242,12 +271,22 @@ func (h *handler) formSession(w http.ResponseWriter, r *http.Request) *session {
 	return s
 }
 
+// wantsJSON reports whether the request asked for JSON, as a script does.
+func wantsJSON(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "application/json")
+}
+
 // loggedIn wraps a page that needs a login. A visitor without one is sent
-// to the login form; a POST without the session's token is refused.
+// to the login form, or told so in JSON when that is what was asked for;
+// a POST without the session's token is refused.
 func (h *handler) loggedIn(next func(http.ResponseWriter, *http.Request, *session)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := h.ss.get(cookieID(r))
 		if s == nil || !s.loggedIn {
+			if wantsJSON(r) {
+				httpx.WriteError(w, http.StatusUnauthorized, "Not logged in")
+				return
+			}
 			http.Redirect(w, r, "/admin/", http.StatusSeeOther)
 			return
 		}
@@ -375,12 +414,73 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	now := h.ss.now()
-	h.render(w, http.StatusOK, "status", h.view(s, "status", statusData{
+	data := statusData{
 		Info:     h.info,
 		Uptime:   formatUptime(now.Sub(h.info.Started)),
 		Prefixes: prefixes, Tickets: tickets, Baskets: baskets,
-		Keys: keyRows(keys, now),
-	}))
+		Laptops: laptopRows(keys, h.snapshot(), now),
+	}
+	if wantsJSON(r) {
+		httpx.WriteJSON(w, http.StatusOK, statusJSON{Uptime: data.Uptime, Prefixes: prefixes, Tickets: tickets, Baskets: baskets, Laptops: data.Laptops})
+		return
+	}
+	h.render(w, http.StatusOK, "status", h.view(s, "status", data))
+}
+
+// snapshot returns the registry's records, or nothing without a registry.
+func (h *handler) snapshot() map[string]presence.Record {
+	if h.info.Presence == nil {
+		return nil
+	}
+	return h.info.Presence.Snapshot()
+}
+
+// laptopRows joins the keys with what the registry saw of each. The times
+// in memory are exact and win; the persisted ones stand in after a
+// restart until the laptop shows up again.
+func laptopRows(keys []store.AuthKey, live map[string]presence.Record, now time.Time) []laptopRow {
+	rows := make([]laptopRow, 0, len(keys))
+	for _, k := range keys {
+		rec := live[k.AuthKey]
+		seen := pick(rec.Seen, k.LastSeen)
+		row := laptopRow{
+			Laptop:     k.Description,
+			Client:     rec.Client,
+			State:      stateOf(seen, now),
+			LastSeen:   formatAgo(seen, now),
+			LastUpdate: formatAgo(pick(rec.Updated, k.LastUpdate), now),
+		}
+		if rec.HasPending {
+			pending := rec.Pending
+			row.Queued = &pending
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// pick returns the live time when there is one, else the persisted RFC
+// 3339 value, else the zero time.
+func pick(live time.Time, persisted string) time.Time {
+	if !live.IsZero() {
+		return live
+	}
+	t, err := time.Parse(time.RFC3339, persisted)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// stateOf is the connection state of a laptop last seen at seen.
+func stateOf(seen, now time.Time) string {
+	switch {
+	case seen.IsZero():
+		return "never"
+	case now.Sub(seen) <= connectedWithin:
+		return "connected"
+	}
+	return "away for " + formatUptime(now.Sub(seen))
 }
 
 func keyRows(keys []store.AuthKey, now time.Time) []keyRow {
@@ -418,8 +518,8 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%d s", seconds)
 }
 
-// formatSeen turns a last_seen value into local time plus how long ago
-// that was; "" is "never".
+// formatSeen turns a persisted last_seen value into local time plus how
+// long ago that was; "" is "never".
 func formatSeen(seen string, now time.Time) string {
 	if seen == "" {
 		return "never"
@@ -427,6 +527,15 @@ func formatSeen(seen string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, seen)
 	if err != nil {
 		return seen
+	}
+	return formatAgo(t, now)
+}
+
+// formatAgo writes t as local time plus how long before now that was; the
+// zero time is "never".
+func formatAgo(t, now time.Time) string {
+	if t.IsZero() {
+		return "never"
 	}
 	ago := now.Sub(t)
 	var rel string

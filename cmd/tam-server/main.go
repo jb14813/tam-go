@@ -23,6 +23,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/presence"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/tlscert"
@@ -148,11 +149,13 @@ func main() {
 		absDataDir = dataDir
 	}
 	st := store.New(sqldb)
+	// The API records what every laptop does; the admin page shows it.
+	laptops := presence.New(nil)
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now()})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now(), Presence: laptops})
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
-	mux.Handle("/", server.NewHandler(st, password))
+	mux.Handle("/", server.NewHandler(st, password, server.WithPresence(laptops)))
 	srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,

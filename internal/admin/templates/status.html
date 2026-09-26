@@ -1,4 +1,5 @@
 {{define "title"}}Status{{end}}
+{{define "head"}}<meta http-equiv="refresh" content="5">{{end}}
 {{define "content"}}
 <h1>Status</h1>
 {{with .Data}}
@@ -13,13 +14,14 @@
   <tr><th>Tickets</th><td>{{.Tickets}}</td></tr>
   <tr><th>Baskets</th><td>{{.Baskets}}</td></tr>
 </table>
-<h2>Paired laptops</h2>
-{{if .Keys}}
+<h2>Laptops</h2>
+{{if .Laptops}}
 <table>
-  <tr><th>Laptop</th><th>Last seen</th></tr>
-  {{range .Keys}}<tr><td>{{.Description}}</td><td>{{.LastSeen}}</td></tr>
+  <tr><th>Laptop</th><th>Client</th><th>State</th><th>Last seen</th><th>Last update</th><th>Queued</th></tr>
+  {{range .Laptops}}<tr><td>{{.Laptop}}</td><td>{{or .Client "–"}}</td><td>{{.State}}</td><td>{{.LastSeen}}</td><td>{{.LastUpdate}}</td><td>{{if .Queued}}{{.Queued}}{{else}}–{{end}}</td></tr>
   {{end}}
 </table>
+<p class="note">Connected means seen in the last 15 seconds. Queued is how many saves the laptop still has to deliver, as its last heartbeat reported. This page reloads every 5 seconds.</p>
 {{else}}
 <p>No laptop has paired yet. Pair one from its Settings page, or <a href="/admin/keys">create a key</a> here.</p>
 {{end}}

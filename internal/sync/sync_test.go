@@ -14,14 +14,16 @@ import (
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/remote"
 	"ticket-auction-manager/tam-go/internal/store"
+	"ticket-auction-manager/tam-go/internal/version"
 )
 
 // fakeServer is a tam-server stand-in whose mood can be changed mid-test.
 type fakeServer struct {
-	mu       sync.Mutex
-	mode     string // "up", "down" (503), "nokey" (401 on everything)
-	requests []string
-	ts       *httptest.Server
+	mu         sync.Mutex
+	mode       string // "up", "down" (503), "nokey" (401 on everything)
+	requests   []string
+	heartbeats []http.Header // the headers of every GET /api
+	ts         *httptest.Server
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -31,6 +33,9 @@ func newFakeServer(t *testing.T) *fakeServer {
 		f.mu.Lock()
 		mode := f.mode
 		f.requests = append(f.requests, r.Method+" "+r.URL.RequestURI())
+		if r.URL.Path == "/api" {
+			f.heartbeats = append(f.heartbeats, r.Header.Clone())
+		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -66,6 +71,16 @@ func (f *fakeServer) seen() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.requests...)
+}
+
+// lastHeartbeat returns the headers of the last GET /api.
+func (f *fakeServer) lastHeartbeat() http.Header {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.heartbeats) == 0 {
+		return nil
+	}
+	return f.heartbeats[len(f.heartbeats)-1]
 }
 
 func newSyncer(t *testing.T, serverURL string) (*Syncer, *store.Store) {
@@ -236,5 +251,45 @@ func TestUnreachableServer(t *testing.T) {
 	s.Tick()
 	if s.State() != Reconnecting {
 		t.Fatalf("state = %q, want reconnecting", s.State())
+	}
+}
+
+// TestHeartbeatCarriesTheQueuedSaves: the server's admin page shows how
+// many saves each laptop still has queued, so every heartbeat says so.
+func TestHeartbeatCarriesTheQueuedSaves(t *testing.T) {
+	f := newFakeServer(t)
+	s, st := newSyncer(t, f.ts.URL)
+	s.Tick()
+	hb := f.lastHeartbeat()
+	if hb == nil || hb.Get("X-TAM-Pending") != "0" || hb.Get("X-TAM-Client") != "tam-client/"+version.Version || hb.Get("TAM-KEY") != "KEY" {
+		t.Fatalf("first heartbeat = %v, want X-TAM-Pending 0, X-TAM-Client and the key", hb)
+	}
+
+	f.set("down")
+	s.Tick()
+	for _, path := range []string{"/api/tickets", "/api/baskets"} {
+		if err := s.Enqueue("POST", path, []byte(`[]`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 2 {
+		t.Fatalf("pending = %d, want 2 while the server is down", p)
+	}
+	if got := f.lastHeartbeat().Get("X-TAM-Pending"); got != "2" {
+		t.Fatalf("heartbeat with two queued saves said X-TAM-Pending %q, want 2", got)
+	}
+
+	// Once the server is back the queue drains, and the next heartbeat
+	// reports an empty queue.
+	f.set("up")
+	s.Reset()
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 0 {
+		t.Fatalf("pending = %d after the server returned, want 0", p)
+	}
+	s.Tick()
+	if got := f.lastHeartbeat().Get("X-TAM-Pending"); got != "0" {
+		t.Fatalf("heartbeat after the drain said X-TAM-Pending %q, want 0", got)
 	}
 }

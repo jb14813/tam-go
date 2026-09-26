@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestMigrateServerAddsLastSeen(t *testing.T) {
+func TestMigrateServerAddsLastSeenAndLastUpdate(t *testing.T) {
 	sqldb, err := Open(filepath.Join(t.TempDir(), "remote.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -14,8 +14,10 @@ func TestMigrateServerAddsLastSeen(t *testing.T) {
 	if err := Migrate(sqldb); err != nil {
 		t.Fatal(err)
 	}
-	if has, _ := hasColumn(sqldb, "auth_keys", "last_seen"); has {
-		t.Fatal("Migrate alone must not add last_seen; the client shares that schema")
+	for _, column := range []string{"last_seen", "last_update"} {
+		if has, _ := hasColumn(sqldb, "auth_keys", column); has {
+			t.Fatalf("Migrate alone must not add %s; the client shares that schema", column)
+		}
 	}
 
 	// Twice: the migration runs on every start.
@@ -24,15 +26,47 @@ func TestMigrateServerAddsLastSeen(t *testing.T) {
 			t.Fatalf("MigrateServer run %d: %v", i+1, err)
 		}
 	}
-	has, err := hasColumn(sqldb, "auth_keys", "last_seen")
-	if err != nil || !has {
-		t.Fatalf("last_seen after MigrateServer: has=%v err=%v", has, err)
+	for _, column := range []string{"last_seen", "last_update"} {
+		has, err := hasColumn(sqldb, "auth_keys", column)
+		if err != nil || !has {
+			t.Fatalf("%s after MigrateServer: has=%v err=%v", column, has, err)
+		}
 	}
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z')`); err != nil {
-		t.Fatalf("insert with last_seen: %v", err)
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen, last_update) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z', '2026-09-25T10:01:00Z')`); err != nil {
+		t.Fatalf("insert with last_seen and last_update: %v", err)
 	}
 	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description) VALUES ('L', 'old style')`); err != nil {
-		t.Fatalf("insert without last_seen must keep working: %v", err)
+		t.Fatalf("insert without the columns must keep working: %v", err)
+	}
+}
+
+// TestMigrateServerAddsLastUpdateToAnEarlierGoDatabase: a database the
+// previous tam-server migrated has last_seen but not last_update; the
+// missing column is added and the present one left alone.
+func TestMigrateServerAddsLastUpdateToAnEarlierGoDatabase(t *testing.T) {
+	sqldb, err := Open(filepath.Join(t.TempDir(), "remote.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqldb.Close()
+	if err := Migrate(sqldb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqldb.Exec(`ALTER TABLE auth_keys ADD COLUMN last_seen TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateServer(sqldb); err != nil {
+		t.Fatalf("MigrateServer over a database with last_seen only: %v", err)
+	}
+	var seen, update *string
+	if err := sqldb.QueryRow(`SELECT last_seen, last_update FROM auth_keys WHERE auth_key = 'K'`).Scan(&seen, &update); err != nil {
+		t.Fatalf("existing key after migration: %v", err)
+	}
+	if seen == nil || *seen != "2026-09-25T10:00:00Z" || update != nil {
+		t.Fatalf("existing key: last_seen=%v last_update=%v, want the old value and NULL", seen, update)
 	}
 }
 
@@ -48,12 +82,12 @@ func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
 		t.Fatalf("MigrateServer over the original server's schema: %v", err)
 	}
 	var desc string
-	var seen *string
-	if err := sqldb.QueryRow(`SELECT description, last_seen FROM auth_keys WHERE auth_key = 'K'`).Scan(&desc, &seen); err != nil {
+	var seen, update *string
+	if err := sqldb.QueryRow(`SELECT description, last_seen, last_update FROM auth_keys WHERE auth_key = 'K'`).Scan(&desc, &seen, &update); err != nil {
 		t.Fatalf("existing key after migration: %v", err)
 	}
-	if desc != "laptop" || seen != nil {
-		t.Fatalf("existing key = %q last_seen=%v, want laptop and NULL", desc, seen)
+	if desc != "laptop" || seen != nil || update != nil {
+		t.Fatalf("existing key = %q last_seen=%v last_update=%v, want laptop and NULLs", desc, seen, update)
 	}
 }
 
