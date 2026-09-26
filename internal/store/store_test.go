@@ -351,6 +351,49 @@ func TestKeyLastSeen(t *testing.T) {
 	must(t, s.TouchKey("NOT A KEY")) // no row, no error
 }
 
+func TestKeyLastUpdate(t *testing.T) {
+	// Without the server migration there is no column: ListKeys still works
+	// and LastUpdate stays empty and off the wire.
+	plain := newTestStore(t)
+	k, err := plain.CreateKey("laptop")
+	must(t, err)
+	list, err := plain.ListKeys()
+	must(t, err)
+	if len(list) != 1 || list[0].LastUpdate != "" {
+		t.Fatalf("ListKeys without the column = %+v", list)
+	}
+	if data, _ := json.Marshal(list[0]); strings.Contains(string(data), "last_update") {
+		t.Fatalf("a key without the column must not carry last_update on the wire: %s", data)
+	}
+	if err := plain.MarkKeyUpdated(k.AuthKey); err == nil {
+		t.Fatal("MarkKeyUpdated without the column should fail")
+	}
+
+	s := newTestStore(t)
+	must(t, db.MigrateServer(s.db))
+	k, err = s.CreateKey("laptop")
+	must(t, err)
+	if list, _ = s.ListKeys(); list[0].LastUpdate != "" {
+		t.Fatalf("a new key has no last_update, got %q", list[0].LastUpdate)
+	}
+	// Being seen is not the same as having written.
+	must(t, s.TouchKey(k.AuthKey))
+	if list, _ = s.ListKeys(); list[0].LastUpdate != "" || list[0].LastSeen == "" {
+		t.Fatalf("after TouchKey = %+v, want last_seen only", list[0])
+	}
+	before := time.Now().Add(-2 * time.Second)
+	must(t, s.MarkKeyUpdated(k.AuthKey))
+	list, _ = s.ListKeys()
+	updated, err := time.Parse(time.RFC3339, list[0].LastUpdate)
+	if err != nil || updated.Before(before) || updated.After(time.Now().Add(2*time.Second)) {
+		t.Fatalf("last_update after MarkKeyUpdated = %q (%v)", list[0].LastUpdate, err)
+	}
+	if data, _ := json.Marshal(list[0]); !strings.Contains(string(data), `"last_update":"`+list[0].LastUpdate+`"`) {
+		t.Fatalf("last_update missing on the wire: %s", data)
+	}
+	must(t, s.MarkKeyUpdated("NOT A KEY")) // no row, no error
+}
+
 func TestCounts(t *testing.T) {
 	s := newTestStore(t)
 	p, tk, b, err := s.Counts()
