@@ -7,6 +7,7 @@ import (
 	"os"
 	"ticket-auction-manager/tam-go/internal/auth"
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/middleware"
 	"ticket-auction-manager/tam-go/internal/prefixes"
 )
 
@@ -17,21 +18,29 @@ func init() {
 	os.Setenv("TAM_DAEMON", "Server")
 	db.InitDB()
 	fmt.Println("Database initialized.")
+	if os.Getenv("TAM_PW") == "" {
+		os.Setenv("TAM_PW", "dbob16")
+	}
 	fmt.Println(ASCIIart)
 }
 
 func main() {
+	authSrv := http.NewServeMux()
 	apiSrv := http.NewServeMux()
 
-	apiSrv.HandleFunc("GET /api/auth", auth.GetKeys)
-	apiSrv.HandleFunc("POST /api/auth", auth.PostAuthKey)
-	apiSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
-	apiSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
-	apiSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
+	apiSrv.HandleFunc("GET /auth", auth.GetKeys)
+	apiSrv.HandleFunc("POST /auth", auth.PostAuthKey)
+	apiSrv.HandleFunc("DELETE /auth", auth.DelAuthKey)
+
+	apiSrv.HandleFunc("GET /prefixes", prefixes.GetAllPrefixes)
+	apiSrv.HandleFunc("POST /prefixes", prefixes.PostPrefixes)
+	apiSrv.HandleFunc("DELETE /prefixes", prefixes.DelPrefix)
+
+	authSrv.Handle("/api/", middleware.ServerMiddleware(http.StripPrefix("/api", apiSrv)))
 
 	if len(os.Args) > 1 && os.Args[1] == "dev" {
 		fmt.Println("http://localhost:8000/")
-		err := http.ListenAndServe("localhost:8000", apiSrv)
+		err := http.ListenAndServe("localhost:8000", authSrv)
 		if err != nil {
 			panic(err)
 		}

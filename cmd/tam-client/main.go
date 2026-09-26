@@ -38,11 +38,14 @@ func main() {
 
 	clientSrv.HandleFunc("GET /api/settings", config.GetAllSettings)
 	clientSrv.HandleFunc("POST /api/settings", config.SaveAllSettings)
+
 	clientSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
 	clientSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
 	clientSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
+
 	clientSrv.HandleFunc("GET /api/auth", auth.GetKeys)
 	clientSrv.HandleFunc("POST /api/auth", auth.PostAuthKey)
+	clientSrv.HandleFunc("DELETE /api/auth", auth.DelAuthKey)
 
 	fmt.Println("http://localhost:3080/")
 	http.ListenAndServe("localhost:3080", clientSrv)

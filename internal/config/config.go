@@ -10,14 +10,17 @@ import (
 	"ticket-auction-manager/tam-go/internal/env"
 )
 
-var Path string = env.GetConfigPath()
-
 func ReadConfigFile() ConfigFile {
-	defaultFile, err := json.MarshalIndent(DefaultConfigFile, "", "  ")
-	if err != nil {
-		panic(err)
+	Path := env.GetConfigPath()
+	Daemon := env.GetDaemon()
+	if Daemon == "Server" {
+		return DefaultConfigFile
 	}
 	if _, err := os.Stat(Path); errors.Is(err, os.ErrNotExist) {
+		defaultFile, err := json.MarshalIndent(DefaultConfigFile, "", "  ")
+		if err != nil {
+			panic(err)
+		}
 		os.WriteFile(Path, defaultFile, 0644)
 	} else if err != nil {
 		panic(err)
@@ -35,6 +38,7 @@ func ReadConfigFile() ConfigFile {
 }
 
 func WriteConfigFile(nf []byte) ConfigFile {
+	Path := env.GetConfigPath()
 	exConf := ReadConfigFile()
 	err := json.Unmarshal(nf, &exConf)
 	if err != nil {
@@ -52,7 +56,7 @@ func GetAllSettings(w http.ResponseWriter, r *http.Request) {
 	fileData := ReadConfigFile()
 
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(fileData)
 }
 
@@ -85,7 +89,7 @@ func SaveAllSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	UpdatedFile := WriteConfigFile(nf)
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(UpdatedFile)
 }
 

@@ -35,6 +35,10 @@ func GetAllPrefixes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer res.Body.Close()
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			http.Error(w, "Server reported an error.", res.StatusCode)
+			return
+		}
 		json.NewDecoder(res.Body).Decode(&prefixes)
 	} else {
 		results, err := conn.Query("SELECT prefix, color, weight FROM prefixes ORDER BY weight, prefix")
@@ -53,7 +57,7 @@ func GetAllPrefixes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(prefixes)
 }
 
@@ -94,10 +98,14 @@ func PostPrefixes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer res.Body.Close()
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			http.Error(w, "Server reported an error.", res.StatusCode)
+			return
+		}
 	}
 
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(prefixes)
 }
 
@@ -134,9 +142,13 @@ func DelPrefix(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer res.Body.Close()
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			http.Error(w, "Server reported an error.", res.StatusCode)
+			return
+		}
 	}
 
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(rtnPrefix)
 }
