@@ -1,6 +1,7 @@
 /build/
 /data/
 /data-client/
-/build/
 /cmd/tam-client/dist/
+/deploy/docker/data/
+/deploy/docker/client-data/
 .claude-flow/
