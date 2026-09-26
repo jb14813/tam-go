@@ -1,0 +1,58 @@
+# The Go tam-server in Docker, like the compose file of the original: port
+# 8000 and a ./data folder. The client is here too, under the "client"
+# profile, for a machine that should serve the web app from a container.
+#
+#   TAM_PWD=secret docker compose up -d --build       # the server
+#   docker compose --profile client up -d --build     # the client as well
+#
+# The server needs a password before it hands out keys: TAM_PWD from the
+# environment (or a .env file next to this file), or set it on the admin
+# page, http://<host>:8000/admin, on the first visit. A data folder from the
+# original goes to ./data as it is (tam-remote.db); see "Switching from the
+# original" in README.md.
+#
+# The announcement on the local network (mDNS) does not leave a bridged
+# container, so it is off here and the laptops type the address. To announce,
+# replace `ports` by `network_mode: host` and drop -announce=false.
+
+services:
+  tam-server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        PROGRAM: tam-server
+        VERSION: ${VERSION:-0.0.1}
+    image: tam-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      TAM_PWD: ${TAM_PWD:-}
+    command: ["-addr", ":8000", "-tray=false", "-announce=false"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/api"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+
+  # The client in a container: pair it from its Settings page with host
+  # "tam-server" and port 8000 (the service name resolves inside the compose
+  # network), or with the address of a server elsewhere on the network.
+  tam-client:
+    profiles: ["client"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        PROGRAM: tam-client
+        VERSION: ${VERSION:-0.0.1}
+    image: tam-client
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    volumes:
+      - ./client-data:/data
+    command: ["-addr", ":3080", "-open=false", "-tray=false"]
