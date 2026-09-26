@@ -39,10 +39,10 @@ server reports it on `GET /api` and the admin page.
 ## Builds and packaging
 
 - `./build.sh release` builds `build/<os>-<arch>/` for windows, linux and
+  darwin on amd64 and arm64, CGO off, `-trimpath -ldflags "-s -w -X ..."`,
   then one archive per program and target (`tam-server-<version>-<os>-<arch>`
   and `tam-client-...`, `.zip` on Windows, `.tar.gz` elsewhere) containing that
   program, README.md, LICENSE.md and its deploy files for that system.
-  LICENSE.md and the deploy files for that system.
 - CI: cross-compile check for all six targets on every push; a `release`
   workflow on tags `v*` builds the archives and attaches them to the
   GitHub release.

@@ -649,6 +649,7 @@ func TestStatusListsLaptops(t *testing.T) {
 	s.login("secret")
 	base := time.Now().Truncate(time.Second) // stored stamps have whole seconds
 	s.h.ss.now = func() time.Time { return base }
+	s.h.info.Started = base.Add(-90 * time.Second) // the uptime is measured from the same clock
 	at := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04") }
 	const dash = "\u2013"
 
