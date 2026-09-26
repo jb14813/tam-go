@@ -1,11 +1,13 @@
 package store
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"ticket-auction-manager/tam-go/internal/db"
 )
@@ -308,6 +310,61 @@ func TestAuthKeys(t *testing.T) {
 	}
 	if gone, _ = s.DeleteKey(k.AuthKey); gone != nil {
 		t.Fatalf("deleting a missing key should return nil, got %+v", gone)
+	}
+}
+
+func TestKeyLastSeen(t *testing.T) {
+	// Without the server migration there is no column: ListKeys still works
+	// and LastSeen stays empty, which keeps the JSON the original's.
+	plain := newTestStore(t)
+	k, err := plain.CreateKey("laptop")
+	must(t, err)
+	list, err := plain.ListKeys()
+	must(t, err)
+	if len(list) != 1 || list[0].LastSeen != "" {
+		t.Fatalf("ListKeys without the column = %+v", list)
+	}
+	if data, _ := json.Marshal(list[0]); strings.Contains(string(data), "last_seen") {
+		t.Fatalf("an unused key must not carry last_seen on the wire: %s", data)
+	}
+	if err := plain.TouchKey(k.AuthKey); err == nil {
+		t.Fatal("TouchKey without the column should fail")
+	}
+
+	s := newTestStore(t)
+	must(t, db.MigrateServer(s.db))
+	k, err = s.CreateKey("laptop")
+	must(t, err)
+	if list, _ = s.ListKeys(); list[0].LastSeen != "" {
+		t.Fatalf("a new key has no last_seen, got %q", list[0].LastSeen)
+	}
+	before := time.Now().Add(-2 * time.Second)
+	must(t, s.TouchKey(k.AuthKey))
+	list, _ = s.ListKeys()
+	seen, err := time.Parse(time.RFC3339, list[0].LastSeen)
+	if err != nil || seen.Before(before) || seen.After(time.Now().Add(2*time.Second)) {
+		t.Fatalf("last_seen after TouchKey = %q (%v)", list[0].LastSeen, err)
+	}
+	if data, _ := json.Marshal(list[0]); !strings.Contains(string(data), `"last_seen":"`+list[0].LastSeen+`"`) {
+		t.Fatalf("last_seen missing on the wire: %s", data)
+	}
+	must(t, s.TouchKey("NOT A KEY")) // no row, no error
+}
+
+func TestCounts(t *testing.T) {
+	s := newTestStore(t)
+	p, tk, b, err := s.Counts()
+	must(t, err)
+	if p != 0 || tk != 0 || b != 0 {
+		t.Fatalf("Counts of an empty store = %d %d %d", p, tk, b)
+	}
+	must(t, s.UpsertPrefixes([]Prefix{{"A", "red", 1}, {"B", "blue", 2}}))
+	must(t, s.UpsertTickets([]Ticket{{"A", 1, "", "", "", "CALL"}, {"A", 2, "", "", "", "CALL"}, {"B", 1, "", "", "", "CALL"}}))
+	must(t, s.UpsertBaskets([]Basket{{"A", 1, "Wine", "", 0}}))
+	p, tk, b, err = s.Counts()
+	must(t, err)
+	if p != 2 || tk != 3 || b != 1 {
+		t.Fatalf("Counts = %d %d %d, want 2 3 1", p, tk, b)
 	}
 }
 
