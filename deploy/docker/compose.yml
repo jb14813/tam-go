@@ -5,6 +5,11 @@
 #   TAM_PWD=secret docker compose up -d --build       # the server
 #   docker compose --profile client up -d --build     # the client as well
 #
+# If `docker compose` refuses to build because the buildx plugin is older
+# than 0.17 (Unraid ships one), build the image from the repository root,
+#   docker build -f deploy/docker/Dockerfile -t tam-server .
+# and then `docker compose up -d` without --build uses it.
+#
 # The server needs a password before it hands out keys: TAM_PWD from the
 # environment (or a .env file next to this file), or set it on the admin
 # page, http://<host>:8000/admin, on the first visit. A data folder from the
