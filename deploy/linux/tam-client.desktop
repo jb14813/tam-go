@@ -1,0 +1,18 @@
+# Application-menu entry for running tam-client by hand on a laptop: it
+# opens the browser itself, keeps its data under ~/.local/share/tam-client,
+# and stops from Alt+A, Shut Down TAM in the app. install.sh puts this file
+# under /usr/local/share/applications and the icon under
+# /usr/local/share/icons. Do not start it while the tam-client service is
+# running on the same port.
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Ticket Auction Manager
+GenericName=Ticket auction client
+Comment=Run the TAM client and open it in the browser
+Exec=sh -c "TAM_DATA_DIR=\\"\\$HOME/.local/share/tam-client\\" exec /usr/local/bin/tam-client"
+Icon=tam-client
+Terminal=false
+Categories=Office;
+Keywords=TAM;auction;tickets;raffle;
+StartupNotify=false

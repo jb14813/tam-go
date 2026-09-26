@@ -15,9 +15,10 @@ Ticket Auction Manager (TAM) runs in-person penny socials and benefit auctions: 
 
 ## Quick start
 
-1. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere. Prebuilt binaries from a release zip are under `build/<os>-<arch>/`; on Linux or macOS run `chmod +x` on them if your unzip tool dropped the executable bit.
-2. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). On Windows a TAM icon sits in the notification area next to the clock while it runs (under the `^` overflow unless you pin it): left-click it to open the app again, right-click it for **Open TAM** and **Shut Down TAM**. The console window it started with stays open too, titled "Ticket Auction Manager - client" in the taskbar; closing it or pressing Ctrl+C in it also stops the program cleanly, as does **Shut Down TAM** under `Alt+A` on the main menu. Closing the browser tab alone leaves it running.
-3. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
+1. Get the archive for your system from the GitHub release: `tam-go-<version>-windows-amd64.zip` (or `-windows-arm64.zip` for a Snapdragon laptop), `tam-go-<version>-linux-amd64.tar.gz` (or `-linux-arm64`), `tam-go-<version>-darwin-arm64.tar.gz` for an Apple silicon Mac (or `-darwin-amd64` for an Intel one). Each unpacks to one folder holding both programs, this README, the license, and the service files for that system (see Deployment). On Linux and macOS run `chmod +x tam-client tam-server` if your unzip tool dropped the executable bit (the tar.gz archives carry it), and on macOS clear the quarantine flag once with `xattr -dr com.apple.quarantine tam-client tam-server`.
+2. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere.
+3. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). On Windows a TAM icon sits in the notification area next to the clock while it runs (under the `^` overflow unless you pin it): left-click it to open the app again, right-click it for **Open TAM** and **Shut Down TAM**. The console window it started with stays open too, titled "Ticket Auction Manager - client" in the taskbar; closing it or pressing Ctrl+C in it also stops the program cleanly, as does **Shut Down TAM** under `Alt+A` on the main menu. Closing the browser tab alone leaves it running.
+4. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
 
 ## Building from source
 
@@ -27,9 +28,14 @@ Requirements: Go 1.27.1 or newer (the version in `go.mod`), Node 24 or newer wit
 ./build.sh all          # web app + tam-client + tam-server into ./build
 ./build.sh client       # or one of them
 GOOS=linux GOARCH=amd64 ./build.sh all     # cross-compile (CGO is not needed)
+./build.sh release      # every system: build/<os>-<arch>/ and one archive per target
 ```
 
 The web app must be built before `go build ./cmd/tam-client`, because the binary embeds `cmd/tam-client/dist`. `build.sh client` does both.
+
+`./build.sh release` builds the web app once, then both programs for Windows, Linux and macOS on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w"`) into `build/<os>-<arch>/`, and packs each target into `build/tam-go-<version>-<os>-<arch>.zip` (Windows) or `.tar.gz` (Linux, macOS): one folder with both programs, `README.md`, `LICENSE.md` and the files from `deploy/linux` or `deploy/macos` (the macOS notes as `INSTALL.md`). The version stamped into both programs, `internal/version.Version`, is `$VERSION` when set and otherwise `git describe --tags --always --dirty`; both programs print it in their banner and the server reports it on `GET /api` and its admin page. `VERSION=v1.2.3 ./build.sh release` names the archives `tam-go-v1.2.3-...`. `SKIP_WEB=1` keeps an existing `cmd/tam-client/dist`. The archives are written with `zip` and `tar` where those exist and with Python otherwise (always with Python from Git Bash, which does not see the executable bit of a macOS program). Only `windows-amd64` carries the TAM icons and version information, from the `rsrc_windows_amd64.syso` files; `windows-arm64` builds without them.
+
+Releases come from `.github/workflows/release.yml`: pushing a tag `v*` runs `VERSION=<tag> ./build.sh release` on GitHub and attaches the six archives to a GitHub release of that tag, with generated notes. `ci.yml` vets and cross-compiles all six targets on every push.
 
 Development:
 
@@ -103,7 +109,7 @@ The API is the original's, so the original `tam-client` (Linux/Docker) and the G
 
 ## Deployment
 
-Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime involved. The original's Docker, Caddy, portable-Node and NixOS deployment files are therefore not carried over; the server's `-tls` flag replaces the reverse proxy.
+Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime is needed. The original's Caddy, portable-Node and NixOS deployment files are not carried over, and the server's `-tls` flag replaces the reverse proxy; a Dockerfile and a compose file under `deploy/docker` are there for those who ran the original's containers.
 
 | Original | Here |
 |---|---|
@@ -111,7 +117,19 @@ Both programs are single, self-contained executables: copy the one you need to t
 | `dbob16/tam-server` container plus a Caddy proxy on 8443 | `tam-server -tls` on 8443, or `tam-server` on 8000 |
 | Data volume `/data` | the `data` folder next to the program, or `TAM_DATA_DIR` |
 
-On Windows the executables carry the TAM icons and version information; `go generate ./cmd/...` regenerates the resource files with [go-winres](https://github.com/tc-hib/go-winres) after changing `icon.ico`.
+**Windows.** Unzip `tam-go-<version>-windows-amd64.zip` (or `-arm64`) anywhere and double-click `tam-client.exe` or `tam-server.exe`. Each shows a TAM icon in the notification area while it runs (right-click it for Open and Shut Down) and keeps its console window; Windows asks once whether to allow the server through the firewall. To start one at logon, put a shortcut to it in the Startup folder (`shell:startup`), with `-open=false` if the browser should not open by itself. The executables carry the TAM icons and version information; `go generate ./cmd/...` regenerates the resource files with [go-winres](https://github.com/tc-hib/go-winres) after changing `icon.ico`. The `windows-arm64` build has no icon resources.
+
+**Linux.** Extract `tam-go-<version>-linux-amd64.tar.gz` (or `-arm64`) and run the programs by hand (`./tam-client` opens the browser; Ctrl+C, SIGTERM or the Shut Down button stops either), or install them as services: `sudo ./install.sh server`, `client` or `all` in the extracted folder copies the programs to `/usr/local/bin`, creates a `tam` system user with the data folders `/var/lib/tam-server` and `/var/lib/tam-client`, puts the icons and an application-menu entry for the client under `/usr/local/share`, and installs, enables and starts the units `tam-server.service` (`-addr :8000`, for the whole network) and `tam-client.service` (`-addr :3080 -open=false`), the files in `deploy/linux`. The units run as `tam` with `ProtectSystem=strict`, so only the data folder is writable; `journalctl -u tam-server` has the log, and the program's own log file is in the data folder. The server's admin page at `http://<host>:8000/admin` asks you to set a password on the first visit unless `TAM_PWD` is set in the unit (a commented line is there for it). On a laptop used by one person the client is better run by hand or from the menu entry, which keeps its data in `~/.local/share/tam-client`, than as a service; the script says so, and `sudo systemctl disable --now tam-client` turns the service off. The comment at the top of `install.sh` lists the commands that undo the installation. Without systemd, run the programs by hand.
+
+**macOS.** Extract `tam-go-<version>-darwin-arm64.tar.gz` (Apple silicon) or `-darwin-amd64` (Intel). The programs are not signed, so clear the quarantine flag once (`xattr -dr com.apple.quarantine tam-client tam-server`) and make sure they are executable (`chmod +x`), then run them by hand, or start them at login with the launchd agents `com.ticket-auction-manager.tam-server.plist` and `com.ticket-auction-manager.tam-client.plist` from `deploy/macos` (`INSTALL.md` in the archive has the `launchctl bootstrap` and `bootout` commands). The agents keep the data under `~/Library/Application Support/tam-server` and `~/Library/Application Support/tam-client` and restart a program after a crash. There is no notification-area icon on macOS.
+
+**Docker.** `deploy/docker/Dockerfile` builds either program from source (`--build-arg PROGRAM=tam-client` for the client) into a small Alpine image with the data in `/data`, and `deploy/docker/compose.yml` runs the server on port 8000 with `./data` mounted, like the original's compose file: `cd deploy/docker && TAM_PWD=secret docker compose up -d --build`. The client is under the `client` profile (`docker compose --profile client up -d --build`: port 3080, `./client-data`); pair it with host `tam-server` and port 8000 inside the compose network. Announcements on the local network do not leave a bridged container, so the compose file starts the server with `-announce=false` and the laptops type the address; `network_mode: host` brings the announcement back.
+
+## Switching from the original
+
+The Go programs read the original's data as it is: `tam-remote.db` for the server, `tam-local.db` and `settings.json` for the client, with the same tables and views. Point `TAM_DATA_DIR` at the old data folder (or the folder behind the original's Docker volume, the `/data` of its containers), or copy those files into the `data` folder next to the program, and start it. The schema additions the Go programs need (the server's `auth_keys.last_seen` column, the client's outbox tables) are applied on the first start; they are additions only, so the original can still open the folder afterwards. `internal/db/compat_test.go` proves both original schemas open and migrate. Existing access keys keep working, and the original's client can keep talking to the Go server (see Compatibility with the original).
+
+With the original's compose file the server was `dbob16/tam-server` on port 8000 with a `/data` volume, and the client `dbob16/tam-client` on port 3000, with a Caddy proxy on 8443 for HTTPS. `deploy/docker/compose.yml` keeps the server on `8000:8000` with `./data:/data`: move the contents of the old volume into `./data`, or name the old volume in its place, and `docker compose up -d`. The client moves from port 3000 to 3080 (`3080:3080`). The Caddy proxy is gone: `tam-server -tls` serves HTTPS itself on 8443, with a self-signed certificate created in the data folder on the first start or with your own PEM files through `-cert` and `-key`; it is the same flag on Windows, Linux and macOS, with no container involved.
 
 ## API
 

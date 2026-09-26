@@ -1,0 +1,46 @@
+# tam-server as a system service: the shared database for the laptops of
+# an event, on port 8000 for the whole network, with its data in
+# /var/lib/tam-server. install.sh next to this file installs it.
+#
+# The server password is set on the admin page (http://<this machine>:8000/admin)
+# on the first visit, or here: uncomment the TAM_PWD line, then run
+# `systemctl daemon-reload` and `systemctl restart tam-server`. To keep the
+# data elsewhere (for example the data folder of the original), change
+# TAM_DATA_DIR and ReadWritePaths together.
+
+[Unit]
+Description=Ticket Auction Manager server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=tam
+Group=tam
+Environment=TAM_DATA_DIR=/var/lib/tam-server
+#Environment=TAM_PWD=change-me
+ExecStart=/usr/local/bin/tam-server -addr :8000 -tray=false
+Restart=on-failure
+RestartSec=3
+# SIGTERM stops the program the same way Ctrl+C does.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# The program needs its data directory and nothing else: the rest of the
+# system is read-only or hidden from it.
+StateDirectory=tam-server
+ReadWritePaths=/var/lib/tam-server
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

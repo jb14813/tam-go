@@ -42,10 +42,13 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Cross-compile check (Windows, with the tray icon)
+      - name: Cross-compile check (every release target)
         run: |
-          GOOS=windows GOARCH=amd64 go vet ./...
-          GOOS=windows GOARCH=amd64 go build ./...
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            echo "== $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go vet ./...
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
+          done
 
   compat:
     name: Compatibility with the original tam

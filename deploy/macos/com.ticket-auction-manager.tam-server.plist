@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  tam-server as a launchd agent: started at login, restarted after a crash,
+  with its data (and its log, tam-server.log) in
+  ~/Library/Application Support/tam-server. launchd expands no ~ or $HOME in
+  a plist, so the program is started through /bin/sh, which does. The
+  commands to install it are in README.md next to this file (INSTALL.md in
+  the release archive).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.ticket-auction-manager.tam-server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>TAM_DATA_DIR="$HOME/Library/Application Support/tam-server" exec /usr/local/bin/tam-server -addr :8000 -tray=false</string>
+	</array>
+	<!-- The server password, instead of setting it on the admin page:
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>TAM_PWD</key>
+		<string>change-me</string>
+	</dict>
+	-->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+</dict>
+</plist>

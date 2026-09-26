@@ -1,0 +1,39 @@
+name: release
+
+# A pushed tag v* builds the archives for every system with build.sh and
+# attaches them to a GitHub release of that tag.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the web app and the archives for every system
+        run: VERSION="$GITHUB_REF_NAME" ./build.sh release
+
+      - name: Create the GitHub release with the archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" build/tam-go-*.zip build/tam-go-*.tar.gz --generate-notes
