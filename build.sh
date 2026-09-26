@@ -44,8 +44,16 @@ case "$version" in
     pkg_prerelease="$(printf '%s' "$version" | tr -c 'A-Za-z0-9.' '.')"
     ;;
 esac
-# nfpm (https://nfpm.goreleaser.com) writes the .deb and .rpm files; this
-# is the version build.sh installs when none is on the PATH.
+# The Windows version resource wants four numbers: 1.0.0 becomes 1.0.0.0.
+winver="$pkg_version"
+while [ "$(printf '%s' "$winver" | tr -cd . | wc -c)" -lt 3 ]; do
+  winver="$winver.0"
+done
+# nfpm (https://nfpm.goreleaser.com) writes the .deb and .rpm files, and
+# go-winres (https://github.com/tc-hib/go-winres) the Windows icon and
+# version resources; these are the versions build.sh installs when none is
+# on the PATH.
+winres_version=v0.3.3
 nfpm_version=v2.47.0
 goos="${GOOS:-$(go env GOOS)}"
 ext=""
@@ -104,27 +112,51 @@ on_windows_shell() {
   return 1
 }
 
-# nfpm_cmd prints the nfpm command, installing it once into Go's bin folder
-# when it is not on the PATH (a fresh machine, the release build on GitHub).
-nfpm_cmd() {
-  local gobin
-  if command -v nfpm >/dev/null 2>&1; then
-    echo nfpm
+# go_tool NAME MODULE@VERSION prints the command for a Go tool, installing it
+# once into Go's bin folder when it is not on the PATH (a fresh machine, the
+# release build on GitHub).
+go_tool() {
+  local name=$1 module=$2 gobin
+  if command -v "$name" >/dev/null 2>&1; then
+    echo "$name"
     return 0
   fi
   gobin="$(go env GOPATH)/bin"
   if command -v cygpath >/dev/null 2>&1; then
     gobin="$(cygpath -u "$gobin")"
   fi
-  if [ ! -x "$gobin/nfpm" ] && [ ! -x "$gobin/nfpm.exe" ]; then
-    echo "installing nfpm $nfpm_version with go install" >&2
-    go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@$nfpm_version" >&2
+  if [ ! -x "$gobin/$name" ] && [ ! -x "$gobin/$name.exe" ]; then
+    echo "installing $module with go install" >&2
+    go install "$module" >&2
   fi
-  if [ -x "$gobin/nfpm.exe" ]; then
-    echo "$gobin/nfpm.exe"
+  if [ -x "$gobin/$name.exe" ]; then
+    echo "$gobin/$name.exe"
   else
-    echo "$gobin/nfpm"
+    echo "$gobin/$name"
   fi
+}
+
+nfpm_cmd() { go_tool nfpm "github.com/goreleaser/nfpm/v2/cmd/nfpm@$nfpm_version"; }
+
+# stamp_winres writes the Windows resources of both programs with the
+# release version (the committed ones say 0.0.1); unstamp_winres puts the
+# committed files back afterwards so the checkout stays clean.
+stamp_winres() {
+  local winres p
+  winres="$(go_tool go-winres "github.com/tc-hib/go-winres@$winres_version")"
+  for p in tam-server tam-client; do
+    "$winres" make --in "cmd/$p/winres/winres.json" --arch amd64,arm64 --out "cmd/$p/rsrc" \
+      --product-version "$version" --file-version "$winver"
+  done
+}
+unstamp_winres() {
+  local f
+  command -v git >/dev/null 2>&1 || return 0
+  for f in cmd/tam-server/rsrc_windows_*.syso cmd/tam-client/rsrc_windows_*.syso; do
+    if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+      git checkout -- "$f"
+    fi
+  done
 }
 
 # package_distro ARCH PROGRAM: a .deb and an .rpm of PROGRAM for linux/ARCH
@@ -228,6 +260,8 @@ build_release() {
   echo "version $version"
   build_web
   rm -rf build/tam-server-* build/tam-client-* build/pkg build/*.deb build/*.rpm
+  stamp_winres
+  trap unstamp_winres EXIT
   for t in $release_targets; do
     os="${t%/*}"
     arch="${t#*/}"

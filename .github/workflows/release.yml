@@ -1,11 +1,13 @@
 name: release
 
-# A pushed tag v* builds the archives for every system with build.sh and
-# attaches them to a GitHub release of that tag.
+# A pushed version tag (1.2.3, v1.2.3, 1.2.3-rc1) builds every package with
+# build.sh and attaches them to a GitHub release of that tag; a tag with a
+# hyphen is marked as a pre-release.
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]*"
+      - "[0-9]*"
 
 permissions:
   contents: write
@@ -36,4 +38,10 @@ jobs:
       - name: Create the GitHub release with the archives
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" build/tam-server-*.exe build/tam-client-*.exe build/tam-server-*.zip build/tam-server-*.tar.gz build/tam-client-*.zip build/tam-client-*.tar.gz build/*.deb build/*.rpm --generate-notes
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" $pre --generate-notes \
+            build/tam-server-*.exe build/tam-client-*.exe \
+            build/tam-server-*.zip build/tam-server-*.tar.gz build/tam-client-*.zip build/tam-client-*.tar.gz \
+            build/*.deb build/*.rpm

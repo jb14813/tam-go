@@ -1,7 +1,7 @@
 // Command tam-server is the shared Ticket Auction Manager database that
 // several tam-client installations talk to in remote mode.
 //
-//go:generate go-winres simply --icon icon.ico --manifest cli --arch amd64 --product-name "Ticket Auction Manager" --file-description "Ticket Auction Manager server" --original-filename tam-server.exe --file-version 0.0.1 --product-version 0.0.1 --copyright "Copyright (c) 2026 Dilan Gilluly. MIT License." --out rsrc
+//go:generate go-winres make --in winres/winres.json --arch amd64,arm64 --out rsrc
 package main
 
 import (
