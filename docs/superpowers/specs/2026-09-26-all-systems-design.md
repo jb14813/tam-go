@@ -44,7 +44,10 @@ server reports it on `GET /api` and the admin page.
   and `tam-client-...`, `.zip` on Windows, `.tar.gz` elsewhere) containing that
   program, README.md, LICENSE.md and its deploy files for that system.
   On Windows the bare program is published next to its zip, so one
-  download that is double-clicked runs without unpacking.
+  download that is double-clicked runs without unpacking. On Linux a
+  .deb and an .rpm of each program (nfpm, from the same units, program
+  in /usr/bin, the tam user and the service set up by the package scripts)
+  are published as well.
 - CI: cross-compile check for all six targets on every push; a `release`
   workflow on tags `v*` builds the archives and attaches them to the
   GitHub release.

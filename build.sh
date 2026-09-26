@@ -10,7 +10,8 @@
 #                         and target in build/: tam-server-<version>-<os>-
 #                         <arch>.zip and tam-client-<version>-<os>-<arch>.zip
 #                         for windows (plus the bare .exe under the same
-#                         name), .tar.gz for the others
+#                         name), .tar.gz for the others, and for linux a
+#                         .deb and an .rpm of each program as well
 #
 # Cross-compile one target by setting GOOS and GOARCH, for example:
 #   GOOS=linux GOARCH=amd64 ./build.sh all
@@ -25,6 +26,27 @@ cd "$(dirname "$0")"
 target="${1:-}"
 version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.1)}"
 ldflags="-s -w -X ticket-auction-manager/tam-go/internal/version.Version=${version}"
+# The Linux packages need a version deb and rpm accept: a tag v1.2.3 gives
+# 1.2.3, v1.2.3-rc1 gives 1.2.3 with the prerelease rc1, and anything else
+# (a commit from git describe) gives 0.0.0 with the whole string, letters,
+# digits and dots only, as the prerelease.
+case "$version" in
+  v[0-9]* | [0-9]*)
+    pkg_version="${version#v}"
+    pkg_prerelease="${pkg_version#*-}"
+    if [ "$pkg_prerelease" = "$pkg_version" ]; then
+      pkg_prerelease=""
+    fi
+    pkg_version="${pkg_version%%-*}"
+    ;;
+  *)
+    pkg_version="0.0.0"
+    pkg_prerelease="$(printf '%s' "$version" | tr -c 'A-Za-z0-9.' '.')"
+    ;;
+esac
+# nfpm (https://nfpm.goreleaser.com) writes the .deb and .rpm files; this
+# is the version build.sh installs when none is on the PATH.
+nfpm_version=v2.47.0
 goos="${GOOS:-$(go env GOOS)}"
 ext=""
 if [ "$goos" = "windows" ]; then
@@ -80,6 +102,54 @@ on_windows_shell() {
     MINGW* | MSYS* | CYGWIN*) return 0 ;;
   esac
   return 1
+}
+
+# nfpm_cmd prints the nfpm command, installing it once into Go's bin folder
+# when it is not on the PATH (a fresh machine, the release build on GitHub).
+nfpm_cmd() {
+  local gobin
+  if command -v nfpm >/dev/null 2>&1; then
+    echo nfpm
+    return 0
+  fi
+  gobin="$(go env GOPATH)/bin"
+  if command -v cygpath >/dev/null 2>&1; then
+    gobin="$(cygpath -u "$gobin")"
+  fi
+  if [ ! -x "$gobin/nfpm" ] && [ ! -x "$gobin/nfpm.exe" ]; then
+    echo "installing nfpm $nfpm_version with go install" >&2
+    go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@$nfpm_version" >&2
+  fi
+  if [ -x "$gobin/nfpm.exe" ]; then
+    echo "$gobin/nfpm.exe"
+  else
+    echo "$gobin/nfpm"
+  fi
+}
+
+# package_distro ARCH PROGRAM: a .deb and an .rpm of PROGRAM for linux/ARCH
+# in build/, from deploy/linux/nfpm. A distribution package puts the program
+# in /usr/bin, so its unit and desktop entry are the archive's with that path,
+# and the package scripts get the program's name.
+package_distro() {
+  local arch=$1 program=$2 f fmt nfpm dir
+  dir="build/pkg/$program"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  sed 's#/usr/local/bin/#/usr/bin/#g' "deploy/linux/$program.service" > "$dir/$program.service"
+  if [ "$program" = tam-client ]; then
+    sed 's#/usr/local/bin/#/usr/bin/#g' deploy/linux/tam-client.desktop > "$dir/tam-client.desktop"
+  fi
+  for f in preinstall postinstall preremove postremove; do
+    sed "s#@PROGRAM@#$program#g" "deploy/linux/nfpm/$f.sh" > "$dir/$f.sh"
+  done
+  sed -e "s#@ARCH@#$arch#g" -e "s#@VERSION@#$pkg_version#g" -e "s#@PRERELEASE@#$pkg_prerelease#g" \
+    "deploy/linux/nfpm/$program.yaml" > "$dir/nfpm.yaml"
+  nfpm="$(nfpm_cmd)"
+  for fmt in deb rpm; do
+    "$nfpm" package -f "$dir/nfpm.yaml" -p "$fmt" -t build/ | sed 's#^.*created package: #wrote #'
+  done
+  rm -rf "$dir"
 }
 
 # package_program OS ARCH PROGRAM: one archive in build/ with a single
@@ -157,7 +227,7 @@ build_release() {
   local t os arch out ext
   echo "version $version"
   build_web
-  rm -rf build/tam-server-* build/tam-client-*
+  rm -rf build/tam-server-* build/tam-client-* build/pkg build/*.deb build/*.rpm
   for t in $release_targets; do
     os="${t%/*}"
     arch="${t#*/}"
@@ -173,8 +243,12 @@ build_release() {
     GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/tam-client$ext" ./cmd/tam-client/
     package_program "$os" "$arch" tam-server
     package_program "$os" "$arch" tam-client
+    if [ "$os" = linux ]; then
+      package_distro "$arch" tam-server
+      package_distro "$arch" tam-client
+    fi
   done
-  ls -la build/tam-server-* build/tam-client-*
+  ls -la build/tam-server-* build/tam-client-* build/*.deb build/*.rpm
 }
 
 case "$target" in
