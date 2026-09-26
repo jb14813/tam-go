@@ -647,7 +647,7 @@ func row(cells ...string) string {
 func TestStatusListsLaptops(t *testing.T) {
 	s := newSite(t, "secret")
 	s.login("secret")
-	base := time.Now()
+	base := time.Now().Truncate(time.Second) // stored stamps have whole seconds
 	s.h.ss.now = func() time.Time { return base }
 	at := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04") }
 	const dash = "\u2013"
