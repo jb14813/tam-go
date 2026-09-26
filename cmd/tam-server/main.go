@@ -8,6 +8,7 @@ import (
 	"context"
 	_ "embed"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -29,6 +30,12 @@ import (
 
 //go:embed icon.ico
 var iconICO []byte
+
+// banner is Dilan's start-up art; it ends with "Now hosting ... at:" and
+// the address follows on the next line.
+//
+//go:embed asciiart.txt
+var banner string
 
 // browseAddr turns a listen address into one a browser on this machine can
 // open: ":8000" listens everywhere, so it is reachable as localhost:8000.
@@ -153,6 +160,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Print(banner)
+	fmt.Printf("%s://%s/\n", scheme, browseAddr(*addr))
 	log.Printf("tam-server listening on %s://%s (data in %s)", scheme, *addr, dataDir)
 	if !password.IsSet() {
 		log.Printf("no password set: open %s://%s/admin to set one", scheme, browseAddr(*addr))

@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -31,6 +32,12 @@ var distFS embed.FS
 
 //go:embed icon.ico
 var iconICO []byte
+
+// banner is Dilan's start-up art; it ends with "Now hosting ... at:" and
+// the address follows on the next line.
+//
+//go:embed asciiart.txt
+var banner string
 
 func main() {
 	addr := flag.String("addr", "localhost:3080", "address to listen on")
@@ -100,6 +107,8 @@ func main() {
 		log.Fatal(err)
 	}
 	url := "http://" + browserHost(ln.Addr().(*net.TCPAddr)) + "/"
+	fmt.Print(banner)
+	fmt.Println(url)
 	log.Printf("tam-client listening on %s (data in %s)", url, dataDir)
 	if *open {
 		go func() {
