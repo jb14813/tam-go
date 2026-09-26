@@ -6,9 +6,10 @@
 #   ./build.sh all        both
 #   ./build.sh release    the web app once, then both programs for windows,
 #                         linux and darwin on amd64 and arm64 into
-#                         build/<os>-<arch>/, and one archive per target in
-#                         build/: tam-go-<version>-<os>-<arch>.zip for
-#                         windows, .tar.gz for the others
+#                         build/<os>-<arch>/, and one archive per program
+#                         and target in build/: tam-server-<version>-<os>-
+#                         <arch>.zip and tam-client-<version>-<os>-<arch>.zip
+#                         for windows, .tar.gz for the others
 #
 # Cross-compile one target by setting GOOS and GOARCH, for example:
 #   GOOS=linux GOARCH=amd64 ./build.sh all
@@ -80,34 +81,38 @@ on_windows_shell() {
   return 1
 }
 
-# package_target OS ARCH: one archive in build/ with a single top-level
-# folder holding both programs, README.md, LICENSE.md and the deploy files
-# for that system.
-package_target() {
-  local os=$1 arch=$2 ext="" name stage
+# package_program OS ARCH PROGRAM: one archive in build/ with a single
+# top-level folder holding that program, README.md, LICENSE.md and its deploy
+# files for that system: on Linux its unit, install.sh and icon (and the
+# application-menu entry for the client), on macOS its launchd file and the
+# notes as INSTALL.md.
+package_program() {
+  local os=$1 arch=$2 program=$3 ext="" name stage
   if [ "$os" = "windows" ]; then
     ext=".exe"
   fi
-  name="tam-go-${version}-${os}-${arch}"
+  name="${program}-${version}-${os}-${arch}"
   stage="build/$name"
   rm -rf "$stage"
   mkdir -p "$stage"
-  cp "build/$os-$arch/tam-server$ext" "build/$os-$arch/tam-client$ext" README.md LICENSE.md "$stage/"
+  cp "build/$os-$arch/$program$ext" README.md LICENSE.md "$stage/"
   case "$os" in
     linux)
-      cp deploy/linux/tam-server.service deploy/linux/tam-client.service deploy/linux/install.sh deploy/linux/tam-client.desktop "$stage/"
-      cp cmd/tam-server/icon.svg "$stage/tam-server.svg"
-      cp cmd/tam-client/icon.svg "$stage/tam-client.svg"
+      cp "deploy/linux/$program.service" deploy/linux/install.sh "$stage/"
+      cp "cmd/$program/icon.svg" "$stage/$program.svg"
+      if [ "$program" = tam-client ]; then
+        cp deploy/linux/tam-client.desktop "$stage/"
+      fi
       ;;
     darwin)
-      cp deploy/macos/*.plist "$stage/"
+      cp "deploy/macos/com.ticket-auction-manager.$program.plist" "$stage/"
       cp deploy/macos/README.md "$stage/INSTALL.md"
       ;;
   esac
-  # The programs and scripts are executable, the rest is not, whatever the
+  # The program and the script are executable, the rest is not, whatever the
   # file system here says.
   find "$stage" -type f -exec chmod 644 {} +
-  chmod 755 "$stage/tam-server$ext" "$stage/tam-client$ext"
+  chmod 755 "$stage/$program$ext"
   if [ -f "$stage/install.sh" ]; then
     chmod 755 "$stage/install.sh"
   fi
@@ -147,7 +152,7 @@ build_release() {
   local t os arch out ext
   echo "version $version"
   build_web
-  rm -rf build/tam-go-*
+  rm -rf build/tam-server-* build/tam-client-*
   for t in $release_targets; do
     os="${t%/*}"
     arch="${t#*/}"
@@ -161,9 +166,10 @@ build_release() {
     echo "building $os/$arch"
     GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/tam-server$ext" ./cmd/tam-server/
     GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/tam-client$ext" ./cmd/tam-client/
-    package_target "$os" "$arch"
+    package_program "$os" "$arch" tam-server
+    package_program "$os" "$arch" tam-client
   done
-  ls -la build/tam-go-*
+  ls -la build/tam-server-* build/tam-client-*
 }
 
 case "$target" in

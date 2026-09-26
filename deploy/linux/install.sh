@@ -3,6 +3,7 @@
 # machine, from the programs next to this script (the release archive) or
 # from the build folder of a checkout.
 #
+#   sudo ./install.sh                  the program(s) found next to this script
 #   sudo ./install.sh server|client|all
 #
 # It copies the programs to /usr/local/bin, creates the tam system user and
@@ -22,12 +23,24 @@
 # /var/lib/tam-client and the tam user (userdel tam).
 set -euo pipefail
 
+here="$(cd "$(dirname "$0")" && pwd)"
 what="${1:-}"
+if [ -z "$what" ]; then
+  # No argument: the one-program archives put the program next to this
+  # script, so install what is here.
+  if [ -f "$here/tam-server" ] && [ -f "$here/tam-client" ]; then
+    what=all
+  elif [ -f "$here/tam-server" ]; then
+    what=server
+  elif [ -f "$here/tam-client" ]; then
+    what=client
+  fi
+fi
 case "$what" in
   server) programs=(tam-server) ;;
   client) programs=(tam-client) ;;
   all) programs=(tam-server tam-client) ;;
-  *) echo "usage: sudo $0 server|client|all" >&2; exit 1 ;;
+  *) echo "usage: sudo $0 [server|client|all]  (no argument: the program found next to the script)" >&2; exit 1 ;;
 esac
 if [ "$(id -u)" -ne 0 ]; then
   echo "$0: run it as root: sudo $0 $what" >&2
@@ -38,7 +51,6 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-here="$(cd "$(dirname "$0")" && pwd)"
 case "$(uname -m)" in
   x86_64) goarch=amd64 ;;
   aarch64 | arm64) goarch=arm64 ;;
