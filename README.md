@@ -1,6 +1,6 @@
 ## Merging Notice
 
-One of my lifelong friends used AI and the original version of [Ticket Auction Manager](/ticket-auction-manager/tam) as a reference to put a fully functioning version of this together, including features I had only dreamed of and were forever on my "It'd be nice" list.
+One of my lifelong friends used AI and the original version of [Ticket Auction Manager](https://github.com/ticket-auction-manager/tam) as a reference to put a fully functioning version of this together, including features I had only dreamed of and were forever on my "It'd be nice" list.
 
 Now those items on that list are a reality. I just tested a fully functioning version of it.
 
