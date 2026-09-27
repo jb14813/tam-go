@@ -25,6 +25,25 @@
 		}
 	};
 
+	// The keys of the original's CALL/TEXT button, on the Pref select: C sets
+	// CALL, T sets TEXT, Space and Enter switch between them. The select's own
+	// handling of these keys is held back (its type-ahead kept "t" then "c"
+	// on TEXT, and Space opened the list); Tab, the arrow keys, the mouse and
+	// the Alt shortcuts work as usual.
+	function prefKey(e, item) {
+		if (e.altKey || e.ctrlKey || e.metaKey) return;
+		let pref;
+		if (e.key === 'c' || e.key === 'C') pref = 'CALL';
+		else if (e.key === 't' || e.key === 'T') pref = 'TEXT';
+		else if (e.key === ' ' || e.key === 'Enter') pref = item.pref === 'CALL' ? 'TEXT' : 'CALL';
+		else return;
+		e.preventDefault();
+		if (item.pref !== pref) {
+			item.pref = pref;
+			item.changed = true;
+		}
+	}
+
 	let pager = $state({ idFrom: 0, idTo: 0 });
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
@@ -234,6 +253,7 @@
 					><select
 						class="{iS.normal} w-full"
 						id="{idx}_fourth"
+						onkeydown={(e) => prefKey(e, item)}
 						onchange={() => (item.changed = true)}
 						bind:value={item.pref}
 					>
