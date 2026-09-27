@@ -238,6 +238,17 @@ func (s *Syncer) Enqueue(method, path string, body []byte) error {
 	return nil
 }
 
+// SaveQueued writes a save to the laptop's copy and queues its request
+// for the server in one transaction (see store.SaveQueued), then wakes the
+// worker.
+func (s *Syncer) SaveQueued(method, path string, body []byte, write func(*store.Store) error) error {
+	if _, err := s.st.SaveQueued(method, path, body, write); err != nil {
+		return err
+	}
+	s.wake()
+	return nil
+}
+
 // Kick asks the worker to look at the server now.
 func (s *Syncer) Kick() {
 	s.mu.Lock()
