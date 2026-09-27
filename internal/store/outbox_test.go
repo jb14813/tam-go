@@ -106,10 +106,17 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 	if n, err := s.DiscardFailed(); err != nil || n != 1 {
 		t.Fatalf("DiscardFailed = %d, %v", n, err)
 	}
-	if n, err := s.ClearOutbox(); err != nil || n != 1 {
-		t.Fatalf("ClearOutbox = %d, %v", n, err)
+	// Setting the queue aside (pairing with another server, unpairing)
+	// moves what waits to the failed list, with its id and the reason.
+	waiting, _ := s.NextOutbox()
+	if n, err := s.FailAllOutbox("set aside"); err != nil || n != 1 {
+		t.Fatalf("FailAllOutbox = %d, %v", n, err)
 	}
-	if p, f := counts(t, s); p != 0 || f != 0 {
-		t.Fatalf("counts after clear = %d, %d", p, f)
+	if p, f := counts(t, s); p != 0 || f != 1 {
+		t.Fatalf("counts after setting the queue aside = %d, %d; want 0, 1", p, f)
+	}
+	setAside, _ := s.ListFailed()
+	if len(setAside) != 1 || setAside[0].ID != waiting.ID || setAside[0].LastError != "set aside" {
+		t.Fatalf("failed list = %+v, want the request that waited, with the reason", setAside)
 	}
 }
