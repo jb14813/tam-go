@@ -9,9 +9,11 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/presence"
 	"ticket-auction-manager/tam-go/internal/store"
@@ -58,19 +60,38 @@ type Info struct {
 const connectedWithin = 15 * time.Second
 
 type handler struct {
-	st   *store.Store
-	pw   *Password
-	info Info
-	ss   *sessions
-	mux  *http.ServeMux
+	st      *store.Store
+	pw      *Password
+	info    Info
+	ss      *sessions
+	guesses *guard.Limiter
+	mux     *http.ServeMux
+}
+
+// Option configures NewHandler.
+type Option func(*handler)
+
+// WithGuesses sets the limit on wrong passwords, per address, that the
+// login and the password form count against. Give the API the same one
+// (server.WithGuesses), so guesses cannot be split between the two; without
+// the option the pages keep a limit of their own.
+func WithGuesses(l *guard.Limiter) Option {
+	return func(h *handler) {
+		if l != nil {
+			h.guesses = l
+		}
+	}
 }
 
 // NewHandler returns the admin pages, served under /admin. GET /admin/ is
 // the login form, or the one-time setup form while no password is set.
 // Every other page needs a session; every POST needs the session's form
 // token. Unknown paths under /admin answer an HTML 404.
-func NewHandler(st *store.Store, pw *Password, info Info) http.Handler {
-	h := &handler{st: st, pw: pw, info: info, ss: newSessions(), mux: http.NewServeMux()}
+func NewHandler(st *store.Store, pw *Password, info Info, opts ...Option) http.Handler {
+	h := &handler{st: st, pw: pw, info: info, ss: newSessions(), guesses: guard.New(), mux: http.NewServeMux()}
+	for _, opt := range opts {
+		opt(h)
+	}
 	h.mux.HandleFunc("GET /admin", h.home)
 	h.mux.HandleFunc("GET /admin/{$}", h.home)
 	h.mux.HandleFunc("POST /admin/login", h.login)
@@ -256,6 +277,15 @@ func (h *handler) internal(w http.ResponseWriter, r *http.Request, err error) {
 	h.errorPage(w, r, http.StatusInternalServerError)
 }
 
+// tooMany answers 429 with the page again and how long the visitor's
+// address has to wait before its next password.
+func (h *handler) tooMany(w http.ResponseWriter, page string, v view, wait time.Duration) {
+	secs := guard.Seconds(wait)
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	v.Error = fmt.Sprintf("Too many wrong passwords. Wait %d seconds and try again.", secs)
+	h.render(w, http.StatusTooManyRequests, page, v)
+}
+
 // --- forms and sessions ---
 
 // parseForm parses a URL-encoded or multipart form and answers the error
@@ -361,19 +391,16 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	addr := remoteIP(r)
-	if !h.ss.loginAllowed(addr) {
-		w.Header().Set("Retry-After", fmt.Sprint(int(failureWait.Seconds())))
-		h.render(w, http.StatusTooManyRequests, "login", view{CSRF: s.csrf, Error: fmt.Sprintf("Too many wrong passwords. Wait %d seconds and try again.", int(failureWait.Seconds()))})
+	addr := httpx.RemoteIP(r)
+	right, wait := h.guesses.Check(addr, "admin", func() bool { return h.pw.Check(r.PostFormValue("password")) })
+	switch {
+	case wait > 0:
+		h.tooMany(w, "login", view{CSRF: s.csrf}, wait)
 		return
-	}
-	if !h.pw.Check(r.PostFormValue("password")) {
-		h.ss.noteFailure(addr)
-		log.Printf("admin: wrong password from %s", addr)
+	case !right:
 		h.render(w, http.StatusUnauthorized, "login", view{CSRF: s.csrf, Error: "Wrong password."})
 		return
 	}
-	h.ss.noteSuccess(addr)
 	h.startSession(w, r, s)
 	log.Printf("admin: login from %s", addr)
 	http.Redirect(w, r, "/admin/status", http.StatusSeeOther)
@@ -402,7 +429,7 @@ func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusInternalServerError, "setup", view{CSRF: s.csrf, Error: "Could not save the password; see the server log."})
 		return
 	}
-	addr := remoteIP(r)
+	addr := httpx.RemoteIP(r)
 	log.Printf("admin: password set from %s", addr)
 	n := h.startSession(w, r, s)
 	h.ss.setFlash(n.id, "Password set. Clients can pair with this server now.")
@@ -717,7 +744,15 @@ func (h *handler) changePassword(w http.ResponseWriter, r *http.Request, s *sess
 		h.render(w, http.StatusBadRequest, "password", v)
 	}
 	current, password, confirm := r.PostFormValue("current"), r.PostFormValue("password"), r.PostFormValue("confirm")
-	if !h.pw.Check(current) {
+	// The current password is a guess like any other: a stolen session must
+	// not get to try passwords without limit here.
+	addr := httpx.RemoteIP(r)
+	right, wait := h.guesses.Check(addr, "admin", func() bool { return h.pw.Check(current) })
+	switch {
+	case wait > 0:
+		h.tooMany(w, "password", h.view(s, "password", passwordData{FromEnv: h.pw.FromEnv()}), wait)
+		return
+	case !right:
 		fail("The current password is wrong.")
 		return
 	}
@@ -736,7 +771,7 @@ func (h *handler) changePassword(w http.ResponseWriter, r *http.Request, s *sess
 		h.render(w, http.StatusInternalServerError, "password", v)
 		return
 	}
-	log.Printf("admin: password changed from %s", remoteIP(r))
+	log.Printf("admin: password changed from %s", addr)
 	h.ss.setFlash(s.id, "Password changed.")
 	http.Redirect(w, r, "/admin/password", http.StatusSeeOther)
 }

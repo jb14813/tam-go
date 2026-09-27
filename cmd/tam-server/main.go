@@ -23,6 +23,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/presence"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
@@ -151,12 +152,15 @@ func main() {
 	st := store.New(sqldb)
 	// The API records what every client does; the admin page shows it.
 	clients := presence.New(nil)
+	// One limit on wrong passwords per address covers the admin login and
+	// the API's key routes, so guesses cannot be split between the two.
+	guesses := guard.New()
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now(), Presence: clients})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now(), Presence: clients}, admin.WithGuesses(guesses))
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
 	mux.Handle("/favicon.ico", adminPages)
-	mux.Handle("/", server.NewHandler(st, password, server.WithPresence(clients)))
+	mux.Handle("/", server.NewHandler(st, password, server.WithPresence(clients), server.WithGuesses(guesses)))
 	srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,

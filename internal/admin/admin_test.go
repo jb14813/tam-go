@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,11 +15,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/presence"
+	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
@@ -36,7 +40,7 @@ type site struct {
 	c     *http.Client
 }
 
-func newSite(t *testing.T, envPassword string) *site {
+func newSite(t *testing.T, envPassword string, opts ...Option) *site {
 	t.Helper()
 	dir := t.TempDir()
 	sqldb, err := db.Open(filepath.Join(dir, "tam-remote.db"))
@@ -58,7 +62,7 @@ func newSite(t *testing.T, envPassword string) *site {
 	// The registry reads the same clock as the pages, which tests move.
 	var hd http.Handler
 	reg := presence.New(func() time.Time { return hd.(*handler).ss.now() })
-	hd = NewHandler(st, pw, Info{Addr: ":8000", DataDir: dir, Version: "0.0.1", Started: time.Now().Add(-90 * time.Second), Presence: reg})
+	hd = NewHandler(st, pw, Info{Addr: ":8000", DataDir: dir, Version: "0.0.1", Started: time.Now().Add(-90 * time.Second), Presence: reg}, opts...)
 	ts := httptest.NewServer(hd)
 	t.Cleanup(ts.Close)
 	return &site{t: t, url: ts.URL, dir: dir, sqldb: sqldb, st: st, pw: pw, h: hd.(*handler), reg: reg, c: newBrowser(t)}
@@ -331,9 +335,118 @@ func TestFiveWrongPasswordsWaitThirtySeconds(t *testing.T) {
 	}
 
 	// Once the wait is over the right password works.
-	s.h.ss.now = func() time.Time { return time.Now().Add(31 * time.Second) }
+	s.h.guesses.Now = func() time.Time { return time.Now().Add(31 * time.Second) }
 	res, _ = s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}})
 	wantRedirect(t, res, "/admin/status")
+}
+
+// TestWrongPasswordsSentAtOnceAreCountedFirst: wrong passwords sent all at
+// once must not all be checked before the first of them is counted. With a
+// password from server.json every check takes a while (bcrypt), long enough
+// for the others to arrive; still five are checked and the rest wait.
+func TestWrongPasswordsSentAtOnceAreCountedFirst(t *testing.T) {
+	s := newSite(t, "")
+	if err := s.pw.Set("secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, page := s.get("/admin/")
+	token := s.token(page)
+	const n = 40
+	var (
+		mu    sync.Mutex
+		count = map[int]int{}
+		errs  []error
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+	)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := s.c.PostForm(s.url+"/admin/login", url.Values{"csrf": {token}, "password": {fmt.Sprintf("wrong-%d", i)}})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+			count[res.StatusCode]++
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if len(errs) > 0 {
+		t.Fatalf("%d of %d logins failed, the first: %v", len(errs), n, errs[0])
+	}
+	if count[401] != 5 || count[429] != n-5 {
+		t.Fatalf("%d wrong passwords sent at once were answered %v; want 5 checked (401) and %d refused (429)", n, count, n-5)
+	}
+}
+
+// TestGuessesAreSharedWithTheAPI: TAM-PW on the API's key routes checks the
+// same password as the login, so both count against one limit, as
+// tam-server wires them: three wrong guesses through the API and two
+// through the login form use up an address's five.
+func TestGuessesAreSharedWithTheAPI(t *testing.T) {
+	guesses := guard.New()
+	s := newSite(t, "secret", WithGuesses(guesses))
+	api := httptest.NewServer(server.NewHandler(s.st, s.pw, server.WithGuesses(guesses)))
+	t.Cleanup(api.Close)
+	apiAuth := func(password string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", api.URL+"/api/auth", nil)
+		req.Header.Set("TAM-PW", password)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for i := 0; i < 3; i++ {
+		if code := apiAuth("wrong"); code != 401 {
+			t.Fatalf("wrong password %d through the API = %d", i+1, code)
+		}
+	}
+	_, page := s.get("/admin/")
+	token := s.token(page)
+	for i := 0; i < 2; i++ {
+		if res, _ := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"wrong"}}); res.StatusCode != 401 {
+			t.Fatalf("wrong password %d through the login = %d", i+1, res.StatusCode)
+		}
+	}
+	if res, _ := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}}); res.StatusCode != 429 {
+		t.Fatalf("the login after five wrong passwords in all = %d, want 429", res.StatusCode)
+	}
+	if code := apiAuth("secret"); code != 429 {
+		t.Fatalf("the API after five wrong passwords in all = %d, want 429", code)
+	}
+}
+
+// TestTheCurrentPasswordFieldIsLimited: the password form checks the current
+// password, so it counts wrong ones like the login does; a stolen session
+// cannot guess the password there without limit.
+func TestTheCurrentPasswordFieldIsLimited(t *testing.T) {
+	s := newSite(t, "secret")
+	s.login("secret")
+	_, token := s.page("/admin/password")
+	change := url.Values{"csrf": {token}, "current": {"nope"}, "password": {"new one"}, "confirm": {"new one"}}
+	for i := 0; i < 5; i++ {
+		if res, body := s.post("/admin/password", change); res.StatusCode != 400 || !strings.Contains(body, "The current password is wrong.") {
+			t.Fatalf("wrong current password %d = %d\n%s", i+1, res.StatusCode, body)
+		}
+	}
+	change.Set("current", "secret")
+	res, body := s.post("/admin/password", change)
+	if res.StatusCode != 429 || res.Header.Get("Retry-After") != "30" || !strings.Contains(body, "Wait 30 seconds") {
+		t.Fatalf("the right current password after five wrong ones = %d %q\n%s", res.StatusCode, res.Header.Get("Retry-After"), body)
+	}
+	if !s.pw.Check("secret") {
+		t.Fatal("a refused change must keep the password")
+	}
 }
 
 func TestKeysPage(t *testing.T) {
