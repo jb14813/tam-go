@@ -59,7 +59,7 @@ type options struct {
 	seed                                      uint64
 	server, password, kill, restart           string
 	wifi                                      float64
-	wifiDrop, late, crashDown, storm          time.Duration
+	wifiDrop, late, crashDown, storm, soak    time.Duration
 	crashes                                   int
 	tls                                       bool
 }
@@ -85,6 +85,7 @@ func main() {
 	flag.DurationVar(&o.crashDown, "crash-down", 3*time.Second, "how long a crashed laptop stays off")
 	flag.DurationVar(&o.storm, "storm", 5*time.Second, "how long every laptop saves the same few tickets at once; 0 to skip")
 	flag.BoolVar(&o.tls, "tls", false, "run the server over HTTPS, with the laptops pinning its certificate")
+	flag.DurationVar(&o.soak, "soak", 0, "keep the event going this long after the main run, watching the programs' memory, handles and database for growth; 0 to skip")
 	flag.StringVar(&o.server, "server", "", "use the tam-server already running at this address (http://host:port) instead of starting one; it should have no data yet")
 	flag.StringVar(&o.password, "password", os.Getenv("TAM_PWD"), "with -server: that server's password (default $TAM_PWD)")
 	flag.StringVar(&o.kill, "kill", "", "with -server: a command that kills that server, for the outage (run by cmd on Windows, sh elsewhere)")
@@ -115,7 +116,7 @@ func (o options) valid() error {
 		return errors.New("-crashes must not be negative")
 	case o.server != "" && o.tls:
 		return errors.New("with -server, give an https:// address instead of -tls")
-	case o.entry < 0 || o.outage < 0 || o.rush < 0 || o.settle <= 0 || o.wifiDrop < 0 || o.late < 0 || o.crashDown < 0 || o.storm < 0:
+	case o.entry < 0 || o.outage < 0 || o.rush < 0 || o.settle <= 0 || o.wifiDrop < 0 || o.late < 0 || o.crashDown < 0 || o.storm < 0 || o.soak < 0:
 		return errors.New("durations must not be negative, and -settle must be more than 0")
 	case o.server == "" && (o.kill != "" || o.restart != ""):
 		return errors.New("-kill and -restart go with -server")

@@ -93,13 +93,36 @@ func (t *test) checkData(when string) {
 	t.checkMirrors()
 }
 
-// checkServer downloads the server's data, as the server backup button of
+// rowsDiff is how the server's rows of one kind differ from what was saved.
+type rowsDiff struct {
+	saved, missing, differ, extra int
+	first                         []string
+}
+
+func (d rowsDiff) clean() bool { return d.missing+d.differ+d.extra == 0 }
+
+// serverDiff is how the server's data differs from what was saved.
+type serverDiff struct {
+	tickets, baskets   rowsDiff
+	prefixesSame       bool
+	prefixes, onServer int
+}
+
+func (d serverDiff) clean() bool { return d.tickets.clean() && d.baskets.clean() && d.prefixesSame }
+
+func (d serverDiff) summary() string {
+	return fmt.Sprintf("tickets %d missing, %d different, %d unexpected%s; baskets %d missing, %d different, %d unexpected%s; prefixes the same: %v",
+		d.tickets.missing, d.tickets.differ, d.tickets.extra, examples(d.tickets.first),
+		d.baskets.missing, d.baskets.differ, d.baskets.extra, examples(d.baskets.first), d.prefixesSame)
+}
+
+// diffServer downloads the server's data, as the server backup button of
 // the Settings page does, and compares every row with what was last saved.
-func (t *test) checkServer(when string) {
+func (t *test) diffServer() (serverDiff, error) {
+	var d serverDiff
 	var bf store.BackupFile
 	if _, err := t.laptops[0].call(nil, "", http.MethodGet, "/api/backuprestore/remote", nil, &bf, 0); err != nil {
-		t.record("the server's data downloads ("+when+")", false, "%v", err)
-		return
+		return d, err
 	}
 	t.ev.mu.Lock()
 	defer t.ev.mu.Unlock()
@@ -108,62 +131,73 @@ func (t *test) checkServer(when string) {
 	for _, tk := range bf.Tickets {
 		tickets[key{tk.Prefix, tk.TID}] = tk
 	}
-	missing, differ, extra := 0, 0, 0
-	var first []string
+	d.tickets.saved = len(t.ev.ticket)
 	for k, want := range t.ev.ticket {
 		got, ok := tickets[k]
 		switch {
 		case !ok:
-			missing++
-			note(&first, "%s is missing", k)
+			d.tickets.missing++
+			note(&d.tickets.first, "%s is missing", k)
 		case got != want:
-			differ++
-			note(&first, "%s is %s, laptop-%02d saved %s", k, describe(got), t.ev.tWriter[k], describe(want))
+			d.tickets.differ++
+			note(&d.tickets.first, "%s is %s, laptop-%02d saved %s", k, describe(got), t.ev.tWriter[k], describe(want))
 		}
 	}
 	for k := range tickets {
 		if _, ok := t.ev.ticket[k]; !ok {
-			extra++
-			note(&first, "%s was never saved", k)
+			d.tickets.extra++
+			note(&d.tickets.first, "%s was never saved", k)
 		}
 	}
-	t.record("the server holds every ticket as last saved ("+when+")", missing+differ+extra == 0,
-		"%d tickets: %d missing, %d different, %d unexpected%s", len(t.ev.ticket), missing, differ, extra, examples(first))
 
 	baskets := map[key]store.Basket{}
 	for _, b := range bf.Baskets {
 		baskets[key{b.Prefix, b.BID}] = b
 	}
-	missing, differ, extra, first = 0, 0, 0, nil
+	d.baskets.saved = len(t.ev.basket)
 	for k, want := range t.ev.basket {
 		got, ok := baskets[k]
 		switch {
 		case !ok:
-			missing++
-			note(&first, "basket %s is missing", k)
+			d.baskets.missing++
+			note(&d.baskets.first, "basket %s is missing", k)
 		case got != want:
-			differ++
-			note(&first, "basket %s is %+v, saved %+v", k, got, want)
+			d.baskets.differ++
+			note(&d.baskets.first, "basket %s is %+v, saved %+v", k, got, want)
 		}
 	}
 	for k := range baskets {
 		if _, ok := t.ev.basket[k]; !ok {
-			extra++
-			note(&first, "basket %s was never saved", k)
+			d.baskets.extra++
+			note(&d.baskets.first, "basket %s was never saved", k)
 		}
 	}
-	t.record("the server holds every basket and winner as saved ("+when+")", missing+differ+extra == 0,
-		"%d baskets: %d missing, %d different, %d unexpected%s", len(t.ev.basket), missing, differ, extra, examples(first))
 
 	prefixes := map[string]store.Prefix{}
 	for _, p := range bf.Prefixes {
 		prefixes[p.Prefix] = p
 	}
-	same := len(prefixes) == len(t.ev.prefixes)
+	d.prefixes, d.onServer = len(t.ev.prefixes), len(bf.Prefixes)
+	d.prefixesSame = len(prefixes) == len(t.ev.prefixes)
 	for _, p := range t.ev.prefixes {
-		same = same && prefixes[p.Prefix] == p
+		d.prefixesSame = d.prefixesSame && prefixes[p.Prefix] == p
 	}
-	t.record("the server holds every prefix ("+when+")", same, "%d saved, %d on the server", len(t.ev.prefixes), len(bf.Prefixes))
+	return d, nil
+}
+
+// checkServer turns diffServer into verdicts.
+func (t *test) checkServer(when string) {
+	d, err := t.diffServer()
+	if err != nil {
+		t.record("the server's data downloads ("+when+")", false, "%v", err)
+		return
+	}
+	tk, bk := d.tickets, d.baskets
+	t.record("the server holds every ticket as last saved ("+when+")", tk.clean(),
+		"%d tickets: %d missing, %d different, %d unexpected%s", tk.saved, tk.missing, tk.differ, tk.extra, examples(tk.first))
+	t.record("the server holds every basket and winner as saved ("+when+")", bk.clean(),
+		"%d baskets: %d missing, %d different, %d unexpected%s", bk.saved, bk.missing, bk.differ, bk.extra, examples(bk.first))
+	t.record("the server holds every prefix ("+when+")", d.prefixesSame, "%d saved, %d on the server", d.prefixes, d.onServer)
 }
 
 // checkMirrors compares every laptop's own copy with what that laptop saved
@@ -566,6 +600,7 @@ func (t *test) report(runErr error, took time.Duration) {
 		ph.rec.table(&b)
 	}
 
+	t.soakTable(&b)
 	fmt.Fprintf(&b, "\nPrograms\n")
 	if t.server != nil && t.server.external {
 		fmt.Fprintf(&b, "  tam-server %s at %s: on its own machine, which measures its own CPU and memory\n", t.version, t.server.url)

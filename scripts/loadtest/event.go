@@ -225,13 +225,17 @@ func (ev *event) ticketNow(k key) (store.Ticket, int, bool) {
 // stale counts the rows of an opened sheet that do not show what was last
 // saved, and describes the first. Rows never saved are left alone: a blank
 // row is right for them.
-func (ev *event) stale(rows []store.Ticket) (int, string) {
+func (ev *event) stale(rows []store.Ticket) (int, string) { return ev.staleFor(rows, 0) }
+
+// staleFor is stale for the rows the given laptop saved last; 0 is any.
+func (ev *event) staleFor(rows []store.Ticket, laptop int) (int, string) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	n, first := 0, ""
 	for _, r := range rows {
-		want, ok := ev.ticket[key{r.Prefix, r.TID}]
-		if !ok || r == want {
+		k := key{r.Prefix, r.TID}
+		want, ok := ev.ticket[k]
+		if !ok || r == want || laptop != 0 && ev.tWriter[k] != laptop {
 			continue
 		}
 		n++
