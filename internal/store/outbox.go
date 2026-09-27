@@ -16,23 +16,25 @@ type Outbox struct {
 	Body      []byte
 	Attempts  int
 	LastError string
+	Order     Order // the name and number it was first sent with
 }
 
-const outboxCols = `id, created_at, method, path, body, attempts, last_error`
+const outboxCols = `id, created_at, method, path, body, attempts, last_error, laptop, save_number`
 
 // SaveQueued writes a save to the laptop's own copy and appends its
 // request to the outbox in one transaction, and returns the request's id.
 // Both happen or neither: a laptop that stops in between (a flat battery)
 // never shows a save it will not send. write gets a Store whose writes go
-// into that transaction.
-func (s *Store) SaveQueued(method, path string, body []byte, write func(*Store) error) (int64, error) {
+// into that transaction. order is the save's name and number, kept for the
+// replay.
+func (s *Store) SaveQueued(method, path string, body []byte, order Order, write func(*Store) error) (int64, error) {
 	var id int64
 	err := s.tx(func(tx *sql.Tx) error {
 		if err := write(&Store{db: s.db, in: tx}); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body) VALUES (?, ?, ?, ?)`,
-			time.Now().UTC().Format(time.RFC3339Nano), method, path, body)
+		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, laptop, save_number) VALUES (?, ?, ?, ?, ?, ?)`,
+			time.Now().UTC().Format(time.RFC3339Nano), method, path, body, order.Laptop, order.Save)
 		if err != nil {
 			return err
 		}
@@ -59,7 +61,7 @@ type rowScanner interface {
 func scanOutbox(row rowScanner) (*Outbox, error) {
 	var o Outbox
 	var created string
-	if err := row.Scan(&o.ID, &created, &o.Method, &o.Path, &o.Body, &o.Attempts, &o.LastError); err != nil {
+	if err := row.Scan(&o.ID, &created, &o.Method, &o.Path, &o.Body, &o.Attempts, &o.LastError, &o.Order.Laptop, &o.Order.Save); err != nil {
 		return nil, err
 	}
 	o.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -109,8 +111,8 @@ func (s *Store) NoteOutboxAttempt(id int64, errText string) error {
 // FailOutbox moves a request the server rejected to the failed list.
 func (s *Store) FailOutbox(id int64, errText string) error {
 	return s.tx(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at)
-			SELECT id, created_at, method, path, body, attempts + 1, ?, ? FROM outbox WHERE id = ?`,
+		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, laptop, save_number)
+			SELECT id, created_at, method, path, body, attempts + 1, ?, ?, laptop, save_number FROM outbox WHERE id = ?`,
 			errText, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
@@ -124,8 +126,8 @@ func (s *Store) FailOutbox(id int64, errText string) error {
 func (s *Store) FailAllOutbox(errText string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at)
-			SELECT id, created_at, method, path, body, attempts, ?, ? FROM outbox ORDER BY id`,
+		res, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, laptop, save_number)
+			SELECT id, created_at, method, path, body, attempts, ?, ?, laptop, save_number FROM outbox ORDER BY id`,
 			errText, time.Now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return err
@@ -157,12 +159,41 @@ func (s *Store) OutboxWaiting() (bool, error) {
 }
 
 // RetryFailed moves every failed request back to the outbox, in its
-// original order, and returns how many it moved.
-func (s *Store) RetryFailed() (int, error) {
+// original order, and returns how many it moved. Each gets a new number
+// (see NextSave; host is this machine's name): it is sent again now, after
+// the laptop's newer saves, and under its old number the server would skip
+// it as stale.
+func (s *Store) RetryFailed(host string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO outbox (id, created_at, method, path, body, attempts, last_error)
-			SELECT id, created_at, method, path, body, attempts, last_error FROM outbox_failed`)
+		rows, err := tx.Query(`SELECT id FROM outbox_failed ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			o, err := nextSave(tx, host)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE outbox_failed SET laptop = ?, save_number = ? WHERE id = ?`, o.Laptop, o.Save, id); err != nil {
+				return err
+			}
+		}
+		res, err := tx.Exec(`INSERT INTO outbox (id, created_at, method, path, body, attempts, last_error, laptop, save_number)
+			SELECT id, created_at, method, path, body, attempts, last_error, laptop, save_number FROM outbox_failed`)
 		if err != nil {
 			return err
 		}

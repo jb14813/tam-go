@@ -89,7 +89,7 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 		t.Fatalf("next = %+v, want %d", next, b)
 	}
 
-	n, err := s.RetryFailed()
+	n, err := s.RetryFailed("desk")
 	if err != nil || n != 1 {
 		t.Fatalf("RetryFailed = %d, %v", n, err)
 	}

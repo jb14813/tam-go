@@ -239,10 +239,10 @@ func (s *Syncer) Enqueue(method, path string, body []byte) error {
 }
 
 // SaveQueued writes a save to the laptop's copy and queues its request
-// for the server in one transaction (see store.SaveQueued), then wakes the
-// worker.
-func (s *Syncer) SaveQueued(method, path string, body []byte, write func(*store.Store) error) error {
-	if _, err := s.st.SaveQueued(method, path, body, write); err != nil {
+// for the server in one transaction (see store.SaveQueued), under the name
+// and number it was first sent with, then wakes the worker.
+func (s *Syncer) SaveQueued(method, path string, body []byte, order store.Order, write func(*store.Store) error) error {
+	if _, err := s.st.SaveQueued(method, path, body, order, write); err != nil {
 		return err
 	}
 	s.wake()
@@ -419,7 +419,7 @@ func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
 		if len(o.Body) > 0 {
 			body = json.RawMessage(o.Body)
 		}
-		res, err := rc.Do(o.Method, o.Path, nil, body)
+		res, err := rc.Do(o.Method, o.Path, OrderHeaders(o.Order), body)
 		switch {
 		case err != nil:
 			s.noteAttempt(o.ID, err.Error())
@@ -547,6 +547,15 @@ func (s *Syncer) pull(rc *remote.Client) {
 	s.pullNeeded = false
 	s.mu.Unlock()
 	log.Printf("mirror refreshed from %s: %d prefixes, %d tickets, %d baskets", s.name(), len(bf.Prefixes), len(bf.Tickets), len(bf.Baskets))
+}
+
+// OrderHeaders are the headers that name and number a save for the server
+// (see store.InOrder); an unnumbered save has none.
+func OrderHeaders(o store.Order) map[string]string {
+	if o.Save <= 0 {
+		return nil
+	}
+	return map[string]string{"X-TAM-Laptop": o.Laptop, "X-TAM-Save": strconv.FormatInt(o.Save, 10)}
 }
 
 // without returns the backup minus the named rows.

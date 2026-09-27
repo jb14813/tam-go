@@ -25,6 +25,22 @@ var ClientTables = []string{
 		attempts INTEGER NOT NULL DEFAULT 0,
 		last_error TEXT NOT NULL DEFAULT '',
 		failed_at TEXT NOT NULL)`,
+	// save_order is the laptop's name for the server and the number of its
+	// last save (see store.NextSave): one row.
+	`CREATE TABLE IF NOT EXISTS save_order (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		laptop TEXT NOT NULL,
+		host TEXT NOT NULL,
+		last_save INTEGER NOT NULL)`,
+}
+
+// clientColumns were added to the client tables after they first shipped:
+// a queued save keeps the laptop name and number it was first sent with.
+var clientColumns = []struct{ table, column, decl string }{
+	{"outbox", "laptop", "TEXT NOT NULL DEFAULT ''"},
+	{"outbox", "save_number", "INTEGER NOT NULL DEFAULT 0"},
+	{"outbox_failed", "laptop", "TEXT NOT NULL DEFAULT ''"},
+	{"outbox_failed", "save_number", "INTEGER NOT NULL DEFAULT 0"},
 }
 
 // MigrateClient creates the client-only tables. It runs after Migrate and
@@ -33,6 +49,18 @@ func MigrateClient(sqldb *sql.DB) error {
 	for _, stmt := range ClientTables {
 		if _, err := sqldb.Exec(stmt); err != nil {
 			return fmt.Errorf("apply client schema: %w", err)
+		}
+	}
+	for _, c := range clientColumns {
+		has, err := hasColumn(sqldb, c.table, c.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := sqldb.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.column + ` ` + c.decl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
 	}
 	return nil
