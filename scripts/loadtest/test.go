@@ -674,8 +674,10 @@ func (t *test) flatOut(name string, offset int, work func(*laptop, *test, *phase
 	ph.end = time.Now()
 }
 
-// rush has every laptop save its ticket sheets again, as last saved, as fast
-// as it can for -rush: the most the server takes.
+// rush has every laptop save its ticket sheets again as fast as it can for
+// -rush, every row with a new phone number: the most the server takes.
+// The rows must change; SQLite does not write a row saved with the values
+// it already has, which would make the server look faster than it is.
 func (t *test) rush() {
 	ph := t.newPhase("Rush")
 	deals := deal(t.ev.ticketSheets, len(t.laptops), 0)
@@ -684,12 +686,16 @@ func (t *test) rush() {
 		mine := deals[l.n-1]
 		for i := 0; len(mine) > 0 && time.Now().Before(stop); i++ {
 			rows := t.ev.saved(mine[i%len(mine)])
-			if _, err := l.call(ph, "save ticket sheet", http.MethodPost, "/api/tickets", rows, nil, len(rows)); err == nil {
+			for j := range rows {
+				rows[j] = l.fix(rows[j])
+			}
+			if _, err := l.call(ph, "save a changed ticket sheet", http.MethodPost, "/api/tickets", rows, nil, len(rows)); err == nil {
 				t.ev.savedTickets(l.n, rows)
 			}
 		}
 	})
 	ph.end = time.Now()
+	ph.note = "every save changes every row of its sheet"
 }
 
 // stopAll stops the pollers, the laptops (the way their Shut Down button
