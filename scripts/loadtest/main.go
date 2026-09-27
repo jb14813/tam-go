@@ -44,10 +44,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -62,6 +64,7 @@ type options struct {
 	wifiDrop, late, crashDown, storm, soak    time.Duration
 	crashes                                   int
 	tls                                       bool
+	out                                       string
 }
 
 func main() {
@@ -86,6 +89,7 @@ func main() {
 	flag.DurationVar(&o.storm, "storm", 5*time.Second, "how long every client saves the same few tickets at once; 0 to skip")
 	flag.BoolVar(&o.tls, "tls", false, "run the server over HTTPS, with the clients pinning its certificate")
 	flag.DurationVar(&o.soak, "soak", 0, "keep the event going this long after the main run, watching the programs' memory, handles and database for growth; 0 to skip")
+	flag.StringVar(&o.out, "out", "", "also write everything the test prints to this file, a report to share")
 	flag.StringVar(&o.server, "server", "", "use the tam-server already running at this address (http://host:port) instead of starting one; it should have no data yet")
 	flag.StringVar(&o.password, "password", os.Getenv("TAM_PWD"), "with -server: that server's password (default $TAM_PWD)")
 	flag.StringVar(&o.kill, "kill", "", "with -server: a command that kills that server, for the outage (run by cmd on Windows, sh elsewhere)")
@@ -135,6 +139,16 @@ func (o options) valid() error {
 }
 
 func run(o options) int {
+	closeOut := func() {}
+	if o.out != "" {
+		var err error
+		closeOut, err = teeStdout(o.out)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "loadtest:", err)
+			return 2
+		}
+		defer closeOut()
+	}
 	work, err := os.MkdirTemp("", "tam-loadtest-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "loadtest:", err)
@@ -150,6 +164,7 @@ func run(o options) int {
 		fmt.Println("\ninterrupted; stopping the programs")
 		t.stopAll()
 		fmt.Println("data folders and logs:", work)
+		closeOut()
 		os.Exit(130)
 	}()
 
@@ -174,4 +189,35 @@ func run(o options) int {
 		return 1
 	}
 	return 0
+}
+
+// teeStdout copies everything the test prints to the file at path as well,
+// for -out. The returned function flushes and closes the file; it is safe to
+// call twice.
+func teeStdout(path string) (func(), error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	copied := make(chan struct{})
+	go func() {
+		io.Copy(io.MultiWriter(stdout, f), r)
+		close(copied)
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			os.Stdout = stdout
+			w.Close()
+			<-copied
+			f.Close()
+		})
+	}, nil
 }
