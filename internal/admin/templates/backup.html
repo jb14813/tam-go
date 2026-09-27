@@ -1,0 +1,18 @@
+{{define "title"}}Backup{{end}}
+{{define "content"}}
+<h1>Backup</h1>
+<p>This server holds {{.Data.Prefixes}} prefixes, {{.Data.Tickets}} tickets and {{.Data.Baskets}} baskets.</p>
+<h2>Download</h2>
+<p>The file is the same JSON the API and the clients' Backup/Restore page produce.</p>
+<a class="button" href="/admin/backup/download">Download tam-backup.json</a>
+<h2>Restore</h2>
+<p>Restoring writes every row of the file over this server's data. Rows the file does not mention stay as they are.</p>
+<form method="post" action="/admin/backup/restore" enctype="multipart/form-data">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label for="file">Backup file
+    <input id="file" type="file" name="file" accept="application/json,.json" required>
+  </label>
+  <label class="check"><input type="checkbox" name="confirm" value="yes"> Yes, overwrite this server's data with the file</label>
+  <button type="submit" class="danger">Restore</button>
+</form>
+{{end}}

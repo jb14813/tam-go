@@ -1,0 +1,46 @@
+{{define "title"}}Clients and keys{{end}}
+{{define "content"}}
+<h1>Clients and keys</h1>
+{{with .Data.NewKey}}
+<div class="msg">
+  <p>This is the key for <strong>{{.Description}}</strong>. Copy it now; it is not shown again.</p>
+  <p class="key">{{.AuthKey}}</p>
+</div>
+{{end}}
+{{with .Data.Confirm}}
+<div class="err">
+  <p>Delete the key for <strong>{{.Description}}</strong> (<code>{{.Short}}</code>)? That client will have to pair again.</p>
+  <form method="post" action="/admin/keys/delete">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="key" value="{{.Key}}">
+    <input type="hidden" name="confirm" value="yes">
+    <button type="submit" class="danger">Yes, delete it</button>
+    <a class="button" href="/admin/keys">Keep it</a>
+  </form>
+</div>
+{{end}}
+<h2>Create a key</h2>
+<p class="note">A client that pairs from its Settings page gets its key by itself. Create one here for a client that is set up by hand.</p>
+<form method="post" action="/admin/keys">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label for="description">Client name
+    <input id="description" type="text" name="description" maxlength="100" required>
+  </label>
+  <button type="submit">Create the key</button>
+</form>
+<h2>Keys</h2>
+{{if .Data.Keys}}
+<table>
+  <tr><th>Client</th><th>Key</th><th>Last seen</th><th></th></tr>
+  {{range .Data.Keys}}<tr>
+    <td>{{.Description}}</td>
+    <td><code>{{.Short}}</code></td>
+    <td>{{.LastSeen}}</td>
+    <td><form method="post" action="/admin/keys/delete"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="key" value="{{.Key}}"><button type="submit" class="danger small">Delete</button></form></td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No keys yet.</p>
+{{end}}
+{{end}}

@@ -1,0 +1,227 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./... 2>&1 | tee "$RUNNER_TEMP/unit-tests.txt"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Cross-compile check (Windows, with the tray icon)
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Unit tests'
+            echo '```'
+            cat "$RUNNER_TEMP/unit-tests.txt" 2>/dev/null || echo "(the tests did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the printed results with the run
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-tests
+          path: |
+            ${{ runner.temp }}/unit-tests.txt
+          if-no-files-found: ignore
+
+  compat:
+    name: Compatibility with the original tam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Original server with the Go client, then the Go server with both clients
+        run: bash scripts/compat/run.sh 2>&1 | tee "$RUNNER_TEMP/compatibility.txt"
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Compatibility with the original tam'
+            echo '```'
+            cat "$RUNNER_TEMP/compatibility.txt" 2>/dev/null || echo "(the run did not start)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the printed results with the run
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compatibility
+          path: |
+            ${{ runner.temp }}/compatibility.txt
+          if-no-files-found: ignore
+
+  load:
+    name: Race detector and load test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tests with the race detector
+        run: go test -race ./... 2>&1 | tee "$RUNNER_TEMP/race-tests.txt"
+
+      - name: Load test with the race detector (12 clients, the server killed during ticket entry)
+        run: |
+          mkdir -p "$RUNNER_TEMP/tam"
+          go build -race -o "$RUNNER_TEMP/tam/" ./cmd/tam-server ./cmd/tam-client
+          go run -race ./scripts/loadtest -bin "$RUNNER_TEMP/tam" -clients 12 -tickets 3000 -baskets 500 -entry 20s -outage 5s -rush 5s -out "$RUNNER_TEMP/load-test.txt"
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Unit tests with the race detector'
+            echo '```'
+            cat "$RUNNER_TEMP/race-tests.txt" 2>/dev/null || echo "(the tests did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '### Load test'
+            echo '```'
+            cat "$RUNNER_TEMP/load-test.txt" 2>/dev/null || echo "(the load test did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the printed results with the run
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: race-and-load-test
+          path: |
+            ${{ runner.temp }}/race-tests.txt
+            ${{ runner.temp }}/load-test.txt
+          if-no-files-found: ignore
+
+  nix:
+    name: Nix package and NixOS test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Let the NixOS test use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: Package (the web app and both programs, with the unit tests)
+        run: nix build -L 2>&1 | tee "$RUNNER_TEMP/nix-build.txt"
+
+      - name: NixOS test (a server, a client that pairs with it, and an HTTPS server)
+        run: nix flake check -L 2>&1 | tee "$RUNNER_TEMP/nixos-test.txt"
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Unit tests in the Nix build sandbox'
+            echo '```'
+            grep -E '^tam> (ok|FAIL|---|panic)' "$RUNNER_TEMP/nix-build.txt" | sed 's/^tam> //' || echo "(no test output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '### NixOS test'
+            echo '```'
+            grep -E 'subtest: |finished: subtest|test script finished|!!! ' "$RUNNER_TEMP/nixos-test.txt" | sed 's/^vm-test-run-tam> //' || echo "(no NixOS test output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the printed results with the run
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nix-and-nixos-test
+          path: |
+            ${{ runner.temp }}/nix-build.txt
+            ${{ runner.temp }}/nixos-test.txt
+          if-no-files-found: ignore

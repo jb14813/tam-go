@@ -1,60 +1,239 @@
+// Command tam-server is the shared Ticket Auction Manager database that
+// several tam-client installations talk to in remote mode.
+//
+//go:generate go-winres simply --icon icon.ico --manifest cli --arch amd64 --product-name "Ticket Auction Manager" --file-description "Ticket Auction Manager server" --original-filename tam-server.exe --file-version 0.0.1 --product-version 0.0.1 --copyright "Copyright (c) 2026 Dilan Gilluly. MIT License." --out rsrc
 package main
 
 import (
+	"context"
 	_ "embed"
+	"flag"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"os"
-	"ticket-auction-manager/tam-go/internal/auth"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"ticket-auction-manager/tam-go/internal/admin"
 	"ticket-auction-manager/tam-go/internal/db"
-	"ticket-auction-manager/tam-go/internal/middleware"
-	"ticket-auction-manager/tam-go/internal/prefixes"
+	"ticket-auction-manager/tam-go/internal/desktop"
+	"ticket-auction-manager/tam-go/internal/discovery"
+	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/server"
+	"ticket-auction-manager/tam-go/internal/store"
+	"ticket-auction-manager/tam-go/internal/tlscert"
 )
 
-//go:embed asciiart.txt
-var ASCIIart string
+//go:embed icon.ico
+var iconICO []byte
 
-func init() {
-	os.Setenv("TAM_DAEMON", "Server")
-	db.InitDB()
-	fmt.Println("Database initialized.")
-	if os.Getenv("TAM_PW") == "" {
-		os.Setenv("TAM_PW", "dbob16")
+// banner is Dilan's start-up art; it ends with "Now hosting ... at:" and
+// the address follows on the next line.
+//
+//go:embed asciiart.txt
+var banner string
+
+// reachableURLs lists the addresses a client elsewhere on the network can
+// use: the listen address itself when it names an interface, otherwise
+// this machine's addresses with the listen port.
+func reachableURLs(scheme, addr string) []string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil
 	}
-	fmt.Println(ASCIIart)
+	if host != "" && host != "0.0.0.0" && host != "::" {
+		return []string{scheme + "://" + net.JoinHostPort(host, port) + "/"}
+	}
+	var out []string
+	for _, ip := range discovery.LocalAddresses() {
+		out = append(out, scheme+"://"+net.JoinHostPort(ip, port)+"/")
+	}
+	return out
+}
+
+// browseAddr turns a listen address into one a browser on this machine can
+// open: ":8000" listens everywhere, so it is reachable as localhost:8000.
+func browseAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func main() {
-	authSrv := http.NewServeMux()
-	apiSrv := http.NewServeMux()
+	addr := flag.String("addr", "", "address to listen on (default :8000, or :8443 with -tls)")
+	useTLS := flag.Bool("tls", false, "serve HTTPS; a self-signed certificate is created in the data directory when none is given")
+	certFile := flag.String("cert", "", "TLS certificate file (default <data dir>/server.crt)")
+	keyFile := flag.String("key", "", "TLS key file (default <data dir>/server.key)")
+	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with a Shut Down entry (Windows)")
+	announce := flag.Bool("announce", true, "announce this server on the local network (mDNS) so clients can find it in Settings")
+	flag.Parse()
+	desktop.SetConsoleTitle("Ticket Auction Manager - server")
 
-	apiSrv.HandleFunc("GET /auth", auth.GetKeys)
-	apiSrv.HandleFunc("POST /auth", auth.PostAuthKey)
-	apiSrv.HandleFunc("DELETE /auth", auth.DelAuthKey)
-
-	apiSrv.HandleFunc("GET /prefixes", prefixes.GetAllPrefixes)
-	apiSrv.HandleFunc("POST /prefixes", prefixes.PostPrefixes)
-	apiSrv.HandleFunc("DELETE /prefixes", prefixes.DelPrefix)
-
-	authSrv.Handle("/api/", middleware.ServerMiddleware(http.StripPrefix("/api", apiSrv)))
-
-	if len(os.Args) > 1 && os.Args[1] == "dev" {
-		fmt.Println("http://localhost:8000/")
-		err := http.ListenAndServe("localhost:8000", authSrv)
-		if err != nil {
-			panic(err)
+	// "dev" binds the loopback interface unless an address was given.
+	if *addr == "" {
+		host := ""
+		if flag.Arg(0) == "dev" {
+			host = "localhost"
 		}
-	} else {
-		fmt.Println("http://0.0.0.0:8000/")
-		err := http.ListenAndServe(":8000", apiSrv)
-		if err != nil {
-			panic(err)
+		if *useTLS {
+			*addr = host + ":8443"
+		} else {
+			*addr = host + ":8000"
 		}
 	}
-}
+	scheme := "http"
+	if *useTLS {
+		scheme = "https"
+	}
+	reachable := reachableURLs(scheme, *addr)
 
-type ApiRootResp struct {
-	WhoAmI  string `json:"whoami"`
-	Auth    bool   `json:"authenticated"`
-	Healthy bool   `json:"healthy"`
+	dataDir, err := env.DataDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if f, err := env.OpenLog(dataDir, "tam-server.log"); err == nil {
+		defer f.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	} else {
+		log.Printf("not keeping a log file: %v", err)
+	}
+	sqldb, err := db.Open(filepath.Join(dataDir, "tam-remote.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqldb.Close()
+	if err := db.Migrate(sqldb); err != nil {
+		log.Fatal(err)
+	}
+	if err := db.MigrateServer(sqldb); err != nil {
+		log.Fatal(err)
+	}
+
+	// The password comes from server.json in the data directory, which the
+	// admin page writes, or else from TAM_PWD. With neither the server runs
+	// in setup mode: the API refuses to create keys until the admin page
+	// has set a password.
+	password, err := admin.Load(dataDir, os.Getenv("TAM_PWD"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// stop ends the program cleanly: the tray icon, Ctrl+C, and closing the
+	// console window all come through here.
+	var (
+		srv      *http.Server
+		stopOnce sync.Once
+	)
+	stop := func() {
+		stopOnce.Do(func() {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				srv.Shutdown(ctx)
+			}()
+		})
+	}
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		absDataDir = dataDir
+	}
+	st := store.New(sqldb)
+	mux := http.NewServeMux()
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	mux.Handle("/admin", adminPages)
+	mux.Handle("/admin/", adminPages)
+	mux.Handle("/", server.NewHandler(st, password))
+	srv = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	if *useTLS {
+		if *certFile == "" {
+			*certFile = filepath.Join(dataDir, "server.crt")
+		}
+		if *keyFile == "" {
+			*keyFile = filepath.Join(dataDir, "server.key")
+		}
+		hostname, _ := os.Hostname()
+		created, err := tlscert.EnsurePair(*certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if created {
+			log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", *certFile)
+		}
+	}
+
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(banner)
+	fmt.Printf("%s://%s/\n", scheme, browseAddr(*addr))
+	// The addresses a client on the network can be pointed at by hand when
+	// the network drops the announcement.
+	for _, u := range reachable {
+		fmt.Println(u)
+	}
+	log.Printf("tam-server listening on %s://%s (data in %s)", scheme, *addr, dataDir)
+	if !password.IsSet() {
+		log.Printf("no password set: open %s://%s/admin to set one", scheme, browseAddr(*addr))
+	}
+	if *announce {
+		announceCtx, stopAnnounce := context.WithCancel(context.Background())
+		defer stopAnnounce()
+		name, _ := os.Hostname()
+		if name == "" {
+			name = "TAM Server"
+		}
+		if err := discovery.Announce(announceCtx, name, ln.Addr().(*net.TCPAddr).Port, *useTLS, server.Version); err != nil {
+			log.Printf("not announcing on the network (%v); clients can still type the address", err)
+		} else {
+			log.Printf("announcing as %q on the local network", name)
+		}
+	}
+
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		defer close(done)
+		var err error
+		if *useTLS {
+			err = srv.ServeTLS(ln, *certFile, *keyFile)
+		} else {
+			err = srv.Serve(ln)
+		}
+		if err != nil && err != http.ErrServerClosed {
+			serveErr = err
+		}
+	}()
+	go desktop.StopOnSignal(stop, done)
+
+	if *useTray {
+		desktop.Tray(desktop.Options{
+			Tooltip:   "Ticket Auction Manager - server on " + *addr,
+			Icon:      iconICO,
+			QuitLabel: "Shut Down TAM Server",
+			Quit:      stop,
+		}, done)
+	} else {
+		<-done
+	}
+	if serveErr != nil {
+		log.Fatal(serveErr)
+	}
+	log.Print("tam-server stopped")
 }

@@ -2,38 +2,82 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { tS, bS, bAS } from '$lib/client/styles.js';
 	import { resolve } from '$app/paths';
-	import { handlers } from '$lib/client/handlers';
 	import hotkeys from 'hotkeys-js';
-  import { onMount } from 'svelte';
 
 	const pageTitle = 'Main Menu | TAM';
+	const { data } = $props();
+	let adminMode = $state(false);
+	let stopped = $state(false);
+	let shutdownError = $state('');
 
-	let pageData = $state({
-	  prefixes: [],
-		curPrefix: "",
-		venueName: "",
-		adminMode: false,
-		disableAttrib: false
-	})
-
-	const pColor = $derived.by(() => {
-	  const curPrefix = pageData.prefixes.find(p => p.prefix === pageData.curPrefix);
-		if (curPrefix) {
-		  return curPrefix.color
-		} else {
-		  return 'gray'
+	async function shutdown() {
+		if (
+			!confirm(
+				'Stop the TAM client on this computer? The pages will stop working until it is started again.'
+			)
+		)
+			return;
+		let res;
+		try {
+			res = await fetch('/api/shutdown', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: '{}'
+			});
+		} catch {
+			shutdownError = 'Could not reach the TAM client.';
+			return;
 		}
-	})
+		if (res.ok) {
+			stopped = true;
+		} else {
+			let detail = `Error Code: ${res.status}`;
+			try {
+				detail = (await res.json()).detail || detail;
+			} catch {
+				// keep the status text
+			}
+			shutdownError = detail;
+		}
+	}
+	let prefixes = $derived(data.prefixes);
+	let curPrefix = $state('');
+	let pColor = $derived.by(() => {
+		if (curPrefix) return prefixes.find((p) => curPrefix == p.prefix)?.color || 'gray';
+		else return 'gray';
+	});
 
-	hotkeys('alt+a', function(){
-	  pageData.adminMode = !pageData.adminMode;
-	})
+	const status = $derived.by(() => {
+		if (data.whoami === 'TAM Server') {
+			return {
+				mode: 'Remote',
+				auth: data.authenticated ? 'green' : 'red',
+				healthy: data.healthy ? 'green' : 'red'
+			};
+		} else if (data.whoami === 'TAM Client') {
+			return {
+				mode: 'Standalone'
+			};
+		} else {
+			return {
+				mode: 'Unknown'
+			};
+		}
+	});
 
-	onMount(async () => {
-	  pageData.prefixes = await handlers.get('/api/prefixes');
-		const settings = await handlers.get('/api/settings');
-		pageData.venueName = settings.venue_name;
-	})
+	$effect(() => {
+		hotkeys.filter = () => {
+			return true;
+		};
+		const toggleAdminMode = (event) => {
+			event.preventDefault();
+			adminMode = !adminMode;
+		};
+		hotkeys('alt+a', toggleAdminMode);
+		return () => {
+			hotkeys.unbind('alt+a', toggleAdminMode);
+		};
+	});
 </script>
 
 <svelte:head>
@@ -47,34 +91,37 @@
 		</div>
 		<div>
 			<h1 class="text-xl font-bold">{pageTitle}</h1>
-			<div class="italic">{pageData.venueName}</div>
+			{#if data.error}
+				<p class={tS.red}>{data.error}</p>
+			{/if}
+			<p class="text-lg italic">{data.venueName}</p>
 		</div>
 	</div>
 
 	<div class="flex flex-col md:flex-row md:flex-wrap gap-1 py-1">
 		<div id="prefixes" class="flex flex-col gap-1 p-2 border border-black rounded">
 			<h2 class="text-lg font-bold">Prefix Selection:</h2>
-			{#each pageData.prefixes as prefix (prefix.prefix)}
+			{#each prefixes as prefix (prefix.prefix)}
 				<button
-					class={pageData.curPrefix == prefix.prefix ? bAS[prefix.color] : bS[prefix.color]}
-					onclick={() => (pageData.curPrefix = prefix.prefix)}>{prefix.prefix}</button
+					class={curPrefix == prefix.prefix ? bAS[prefix.color] : bS[prefix.color]}
+					onclick={() => (curPrefix = prefix.prefix)}>{prefix.prefix}</button
 				>
 			{:else}
 				<div>No Prefixes</div>
 			{/each}
 		</div>
-		{#if pageData.curPrefix}
+		{#if curPrefix}
 			<div class="flex flex-col gap-1 items-center p-1 border border-black rounded">
 				<h2 class="text-lg font-bold">Forms:</h2>
 				<div class="grid grid-cols-2 gap-1 p-1 text-center">
-					<a href="." class={bS[pColor]}
+					<a href={resolve('/tickets/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
 						>Tickets</a
 					>
-					<a href="." class={bS[pColor]}
+					<a href={resolve('/baskets/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
 						>Baskets</a
 					>
 					<a
-						href="."
+						href={resolve('/drawing/[prefix]', { prefix: curPrefix })}
 						class="{bS[pColor]} col-span-2">Drawing Form</a
 					>
 				</div>
@@ -82,10 +129,10 @@
 			<div class="flex flex-col gap-1 items-center p-1 border border-black rounded">
 				<h2 class="text-lg font-bold">Reports:</h2>
 				<div class="grid grid-cols-2 gap-1 p-1 text-center">
-					<a href="." class={bS[pColor]}
+					<a href={resolve('/reports/byname/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
 						>Winners By Name</a
 					>
-					<a href="." class={bS[pColor]}
+					<a href={resolve('/reports/bybasket/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
 						>Winners By Basket</a
 					>
 				</div>
@@ -97,32 +144,51 @@
 		{/if}
 		<div class="flex flex-col gap-1 items-center text-center p-1 border border-black rounded">
 			<h2 class="text-lg font-bold">Prefix Independent:</h2>
-			<a href="." class="{bS.gray} w-full">Ticket Counts</a>
-			<a href="." class="{bS.gray} w-full">Print Sheets</a>
+			<a href={resolve('/reports/counts')} class="{bS.gray} w-full">Ticket Counts</a>
+			<a href={resolve('/sheets')} class="{bS.gray} w-full">Print Sheets</a>
 		</div>
 	</div>
 
-	{#if pageData.adminMode}
+	{#if adminMode}
 		<div id="admin_mode" class="py-1">
 			<h2 class="text-lg font-bold">Admin Mode:</h2>
 			<div class="flex flex-row gap-1">
 				<a href={resolve('/settings')} class={bS.gray}>Settings</a>
-				<a href="." class={bS.gray}>Search Tickets</a>
+				<a href={resolve('/search/tickets')} class={bS.gray}>Search Tickets</a>
+				<button class={bS.red} onclick={shutdown} disabled={stopped}>Shut Down TAM</button>
 			</div>
+			{#if stopped}
+				<p class="py-1 font-bold">
+					The TAM client has stopped. You can close this tab; start the program again to continue.
+				</p>
+			{:else if shutdownError}
+				<p class="py-1 {tS.red}">{shutdownError}</p>
+			{/if}
 		</div>
 	{/if}
 
 	<div id="footer">
+		<div>Mode: {status.mode}</div>
+		{#if data.authenticated !== undefined}
+			<div>
+				Authenticated: <span class={tS[status.auth]}>{data.authenticated ? 'Yes' : 'No'}</span>
+			</div>
+		{/if}
+		{#if data.healthy !== undefined}
+			<div>
+				Server Healthy: <span class={tS[status.healthy]}>{data.healthy ? 'Yes' : 'No'}</span>
+			</div>
+		{/if}
 		<div class="text-center text-xs">
 			<p>&copy; 2026 Ticket Auction Manager</p>
-			{#if !pageData.disableAttrib}
-			<p>
-				Created by Dilan Gilluly. <a
-					href="https://ko-fi.com/techguydilan"
-					class="text-blue-500"
-					target="_blank">My Ko-Fi</a
-				>.
-			</p>
+			{#if !data.disableAttrib}
+				<p>
+					Created by Dilan Gilluly. <a
+						href="https://ko-fi.com/techguydilan"
+						class="text-blue-500"
+						target="_blank">My Ko-Fi</a
+					>.
+				</p>
 			{/if}
 		</div>
 	</div>

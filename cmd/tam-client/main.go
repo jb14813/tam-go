@@ -1,52 +1,157 @@
+// Command tam-client serves the Ticket Auction Manager web app and its API
+// on a computer at the venue, against a local database or a remote tam-server.
+//
+//go:generate go-winres simply --icon icon.ico --manifest cli --arch amd64 --product-name "Ticket Auction Manager" --file-description "Ticket Auction Manager client" --original-filename tam-client.exe --file-version 0.0.1 --product-version 0.0.1 --copyright "Copyright (c) 2026 Dilan Gilluly. MIT License." --out rsrc
 package main
 
 import (
+	"context"
 	"embed"
+	"flag"
 	"fmt"
+	"io"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"os"
-	"ticket-auction-manager/tam-go/internal/auth"
-	"ticket-auction-manager/tam-go/internal/config"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	"ticket-auction-manager/tam-go/internal/client"
 	"ticket-auction-manager/tam-go/internal/db"
-	"ticket-auction-manager/tam-go/internal/prefixes"
+	"ticket-auction-manager/tam-go/internal/desktop"
+	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/store"
 )
 
 //go:embed all:dist
-var filesystem embed.FS
+var distFS embed.FS
 
+//go:embed icon.ico
+var iconICO []byte
+
+// banner is Dilan's start-up art; it ends with "Now hosting ... at:" and
+// the address follows on the next line.
+//
 //go:embed asciiart.txt
-var ASCIIart string
-
-func init() {
-	os.Setenv("TAM_DAEMON", "Client")
-	db.InitDB()
-	fmt.Println("Database initialized.")
-	fmt.Println(ASCIIart)
-}
+var banner string
 
 func main() {
-	clientSrv := http.NewServeMux()
+	addr := flag.String("addr", "localhost:3080", "address to listen on")
+	open := flag.Bool("open", true, "open the web app in the default browser once it is listening")
+	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with Open and Shut Down entries (Windows)")
+	flag.Parse()
+	desktop.SetConsoleTitle("Ticket Auction Manager - client")
 
-	subFS, err := fs.Sub(filesystem, "dist")
+	dataDir, err := env.DataDir()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+	if f, err := env.OpenLog(dataDir, "tam-client.log"); err == nil {
+		defer f.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	} else {
+		log.Printf("not keeping a log file: %v", err)
+	}
+	sqldb, err := db.Open(filepath.Join(dataDir, "tam-local.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqldb.Close()
+	if err := db.Migrate(sqldb); err != nil {
+		log.Fatal(err)
+	}
+	if err := db.MigrateClient(sqldb); err != nil {
+		log.Fatal(err)
+	}
+	dist, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	clientSrv.Handle("/", http.RedirectHandler("/web", http.StatusPermanentRedirect))
-	clientSrv.Handle("/web/", http.StripPrefix("/web", http.FileServer(http.FS(subFS))))
+	// stop ends the program cleanly. The page's Shut Down button, the tray
+	// icon, Ctrl+C, and closing the console window all come through here.
+	var (
+		srv      *http.Server
+		stopOnce sync.Once
+	)
+	stop := func() {
+		stopOnce.Do(func() {
+			go func() {
+				// Let the "shutting down" answer reach the page first.
+				time.Sleep(300 * time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				srv.Shutdown(ctx)
+			}()
+		})
+	}
+	// The heartbeat and outbox replay run until the server stops serving.
+	syncCtx, stopSync := context.WithCancel(context.Background())
+	defer stopSync()
+	srv = &http.Server{
+		Handler: client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist,
+			client.WithShutdown(stop), client.WithSyncLoop(syncCtx)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 
-	clientSrv.HandleFunc("GET /api/settings", config.GetAllSettings)
-	clientSrv.HandleFunc("POST /api/settings", config.SaveAllSettings)
+	// Listen first so the browser is only opened once the port is really ours.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	url := "http://" + browserHost(ln.Addr().(*net.TCPAddr)) + "/"
+	fmt.Print(banner)
+	fmt.Println(url)
+	log.Printf("tam-client listening on %s (data in %s)", url, dataDir)
+	if *open {
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			if err := desktop.OpenBrowser(url); err != nil {
+				log.Printf("could not open the browser (%v); open %s yourself", err, url)
+			}
+		}()
+	}
 
-	clientSrv.HandleFunc("GET /api/prefixes", prefixes.GetAllPrefixes)
-	clientSrv.HandleFunc("POST /api/prefixes", prefixes.PostPrefixes)
-	clientSrv.HandleFunc("DELETE /api/prefixes", prefixes.DelPrefix)
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		defer close(done)
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			serveErr = err
+		}
+	}()
+	go desktop.StopOnSignal(stop, done)
 
-	clientSrv.HandleFunc("GET /api/auth", auth.GetKeys)
-	clientSrv.HandleFunc("POST /api/auth", auth.PostAuthKey)
-	clientSrv.HandleFunc("DELETE /api/auth", auth.DelAuthKey)
+	if *useTray {
+		desktop.Tray(desktop.Options{
+			Tooltip:   "Ticket Auction Manager - client on " + url,
+			Icon:      iconICO,
+			OpenURL:   url,
+			QuitLabel: "Shut Down TAM",
+			Quit:      stop,
+		}, done)
+	} else {
+		<-done
+	}
+	if serveErr != nil {
+		log.Fatal(serveErr)
+	}
+	log.Print("tam-client stopped")
+}
 
-	fmt.Println("http://localhost:3080/")
-	http.ListenAndServe("localhost:3080", clientSrv)
+// browserHost turns the bound address into something a browser on this
+// machine can open: an unspecified address becomes localhost.
+func browserHost(a *net.TCPAddr) string {
+	host := "localhost"
+	if a.IP != nil && !a.IP.IsUnspecified() {
+		host = a.IP.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(a.Port))
 }

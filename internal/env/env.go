@@ -1,42 +1,30 @@
+// Package env resolves the few things tam takes from the process environment.
 package env
 
 import (
+	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 )
 
-func GetDataDir() string {
-	val, exists := os.LookupEnv("TAM_DATA_DIR")
-	if !exists {
-		val = path.Clean("./data")
-	} else {
-		val = path.Clean(val)
+// DataDir returns the directory that holds the databases and settings file.
+// It comes from TAM_DATA_DIR and defaults to ./data. The directory is created
+// when it does not exist yet.
+func DataDir() (string, error) {
+	dir := os.Getenv("TAM_DATA_DIR")
+	if dir == "" {
+		dir = "./data"
 	}
-	os.MkdirAll(val, 0755)
-	return val
-}
-
-func GetDBPath() string {
-	base_dir := GetDataDir()
-	var FileName string
-	Daemon := GetDaemon()
-	switch Daemon {
-	case "Client":
-		FileName = "tam-local.db"
-	case "Server":
-		FileName = "tam-remote.db"
+	dir = filepath.Clean(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create data dir %q: %w", dir, err)
 	}
-	val := path.Join(base_dir, FileName)
-	return val
+	return dir, nil
 }
 
-func GetConfigPath() string {
-	base_dir := GetDataDir()
-	val := path.Join(base_dir, "settings.json")
-	return val
-}
-
-func GetDaemon() string {
-	daemon := os.Getenv("TAM_DAEMON")
-	return daemon
+// OpenLog opens name inside the data directory for appending, so a run
+// leaves a record of what happened after its console window is gone. The
+// caller closes the file.
+func OpenLog(dataDir, name string) (*os.File, error) {
+	return os.OpenFile(filepath.Join(dataDir, name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 }

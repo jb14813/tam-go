@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Ticket Auction Manager — Client — Classic</title>
+  <desc id="desc">Gold ticket on a deep navy rounded tile; cyan and mint distinguish the server stack. Ticket and checkmark identify the interactive client.</desc>
+  <g id="background"><rect width="128" height="128" rx="27" fill="#101C33"/></g>
+  <g id="icon"><g transform="rotate(-16 64 64)"><path d="M 28 31 H 100 Q 105 31 105 36 V 57 A 9 9 0 0 0 105 75 V 96 Q 105 101 100 101 H 28 Q 23 101 23 96 V 75 A 9 9 0 0 0 23 57 V 36 Q 23 31 28 31 Z" fill="#FFC72C" /><rect x="36" y="40" width="56" height="52" rx="4" fill="none" stroke="#E6A311" stroke-width="4"/><circle cx="64" cy="66" r="21" fill="#101C33"/><path d="M 53 66 L 61 74 L 76 57" fill="none" stroke="#FFFDF7" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+</svg>
