@@ -167,7 +167,13 @@
 		<div>Mode: {status.mode}</div>
 		{#if data.authenticated !== undefined}
 			<div>
-				Authenticated: <span class={tS[status.auth]}>{data.authenticated ? 'Yes' : 'No'}</span>
+				Authenticated:
+				{#if data.healthy === false}
+					<!-- A server that cannot be reached cannot say whether it takes this client's key. -->
+					<span class={tS.gray}>unknown</span>
+				{:else}
+					<span class={tS[status.auth]}>{data.authenticated ? 'Yes' : 'No'}</span>
+				{/if}
 			</div>
 		{/if}
 		{#if data.healthy !== undefined}
