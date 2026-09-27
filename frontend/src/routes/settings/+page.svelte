@@ -25,8 +25,14 @@
 	const SERVERS_POLL_MS = 5000;
 	const STATUS_POLL_MS = 5000;
 
-	let paired = $derived(!!data.settings.remote_server);
+	// A server is set either by pairing, which also names it, or by typing
+	// it into the Remote Mode fields below, the original's way, where the
+	// key comes from Auth Keys. Only the first is "paired".
+	let configured = $derived(!!data.settings.remote_server);
+	let paired = $derived(configured && !!data.settings.remote_name);
 	let pairedName = $derived(data.settings.remote_name || data.settings.remote_server);
+	let serverAddress = $derived(`${data.settings.remote_server}:${data.settings.remote_port}`);
+	let pairVerb = $derived(paired ? 'Pair again' : 'Pair');
 	let servers = $state([]);
 	let pairingUnsupported = $state(false);
 	// Fields for pairing; a discovered server's Use button fills them, and
@@ -176,10 +182,10 @@
 		};
 	});
 
-	// The servers found on the network, while not paired. An older client
-	// answers 404: pairing is not available then.
+	// The servers found on the network, while no server is set. An older
+	// client answers 404: pairing is not available then.
 	$effect(() => {
-		if (paired || pairingUnsupported) return;
+		if (configured || pairingUnsupported) return;
 		let stopped = false;
 		let timer;
 		const loop = async () => {
@@ -258,11 +264,17 @@
 	<h1 class="text-xl font-bold">{pageTitle}</h1>
 	<div id="server_section" class="flex flex-col gap-1 w-full py-1">
 		<h2 class="text-lg font-bold">Server:</h2>
-		{#if paired}
+		{#if configured}
 			<div class="flex flex-row gap-1 items-center">
 				<div>
-					Paired with <span class="font-bold">{pairedName}:{data.settings.remote_port}</span>
-					(TLS {data.settings.remote_tls ? 'on' : 'off'})
+					{#if paired}
+						Paired with <span class="font-bold">{pairedName}</span>
+						({serverAddress}, TLS {data.settings.remote_tls ? 'on' : 'off'})
+					{:else}
+						Remote server <span class="font-bold">{serverAddress}</span>
+						(TLS {data.settings.remote_tls ? 'on' : 'off'}), set in the Remote Mode fields below,
+						not paired{data.settings.remote_key ? '; it uses the key chosen under Auth Keys' : ''}
+					{/if}
 				</div>
 				<button
 					class="{bS.red} disabled:opacity-50 disabled:cursor-not-allowed"
@@ -279,21 +291,23 @@
 				{#if connState === 'certificate'}
 					<p class="{tS.red} font-bold">
 						The server's certificate changed since this client paired with it. If the server was
-						set up again or given a new certificate, pair again with the server password to trust
-						the new one; the saves waiting stay queued and are sent once paired.
+						set up again or given a new certificate, {pairVerb.toLowerCase()} with the server password
+						to trust the new one; the saves waiting stay queued and are sent once paired.
 					</p>
 				{:else if connState === 'unauthenticated'}
 					<p class="{tS.red} font-bold">
-						The server refused this client's key. Pair again with the server password: the saves
+						The server refused this client's key. {pairVerb} with the server password: the saves
 						waiting stay queued and are sent once paired.
 					</p>
-				{:else}
+				{:else if paired}
 					<div>
 						Pair again with the server password when the server refuses this client's key, its
 						certificate changed, or it moved to another address:
 					</div>
+				{:else}
+					<div>Pair with the server password to give this client a key of its own:</div>
 				{/if}
-				{@render pairForm('Pair again')}
+				{@render pairForm(pairVerb)}
 			</div>
 		{:else if pairingUnsupported}
 			<div>{NOT_SUPPORTED}</div>
@@ -402,8 +416,14 @@
 						status.color = 'red';
 					} else {
 						const resData = await res.json();
+						// The Remote Mode fields set where the server is; they do not pair.
+						const remoteChanged = ['remote_server', 'remote_port', 'remote_tls'].some(
+							(k) => resData[k] !== data.settings[k]
+						);
 						settings = { ...resData };
-						status.message = 'Settings saved successfully!';
+						status.message = remoteChanged
+							? 'Remote server settings saved.'
+							: 'Settings saved successfully!';
 						status.color = 'green';
 						clearTimeout(reloadTimer);
 						reloadTimer = setTimeout(() => window.location.reload(), 3000);
