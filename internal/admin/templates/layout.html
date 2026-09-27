@@ -40,7 +40,7 @@
   {{if .LoggedIn}}
   <nav>
     <a href="/admin/status"{{if eq .Active "status"}} class="active"{{end}}>Status</a>
-    <a href="/admin/keys"{{if eq .Active "keys"}} class="active"{{end}}>Laptops and keys</a>
+    <a href="/admin/keys"{{if eq .Active "keys"}} class="active"{{end}}>Clients and keys</a>
     <a href="/admin/backup"{{if eq .Active "backup"}} class="active"{{end}}>Backup</a>
     <a href="/admin/password"{{if eq .Active "password"}} class="active"{{end}}>Password</a>
     <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form>

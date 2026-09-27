@@ -176,7 +176,7 @@ func TestSetupModeUntilThePasswordIsSet(t *testing.T) {
 	}
 	// Setup logs the browser in and says so once.
 	res, body = s.get("/admin/status")
-	if res.StatusCode != 200 || !strings.Contains(body, "Password set.") || !strings.Contains(body, "Laptops and keys") {
+	if res.StatusCode != 200 || !strings.Contains(body, "Password set.") || !strings.Contains(body, "Clients and keys") {
 		t.Fatalf("status after setup = %d\n%s", res.StatusCode, body)
 	}
 	if _, body = s.get("/admin/status"); strings.Contains(body, "Password set.") {
@@ -240,7 +240,7 @@ func TestLoginLogoutAndPages(t *testing.T) {
 	}
 
 	body, _ = s.page("/admin/status")
-	for _, want := range []string{":8000", "off", s.dir, "0.0.1", "1 min 30 s", "No laptop has paired yet", "Log out", `href="/admin/keys"`} {
+	for _, want := range []string{":8000", "off", s.dir, "0.0.1", "1 min 30 s", "No client has paired yet", "Log out", `href="/admin/keys"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}
@@ -345,7 +345,7 @@ func TestKeysPage(t *testing.T) {
 	}
 
 	res, body := s.post("/admin/keys", url.Values{"csrf": {token}, "description": {"  "}})
-	if res.StatusCode != 400 || !strings.Contains(body, "Give the laptop a name.") {
+	if res.StatusCode != 400 || !strings.Contains(body, "Give the client a name.") {
 		t.Fatalf("blank description = %d\n%s", res.StatusCode, body)
 	}
 	res, body = s.post("/admin/keys", url.Values{"csrf": {token}, "description": {" Laptop <A> "}})
@@ -602,14 +602,14 @@ type statusDoc struct {
 	Prefixes int    `json:"prefixes"`
 	Tickets  int    `json:"tickets"`
 	Baskets  int    `json:"baskets"`
-	Laptops  []struct {
-		Laptop     string `json:"laptop"`
-		Client     string `json:"client"`
+	Clients  []struct {
+		Name       string `json:"name"`
+		Program    string `json:"program"`
 		State      string `json:"state"`
 		LastSeen   string `json:"last_seen"`
 		LastUpdate string `json:"last_update"`
 		Queued     *int   `json:"queued"`
-	} `json:"laptops"`
+	} `json:"clients"`
 }
 
 // getJSON fetches a page with Accept: application/json.
@@ -639,12 +639,12 @@ func (s *site) stamp(key string, seen, update time.Time) {
 	}
 }
 
-// row is a Laptops table row as the status page renders it.
+// row is a Clients table row as the status page renders it.
 func row(cells ...string) string {
 	return "<tr><td>" + strings.Join(cells, "</td><td>") + "</td></tr>"
 }
 
-func TestStatusListsLaptops(t *testing.T) {
+func TestStatusListsClients(t *testing.T) {
 	s := newSite(t, "secret")
 	s.login("secret")
 	base := time.Now().Truncate(time.Second) // stored stamps have whole seconds
@@ -673,8 +673,8 @@ func TestStatusListsLaptops(t *testing.T) {
 	if !strings.Contains(body, `<meta http-equiv="refresh" content="5">`) {
 		t.Fatalf("the status page must reload itself:\n%s", body)
 	}
-	if strings.Contains(body, "Paired laptops") || !strings.Contains(body, "<h2>Laptops</h2>") {
-		t.Fatalf("the table is called Laptops:\n%s", body)
+	if strings.Contains(body, "Laptops") || !strings.Contains(body, "<h2>Clients</h2>") {
+		t.Fatalf("the table is called Clients:\n%s", body)
 	}
 	for _, want := range []string{
 		row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", "never", "0"),
@@ -723,17 +723,17 @@ func TestStatusListsLaptops(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
 		t.Fatalf("JSON status: %v\n%s", err, text)
 	}
-	if doc.Uptime != "3 min 33 s" || doc.Prefixes != 0 || len(doc.Laptops) != 3 {
+	if doc.Uptime != "3 min 33 s" || doc.Prefixes != 0 || len(doc.Clients) != 3 {
 		t.Fatalf("JSON status = %+v", doc)
 	}
-	b, q, st := doc.Laptops[0], doc.Laptops[1], doc.Laptops[2]
-	if b.Laptop != "Busy" || b.Client != "tam-client/1.2.3" || b.State != "away for 2 min 3 s" || b.LastSeen != at(base)+" (2 min ago)" || b.LastUpdate != at(base)+" (2 min ago)" || b.Queued == nil || *b.Queued != 2 {
+	b, q, st := doc.Clients[0], doc.Clients[1], doc.Clients[2]
+	if b.Name != "Busy" || b.Program != "tam-client/1.2.3" || b.State != "away for 2 min 3 s" || b.LastSeen != at(base)+" (2 min ago)" || b.LastUpdate != at(base)+" (2 min ago)" || b.Queued == nil || *b.Queued != 2 {
 		t.Fatalf("JSON row for Busy = %+v", b)
 	}
-	if q.Laptop != "Quiet <one>" || q.Client != "" || q.State != "never" || q.LastSeen != "never" || q.LastUpdate != "never" || q.Queued != nil {
+	if q.Name != "Quiet <one>" || q.Program != "" || q.State != "never" || q.LastSeen != "never" || q.LastUpdate != "never" || q.Queued != nil {
 		t.Fatalf("JSON row for Quiet = %+v", q)
 	}
-	if st.Laptop != "Stored" || st.Client != "" || st.State != "away for 2 min 43 s" || st.Queued != nil {
+	if st.Name != "Stored" || st.Program != "" || st.State != "away for 2 min 43 s" || st.Queued != nil {
 		t.Fatalf("JSON row for Stored = %+v", st)
 	}
 	seed(t, s.st)

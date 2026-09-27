@@ -41,13 +41,13 @@ type Info struct {
 	Version   string    // the program version
 	Started   time.Time // when the server started, for the uptime
 
-	// Presence is the API's record of what each laptop last did, for the
-	// Laptops table. Without it the table shows what the database
+	// Presence is the API's record of what each client last did, for the
+	// Clients table. Without it the table shows what the database
 	// remembers.
 	Presence *presence.Registry
 }
 
-// connectedWithin is how recently a laptop must have been seen to count as
+// connectedWithin is how recently a client must have been seen to count as
 // connected: three of the client's 5 s heartbeats.
 const connectedWithin = 15 * time.Second
 
@@ -147,21 +147,21 @@ type keyRow struct {
 	LastSeen    string
 }
 
-// laptopRow is one paired laptop as the status page and its JSON show it.
-type laptopRow struct {
-	Laptop     string `json:"laptop"`
-	Client     string `json:"client"`      // the program, "" when unknown
+// clientRow is one paired client as the status page and its JSON show it.
+type clientRow struct {
+	Name       string `json:"name"`        // the key's description, the client's name
+	Program    string `json:"program"`     // the program and its version, "" when unknown
 	State      string `json:"state"`       // connected, away for ..., or never
 	LastSeen   string `json:"last_seen"`   // as formatSeen writes it
 	LastUpdate string `json:"last_update"` // as formatSeen writes it
-	Queued     *int   `json:"queued"`      // nil when the laptop never sent a heartbeat
+	Queued     *int   `json:"queued"`      // nil when the client never sent a heartbeat
 }
 
 type statusData struct {
 	Info
 	Uptime                     string
 	Prefixes, Tickets, Baskets int
-	Laptops                    []laptopRow
+	Clients                    []clientRow
 }
 
 // statusJSON is the status page for scripts.
@@ -170,7 +170,7 @@ type statusJSON struct {
 	Prefixes int         `json:"prefixes"`
 	Tickets  int         `json:"tickets"`
 	Baskets  int         `json:"baskets"`
-	Laptops  []laptopRow `json:"laptops"`
+	Clients  []clientRow `json:"clients"`
 }
 
 type keysData struct {
@@ -382,7 +382,7 @@ func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 	addr := remoteIP(r)
 	log.Printf("admin: password set from %s", addr)
 	n := h.startSession(w, r, s)
-	h.ss.setFlash(n.id, "Password set. Laptops can pair with this server now.")
+	h.ss.setFlash(n.id, "Password set. Clients can pair with this server now.")
 	http.Redirect(w, r, "/admin/status", http.StatusSeeOther)
 }
 
@@ -418,10 +418,10 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request, s *session) {
 		Info:     h.info,
 		Uptime:   formatUptime(now.Sub(h.info.Started)),
 		Prefixes: prefixes, Tickets: tickets, Baskets: baskets,
-		Laptops: laptopRows(keys, h.snapshot(), now),
+		Clients: clientRows(keys, h.snapshot(), now),
 	}
 	if wantsJSON(r) {
-		httpx.WriteJSON(w, http.StatusOK, statusJSON{Uptime: data.Uptime, Prefixes: prefixes, Tickets: tickets, Baskets: baskets, Laptops: data.Laptops})
+		httpx.WriteJSON(w, http.StatusOK, statusJSON{Uptime: data.Uptime, Prefixes: prefixes, Tickets: tickets, Baskets: baskets, Clients: data.Clients})
 		return
 	}
 	h.render(w, http.StatusOK, "status", h.view(s, "status", data))
@@ -435,17 +435,17 @@ func (h *handler) snapshot() map[string]presence.Record {
 	return h.info.Presence.Snapshot()
 }
 
-// laptopRows joins the keys with what the registry saw of each. The times
+// clientRows joins the keys with what the registry saw of each. The times
 // in memory are exact and win; the persisted ones stand in after a
-// restart until the laptop shows up again.
-func laptopRows(keys []store.AuthKey, live map[string]presence.Record, now time.Time) []laptopRow {
-	rows := make([]laptopRow, 0, len(keys))
+// restart until the client shows up again.
+func clientRows(keys []store.AuthKey, live map[string]presence.Record, now time.Time) []clientRow {
+	rows := make([]clientRow, 0, len(keys))
 	for _, k := range keys {
 		rec := live[k.AuthKey]
 		seen := pick(rec.Seen, k.LastSeen)
-		row := laptopRow{
-			Laptop:     k.Description,
-			Client:     rec.Client,
+		row := clientRow{
+			Name:       k.Description,
+			Program:    rec.Client,
 			State:      stateOf(seen, now),
 			LastSeen:   formatAgo(seen, now),
 			LastUpdate: formatAgo(pick(rec.Updated, k.LastUpdate), now),
@@ -472,7 +472,7 @@ func pick(live time.Time, persisted string) time.Time {
 	return t
 }
 
-// stateOf is the connection state of a laptop last seen at seen.
+// stateOf is the connection state of a client last seen at seen.
 func stateOf(seen, now time.Time) string {
 	switch {
 	case seen.IsZero():
@@ -573,7 +573,7 @@ func (h *handler) renderKeys(w http.ResponseWriter, r *http.Request, s *session,
 func (h *handler) createKey(w http.ResponseWriter, r *http.Request, s *session) {
 	description := strings.TrimSpace(r.PostFormValue("description"))
 	if description == "" {
-		h.renderKeys(w, r, s, http.StatusBadRequest, keysData{}, "Give the laptop a name.")
+		h.renderKeys(w, r, s, http.StatusBadRequest, keysData{}, "Give the client a name.")
 		return
 	}
 	k, err := h.st.CreateKey(description)
@@ -592,7 +592,7 @@ func (h *handler) deleteKey(w http.ResponseWriter, r *http.Request, s *session) 
 		return
 	}
 	if r.PostFormValue("confirm") == "" {
-		// First step: show which laptop this is and ask.
+		// First step: show which client this is and ask.
 		keys, err := h.st.ListKeys()
 		if err != nil {
 			h.internal(w, r, err)

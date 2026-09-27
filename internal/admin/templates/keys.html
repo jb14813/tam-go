@@ -1,6 +1,6 @@
-{{define "title"}}Laptops and keys{{end}}
+{{define "title"}}Clients and keys{{end}}
 {{define "content"}}
-<h1>Laptops and keys</h1>
+<h1>Clients and keys</h1>
 {{with .Data.NewKey}}
 <div class="msg">
   <p>This is the key for <strong>{{.Description}}</strong>. Copy it now; it is not shown again.</p>
@@ -9,7 +9,7 @@
 {{end}}
 {{with .Data.Confirm}}
 <div class="err">
-  <p>Delete the key for <strong>{{.Description}}</strong> (<code>{{.Short}}</code>)? That laptop will have to pair again.</p>
+  <p>Delete the key for <strong>{{.Description}}</strong> (<code>{{.Short}}</code>)? That client will have to pair again.</p>
   <form method="post" action="/admin/keys/delete">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <input type="hidden" name="key" value="{{.Key}}">
@@ -20,10 +20,10 @@
 </div>
 {{end}}
 <h2>Create a key</h2>
-<p class="note">A laptop that pairs from its Settings page gets its key by itself. Create one here for a laptop that is set up by hand.</p>
+<p class="note">A client that pairs from its Settings page gets its key by itself. Create one here for a client that is set up by hand.</p>
 <form method="post" action="/admin/keys">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label for="description">Laptop name
+  <label for="description">Client name
     <input id="description" type="text" name="description" maxlength="100" required>
   </label>
   <button type="submit">Create the key</button>
@@ -31,7 +31,7 @@
 <h2>Keys</h2>
 {{if .Data.Keys}}
 <table>
-  <tr><th>Laptop</th><th>Key</th><th>Last seen</th><th></th></tr>
+  <tr><th>Client</th><th>Key</th><th>Last seen</th><th></th></tr>
   {{range .Data.Keys}}<tr>
     <td>{{.Description}}</td>
     <td><code>{{.Short}}</code></td>
