@@ -4,9 +4,11 @@ package server
 
 import (
 	"crypto/subtle"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -211,6 +213,51 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errOrder is a save whose name and number (X-TAM-Laptop, X-TAM-Save) do
+// not make sense.
+var errOrder = errors.New("X-TAM-Laptop must name the laptop, in at most 64 characters, and X-TAM-Save number its save, above 0")
+
+// ordered runs a save in the order the laptop made it when the request
+// numbers it, as tam-client does: a save that is not newer than the last
+// one applied from that laptop is skipped (see store.InOrder) and the
+// answer says so with X-TAM-Stale; the laptop takes it as done. Saves
+// without numbers, as the original client sends them, apply as they come.
+func (h *handler) ordered(w http.ResponseWriter, r *http.Request, save func(*store.Store) error) (stale bool, err error) {
+	laptop, number := r.Header.Get("X-TAM-Laptop"), r.Header.Get("X-TAM-Save")
+	if laptop == "" && number == "" {
+		return false, save(h.st)
+	}
+	n, perr := strconv.ParseInt(number, 10, 64)
+	if laptop == "" || len(laptop) > 64 || perr != nil || n <= 0 {
+		return false, errOrder
+	}
+	applied, err := h.st.InOrder(laptop, n, save)
+	if err != nil {
+		return false, err
+	}
+	if !applied {
+		w.Header().Set("X-TAM-Stale", "1")
+		log.Printf("skipped save %d of laptop %s: it arrived after a newer one (a late copy or a repeat)", n, laptop)
+	}
+	return !applied, nil
+}
+
+// write is ordered for the save routes: it answers a bad number (400) or a
+// failure (500) itself, and reports whether the save was stale and whether
+// the route goes on to answer.
+func (h *handler) write(w http.ResponseWriter, r *http.Request, save func(*store.Store) error) (stale, ok bool) {
+	stale, err := h.ordered(w, r, save)
+	switch {
+	case errors.Is(err, errOrder):
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return false, false
+	case err != nil:
+		httpx.WriteInternal(w, err)
+		return false, false
+	}
+	return stale, true
+}
+
 // respond writes a value (or a generic error) produced by a store call.
 func respond[T any](w http.ResponseWriter, v T, err error) {
 	if err != nil {
@@ -316,8 +363,7 @@ func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.st.UpsertPrefixes(ps); err != nil {
-		httpx.WriteInternal(w, err)
+	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertPrefixes(ps) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ps)
@@ -329,16 +375,23 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "p is required")
 		return
 	}
-	gone, err := h.st.DeletePrefix(name)
-	if err != nil {
-		httpx.WriteInternal(w, err)
-		return
-	}
-	if gone == nil {
+	var gone *store.Prefix
+	stale, ok := h.write(w, r, func(st *store.Store) error {
+		var err error
+		gone, err = st.DeletePrefix(name)
+		return err
+	})
+	switch {
+	case !ok:
+	case stale:
+		// Done before: answered as done, so a laptop replaying it does
+		// not file it as refused.
+		httpx.WriteJSON(w, http.StatusOK, store.Prefix{Prefix: name})
+	case gone == nil:
 		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
-		return
+	default:
+		httpx.WriteJSON(w, http.StatusOK, gone)
 	}
-	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
 // --- tickets ---
@@ -378,8 +431,7 @@ func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.st.UpsertTickets(ts); err != nil {
-		httpx.WriteInternal(w, err)
+	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertTickets(ts) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ts)
@@ -428,8 +480,7 @@ func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.st.UpsertBaskets(bs); err != nil {
-		httpx.WriteInternal(w, err)
+	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertBaskets(bs) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)
@@ -472,8 +523,7 @@ func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.st.UpsertWinning(bs); err != nil {
-		httpx.WriteInternal(w, err)
+	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertWinning(bs) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)

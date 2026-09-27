@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type handler struct {
 	st   *store.Store
 	cfg  *config.File
 	sync *tamsync.Syncer
+	host string // this machine's name, under which the laptop names itself
 
 	// shutdown, when set, is called after POST /api/shutdown has answered.
 	shutdown func()
@@ -77,7 +79,7 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option
 }
 
 func newHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) *handler {
-	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings()}
+	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings(), host: hostname()}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -165,6 +167,14 @@ func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
 	log.Print("shutdown requested from the web page: stopping")
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "TAM client is shutting down."})
 	go h.shutdown()
+}
+
+// hostname is this machine's name, "laptop" when it has none.
+func hostname() string {
+	if name, _ := os.Hostname(); name != "" {
+		return name
+	}
+	return "laptop"
 }
 
 // guard refuses writes that a browser reports as coming from another site.

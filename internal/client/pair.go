@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -153,11 +152,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		name = root.Name
 	}
 
-	laptop, _ := os.Hostname()
-	if laptop == "" {
-		laptop = "laptop"
-	}
-	res, err = rc.Do(http.MethodPost, "/api/auth", map[string]string{"TAM-PW": req.Password}, map[string]string{"description": laptop})
+	res, err = rc.Do(http.MethodPost, "/api/auth", map[string]string{"TAM-PW": req.Password}, map[string]string{"description": h.host})
 	if err != nil {
 		h.unreachableAt(w, hostPort, err)
 		return
@@ -286,7 +281,7 @@ func (h *handler) retryOutbox(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
-	n, err := h.st.RetryFailed()
+	n, err := h.st.RetryFailed(h.host)
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return

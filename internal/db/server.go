@@ -6,11 +6,19 @@ import (
 )
 
 // MigrateServer applies the schema additions only tam-server needs, after
-// Migrate. Today that is the auth_keys.last_seen column, which records the
-// last authenticated request of a key. The original app never reads it, so
-// a database shared with the original server keeps working. It is safe to
-// run on every start.
+// Migrate: the laptop_saves table and the auth_keys.last_seen column, which
+// records the last authenticated request of a key. The original app never
+// reads either, so a database shared with the original server keeps
+// working. It is safe to run on every start.
 func MigrateServer(sqldb *sql.DB) error {
+	// laptop_saves holds, per laptop, the number of the last save applied
+	// from it, so a copy of an older save the network delivers late is
+	// skipped (see store.InOrder).
+	if _, err := sqldb.Exec(`CREATE TABLE IF NOT EXISTS laptop_saves (
+		laptop TEXT PRIMARY KEY,
+		last_save INTEGER NOT NULL)`); err != nil {
+		return fmt.Errorf("apply server schema: %w", err)
+	}
 	has, err := hasColumn(sqldb, "auth_keys", "last_seen")
 	if err != nil {
 		return err

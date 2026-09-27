@@ -244,8 +244,15 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 		httpx.WriteInternal(w, err)
 		return
 	}
+	// The save is numbered before it leaves: sent now or queued, it is the
+	// same save to the server (see store.InOrder).
+	order, err := h.st.NextSave(h.host)
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
 	if h.inStep() {
-		res, err := rc.WithTimeout(writeTimeout).Post(remotePath, json.RawMessage(body))
+		res, err := rc.WithTimeout(writeTimeout).Do(http.MethodPost, remotePath, tamsync.OrderHeaders(order), json.RawMessage(body))
 		if h.observe(err, res) {
 			if !res.OK() {
 				forward(w, res)
@@ -259,7 +266,7 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 			return
 		}
 	}
-	if err := h.sync.SaveQueued(http.MethodPost, remotePath, body, func(st *store.Store) error { return save(st, items) }); err != nil {
+	if err := h.sync.SaveQueued(http.MethodPost, remotePath, body, order, func(st *store.Store) error { return save(st, items) }); err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
@@ -393,11 +400,17 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	rc := h.remote(h.settings())
 	remotePath := "/api/prefixes?p=" + url.QueryEscape(name)
 	remoteHadIt, queue := false, false
+	var order store.Order
 	if rc != nil {
 		defer h.sync.BeginSave([]string{prefixRow(store.Prefix{Prefix: name})})()
+		var err error
+		if order, err = h.st.NextSave(h.host); err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
 		queue = true
 		if h.inStep() {
-			res, err := rc.WithTimeout(writeTimeout).Delete(remotePath)
+			res, err := rc.WithTimeout(writeTimeout).Do(http.MethodDelete, remotePath, tamsync.OrderHeaders(order), nil)
 			if h.observe(err, res) {
 				queue = false
 				if res.OK() {
@@ -422,7 +435,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if queue {
-		err = h.sync.SaveQueued(http.MethodDelete, remotePath, nil, remove)
+		err = h.sync.SaveQueued(http.MethodDelete, remotePath, nil, order, remove)
 	} else {
 		err = remove(h.st)
 	}
