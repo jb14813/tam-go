@@ -8,12 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 )
 
 // Store wraps one shared *sql.DB.
+//
+// Writes take turns through wmu, in the order they arrive. SQLite lets one
+// writer in at a time and has the others retry in a busy wait that is not
+// first come, first served; where every commit is flushed to a slow disk, a
+// writer could time out behind a crowd of others and fail. Reads do not
+// wait: with WAL journaling they never block on a writer.
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	wmu sync.Mutex
 }
 
 // New returns a Store over an opened, migrated database.
@@ -35,8 +43,26 @@ func nint(v sql.NullInt64) int {
 	return 0
 }
 
-// tx runs fn inside a transaction and commits it when fn returns nil.
+// exec runs one statement that writes, in its turn.
+func (s *Store) exec(query string, args ...any) (sql.Result, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.db.Exec(query, args...)
+}
+
+// execReturning runs one statement that writes and returns a row (DELETE
+// ... RETURNING), in its turn, and scans the row into dest.
+func (s *Store) execReturning(query string, args []any, dest ...any) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.db.QueryRow(query, args...).Scan(dest...)
+}
+
+// tx runs fn inside a transaction, in its turn among the writes, and
+// commits it when fn returns nil.
 func (s *Store) tx(fn func(*sql.Tx) error) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -95,7 +121,7 @@ func (s *Store) DeletePrefix(name string) (*Prefix, error) {
 	var p Prefix
 	var color sql.NullString
 	var weight sql.NullInt64
-	err := s.db.QueryRow(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, name).Scan(&p.Prefix, &color, &weight)
+	err := s.execReturning(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, []any{name}, &p.Prefix, &color, &weight)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -200,7 +226,7 @@ func (s *Store) ListKeys() ([]AuthKey, error) {
 // TouchKey records now as the key's last_seen time. It needs the column
 // db.MigrateServer adds; a missing key is not an error.
 func (s *Store) TouchKey(key string) error {
-	_, err := s.db.Exec(`UPDATE auth_keys SET last_seen = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
+	_, err := s.exec(`UPDATE auth_keys SET last_seen = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
 	return err
 }
 
@@ -208,7 +234,7 @@ func (s *Store) TouchKey(key string) error {
 // its last accepted write. It needs the column db.MigrateServer adds; a
 // missing key is not an error.
 func (s *Store) MarkKeyUpdated(key string) error {
-	_, err := s.db.Exec(`UPDATE auth_keys SET last_update = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
+	_, err := s.exec(`UPDATE auth_keys SET last_update = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
 	return err
 }
 
@@ -226,7 +252,7 @@ func (s *Store) CreateKey(description string) (AuthKey, error) {
 		if exists {
 			continue
 		}
-		if _, err := s.db.Exec(`INSERT INTO auth_keys (auth_key, description) VALUES (?, ?)`, key, description); err != nil {
+		if _, err := s.exec(`INSERT INTO auth_keys (auth_key, description) VALUES (?, ?)`, key, description); err != nil {
 			return AuthKey{}, err
 		}
 		return AuthKey{AuthKey: key, Description: description}, nil
@@ -239,7 +265,7 @@ func (s *Store) CreateKey(description string) (AuthKey, error) {
 func (s *Store) DeleteKey(key string) (*AuthKey, error) {
 	var k AuthKey
 	var desc sql.NullString
-	err := s.db.QueryRow(`DELETE FROM auth_keys WHERE auth_key = ? RETURNING auth_key, description`, key).Scan(&k.AuthKey, &desc)
+	err := s.execReturning(`DELETE FROM auth_keys WHERE auth_key = ? RETURNING auth_key, description`, []any{key}, &k.AuthKey, &desc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
