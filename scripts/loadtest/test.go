@@ -39,7 +39,8 @@ type test struct {
 		at, backAt time.Time
 		caughtUpAt time.Time
 	}
-	stalled atomic.Int64 // saves that hung until the client gave up and queued them
+	stalled     atomic.Int64 // saves that hung until the client gave up and queued them
+	soakSamples []soakSample
 
 	mu     sync.Mutex
 	phases []*phase
@@ -131,6 +132,11 @@ func (t *test) run() error {
 		t.rush()
 		t.settle("after the rush")
 		t.checkServer("after the rush")
+	}
+	if t.o.soak > 0 {
+		t.soak()
+		t.checkData("after the soak")
+		t.checkSoak()
 	}
 	t.checkLaptops()
 	t.checkPresence()
