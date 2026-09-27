@@ -178,40 +178,26 @@ func generateKey() (string, error) {
 	return string(buf), nil
 }
 
-// hasLastSeen reports whether auth_keys has the last_seen column that
-// db.MigrateServer adds. The client's database never gets it.
-func (s *Store) hasLastSeen() (bool, error) {
-	rows, err := s.db.Query(`PRAGMA table_info(auth_keys)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid, notNull, pk int
-			name, typ        string
-			dflt             sql.NullString
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == "last_seen" {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+// hasKeyActivity reports whether the database has the auth_key_activity
+// table that db.MigrateServer adds. The client's database never gets it.
+func (s *Store) hasKeyActivity() (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'auth_key_activity'`).Scan(&n)
+	return n > 0, err
 }
 
 // ListKeys returns every access key ordered by description, then key.
-// LastSeen is filled in when the database has the column.
+// LastSeen is filled in on a database with auth_key_activity.
 func (s *Store) ListKeys() ([]AuthKey, error) {
-	withSeen, err := s.hasLastSeen()
+	withSeen, err := s.hasKeyActivity()
 	if err != nil {
 		return nil, err
 	}
 	query := `SELECT auth_key, description, NULL FROM auth_keys ORDER BY description, auth_key`
 	if withSeen {
-		query = `SELECT auth_key, description, last_seen FROM auth_keys ORDER BY description, auth_key`
+		query = `SELECT k.auth_key, k.description, a.last_seen FROM auth_keys k
+			LEFT JOIN auth_key_activity a ON a.auth_key = k.auth_key
+			ORDER BY k.description, k.auth_key`
 	}
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -231,10 +217,12 @@ func (s *Store) ListKeys() ([]AuthKey, error) {
 	return out, rows.Err()
 }
 
-// TouchKey records now as the key's last_seen time. It needs the column
-// db.MigrateServer adds; a missing key is not an error.
+// TouchKey records now as the key's last_seen time. It needs the table
+// db.MigrateServer adds; a missing key is not an error and gets no row.
 func (s *Store) TouchKey(key string) error {
-	_, err := s.exec(`UPDATE auth_keys SET last_seen = ? WHERE auth_key = ?`, time.Now().UTC().Format(time.RFC3339), key)
+	_, err := s.exec(`INSERT INTO auth_key_activity (auth_key, last_seen)
+		SELECT auth_key, ? FROM auth_keys WHERE auth_key = ?
+		ON CONFLICT (auth_key) DO UPDATE SET last_seen = excluded.last_seen`, time.Now().UTC().Format(time.RFC3339), key)
 	return err
 }
 
@@ -260,12 +248,25 @@ func (s *Store) CreateKey(description string) (AuthKey, error) {
 	return AuthKey{}, errors.New("could not generate a unique key")
 }
 
-// DeleteKey removes a key and returns the deleted row, or nil when there
-// was none.
+// DeleteKey removes a key, with what auth_key_activity holds of it, and
+// returns the deleted row, or nil when there was none.
 func (s *Store) DeleteKey(key string) (*AuthKey, error) {
+	withActivity, err := s.hasKeyActivity()
+	if err != nil {
+		return nil, err
+	}
 	var k AuthKey
 	var desc sql.NullString
-	err := s.execReturning(`DELETE FROM auth_keys WHERE auth_key = ? RETURNING auth_key, description`, []any{key}, &k.AuthKey, &desc)
+	err = s.tx(func(tx *sql.Tx) error {
+		if err := tx.QueryRow(`DELETE FROM auth_keys WHERE auth_key = ? RETURNING auth_key, description`, key).Scan(&k.AuthKey, &desc); err != nil {
+			return err
+		}
+		if !withActivity {
+			return nil
+		}
+		_, err := tx.Exec(`DELETE FROM auth_key_activity WHERE auth_key = ?`, key)
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

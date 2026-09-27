@@ -255,7 +255,7 @@ func TestKeyRoutesTouchLastSeenOncePerInterval(t *testing.T) {
 
 	// Within the interval nothing is written, even when the stored value
 	// changed underneath.
-	if _, err := a.sqldb.Exec(`UPDATE auth_keys SET last_seen = '2000-01-01T00:00:00Z'`); err != nil {
+	if _, err := a.sqldb.Exec(`UPDATE auth_key_activity SET last_seen = '2000-01-01T00:00:00Z'`); err != nil {
 		t.Fatal(err)
 	}
 	a.keyed("POST", "/api/tickets", `[]`)
