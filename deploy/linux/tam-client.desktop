@@ -1,16 +1,17 @@
-# Application-menu entry for running tam-client by hand on a computer: it
-# opens the browser itself, keeps its data under ~/.local/share/tam-client,
-# and stops from Alt+A, Shut Down TAM in the app. install.sh puts this file
-# under /usr/local/share/applications and the icon under
-# /usr/local/share/icons. Do not start it while the tam-client service is
-# running on the same port.
+# Application-menu entry of the client. It runs tam-client-open, which opens
+# the web app of the client already running on this computer (the tam-client
+# service, or one started by hand) and otherwise starts tam-client for whoever
+# clicked it, with the data under ~/.local/share/tam-client; that client opens
+# the browser itself and stops from Alt+A, Shut Down TAM. install.sh puts this
+# file under /usr/local/share/applications and the icon under
+# /usr/local/share/icons; the .deb and .rpm packages put them under /usr/share.
 [Desktop Entry]
 Type=Application
 Version=1.0
 Name=Ticket Auction Manager
 GenericName=Ticket auction client
-Comment=Run the TAM client and open it in the browser
-Exec=sh -c "TAM_DATA_DIR=\\"\\$HOME/.local/share/tam-client\\" exec /usr/local/bin/tam-client"
+Comment=Open the TAM client in the browser
+Exec=/usr/local/bin/tam-client-open
 Icon=tam-client
 Terminal=false
 Categories=Office;

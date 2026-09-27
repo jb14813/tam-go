@@ -1,15 +1,15 @@
 # Ticket Auction Manager on macOS
 
-`tam-go-<version>-darwin-arm64.tar.gz` is for Apple silicon (M1 and later), `tam-go-<version>-darwin-amd64.tar.gz` for Intel Macs. Both programs are plain command-line programs; nothing is installed unless you want them started at login (the launchd section below). In the release archive this file is `INSTALL.md`.
+Each program has its own archive: `tam-client-<version>-darwin-arm64.tar.gz` for a client computer and `tam-server-<version>-darwin-arm64.tar.gz` for the machine that hosts the server, on Apple silicon (M1 and later); `-darwin-amd64` instead of `-darwin-arm64` for Intel Macs. The programs need macOS 13 (Ventura) or later. Each is a plain command-line program; nothing is installed unless you want it started at login (the launchd section below). In the archive this file is `INSTALL.md`, next to the program and its launchd file. The commands below use `tam-client`; for the server, write `tam-server` instead.
 
 ## Unsigned downloads
 
-The programs are not signed with an Apple developer certificate, so macOS refuses them the first time ("cannot be opened because the developer cannot be verified", or "Apple could not verify ... is free of malware"). Clear the quarantine flag once, and make sure they are executable (some unzip tools drop the bit):
+The programs are not signed with an Apple developer certificate, so macOS refuses them the first time ("cannot be opened because the developer cannot be verified", or "Apple could not verify ... is free of malware"). Clear the quarantine flag once, and make sure the program is executable (some unzip tools drop the bit):
 
 ```sh
-cd tam-go-<version>-darwin-arm64
-xattr -dr com.apple.quarantine tam-server tam-client
-chmod +x tam-server tam-client
+cd tam-client-<version>-darwin-arm64
+xattr -dr com.apple.quarantine tam-client
+chmod +x tam-client
 ```
 
 ## Running by hand
@@ -23,38 +23,40 @@ Each keeps its data in a `data` folder in the directory it is started from, or i
 
 ## Starting at login with launchd
 
-The two plists next to this file are launch agents: they start the program when you log in, restart it after a crash, and keep its data under `~/Library/Application Support/tam-server` or `~/Library/Application Support/tam-client`, with the program's log (`tam-server.log`, `tam-client.log`) next to the database.
+The plist in the archive (`com.ticket-auction-manager.tam-client.plist` or `com.ticket-auction-manager.tam-server.plist`; `deploy/macos` in the repository has both) is a launch agent: it starts the program when you log in, restarts it after a crash, and keeps its data under `~/Library/Application Support/tam-client` or `~/Library/Application Support/tam-server`, with the program's log (`tam-client.log`, `tam-server.log`) next to the database. The client's agent listens on this computer only and does not open the browser: open http://localhost:3080/ when you need it.
 
-1. Put the programs where the plists expect them:
+1. Put the program where the plist expects it:
 
    ```sh
-   sudo install -m 755 tam-server tam-client /usr/local/bin/
+   sudo mkdir -p /usr/local/bin
+   sudo install -m 755 tam-client /usr/local/bin/
    ```
 
-2. Copy the plist of each program that should run at login (one or both):
+2. Copy the plist to your launch agents:
 
    ```sh
    mkdir -p ~/Library/LaunchAgents
-   cp com.ticket-auction-manager.tam-server.plist ~/Library/LaunchAgents/
+   cp com.ticket-auction-manager.tam-client.plist ~/Library/LaunchAgents/
    ```
 
 3. Start it now, and at every login from here on:
 
    ```sh
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ticket-auction-manager.tam-server.plist
-   launchctl print gui/$(id -u)/com.ticket-auction-manager.tam-server | head   # state and pid
-   curl http://localhost:8000/api
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ticket-auction-manager.tam-client.plist
+   launchctl print gui/$(id -u)/com.ticket-auction-manager.tam-client | head   # state and pid
+   curl http://localhost:3080/api
    ```
 
-   On macOS before 10.11 the commands are `launchctl load -w` and `launchctl unload`.
+   For the server, `curl http://localhost:8000/api`.
 
-4. To stop it and take it out of the login items:
+4. To stop it and take it out of the login items, stop it and remove its plist; `bootout` alone stops it only until the next login, which loads every plist in `~/Library/LaunchAgents` again:
 
    ```sh
-   launchctl bootout gui/$(id -u)/com.ticket-auction-manager.tam-server
+   launchctl bootout gui/$(id -u)/com.ticket-auction-manager.tam-client
+   rm ~/Library/LaunchAgents/com.ticket-auction-manager.tam-client.plist
    ```
 
-   `launchctl kickstart -k gui/$(id -u)/com.ticket-auction-manager.tam-server` restarts a running one. After editing a plist, bootout and bootstrap it again so launchd reads the new file.
+   `launchctl kickstart -k gui/$(id -u)/com.ticket-auction-manager.tam-client` restarts a running one, for example after installing a newer program in `/usr/local/bin`. After editing a plist, bootout and bootstrap it again so launchd reads the new file.
 
 The server's password is set on its admin page, http://localhost:8000/admin, on the first visit; to set it in the plist instead, uncomment the `EnvironmentVariables` block there, fill in `TAM_PWD`, and load the plist again. `KeepAlive` is limited to failures, so the client's Shut Down button and `bootout` stop a program until the next login, while a crash restarts it; `RunAtLoad` starts it at login.
 
