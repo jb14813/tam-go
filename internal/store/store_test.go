@@ -373,21 +373,25 @@ func TestAuthKeys(t *testing.T) {
 }
 
 func TestKeyLastSeen(t *testing.T) {
-	// Without the server migration there is no column: ListKeys still works
-	// and LastSeen stays empty, which keeps the JSON the original's.
+	// Without the server migration there is no auth_key_activity: ListKeys
+	// and DeleteKey still work and LastSeen stays empty, which keeps the
+	// JSON the original's.
 	plain := newTestStore(t)
 	k, err := plain.CreateKey("client")
 	must(t, err)
 	list, err := plain.ListKeys()
 	must(t, err)
 	if len(list) != 1 || list[0].LastSeen != "" {
-		t.Fatalf("ListKeys without the column = %+v", list)
+		t.Fatalf("ListKeys without the table = %+v", list)
 	}
 	if data, _ := json.Marshal(list[0]); strings.Contains(string(data), "last_seen") {
 		t.Fatalf("an unused key must not carry last_seen on the wire: %s", data)
 	}
 	if err := plain.TouchKey(k.AuthKey); err == nil {
-		t.Fatal("TouchKey without the column should fail")
+		t.Fatal("TouchKey without the table should fail")
+	}
+	if gone, err := plain.DeleteKey(k.AuthKey); err != nil || gone == nil {
+		t.Fatalf("DeleteKey without the table = %+v, %v", gone, err)
 	}
 
 	s := newTestStore(t)
@@ -408,6 +412,25 @@ func TestKeyLastSeen(t *testing.T) {
 		t.Fatalf("last_seen missing on the wire: %s", data)
 	}
 	must(t, s.TouchKey("NOT A KEY")) // no row, no error
+
+	// The time is kept beside auth_keys, which keeps the original's two
+	// columns, and goes with the key.
+	var rows int
+	must(t, s.db.QueryRow(`SELECT COUNT(*) FROM auth_key_activity`).Scan(&rows))
+	if rows != 1 {
+		t.Fatalf("auth_key_activity has %d rows, want the used key's only", rows)
+	}
+	if _, err := s.db.Exec(`INSERT INTO auth_keys VALUES ('ORIGINAL', 'inserted as the original server does')`); err != nil {
+		t.Fatalf("the original server's two-value insert: %v", err)
+	}
+	gone, err := s.DeleteKey(k.AuthKey)
+	if err != nil || gone == nil || gone.AuthKey != k.AuthKey {
+		t.Fatalf("DeleteKey = %+v, %v", gone, err)
+	}
+	must(t, s.db.QueryRow(`SELECT COUNT(*) FROM auth_key_activity`).Scan(&rows))
+	if rows != 0 {
+		t.Fatal("the last_seen of a deleted key is still kept")
+	}
 }
 
 func TestCounts(t *testing.T) {
