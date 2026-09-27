@@ -69,6 +69,15 @@ func TestMigrateOverDatabaseFromTheOriginalApp(t *testing.T) {
 			if err := Migrate(sqldb); err != nil {
 				t.Fatalf("Migrate over a %s database from the original app: %v", name, err)
 			}
+			// Each program's own additions must apply over the file as well,
+			// which is what happens when TAM_DATA_DIR points at the old folder.
+			more := map[string]func(*sql.DB) error{"client": MigrateClient, "server": MigrateServer}[name]
+			if err := more(sqldb); err != nil {
+				t.Fatalf("program-specific migration over a %s database from the original app: %v", name, err)
+			}
+			if err := more(sqldb); err != nil {
+				t.Fatalf("the migration must be safe to run again: %v", err)
+			}
 			var winner string
 			err := sqldb.QueryRow(`SELECT last_name FROM drawing WHERE prefix = 'CALL' AND b_id = 1`).Scan(&winner)
 			if err != nil || winner != "Data" {
