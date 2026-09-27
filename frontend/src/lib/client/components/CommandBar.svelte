@@ -94,9 +94,9 @@
 			>
 		{/if}
 		{#if functions.cancel}
+			<!-- No shortcut: Alt + S is Save Marked. -->
 			<button
 				class={bS[prefix.color]}
-				title="Alt + S"
 				onclick={() => {
 					const yes_no = confirm(
 						'This will cancel all pending changes. Are you sure you want to cancel?'
