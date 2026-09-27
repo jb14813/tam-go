@@ -83,7 +83,10 @@
 		// Resolves to false when the marked rows could not be saved.
 		async save(opts = {}) {
 			const problem = await saveMarked('/api/drawing', itemsBuffer, {
-				keepalive: !!opts.keepalive
+				keepalive: !!opts.keepalive,
+				// A drawing line stores its winning ticket; the winner's name
+				// beside it only shows the lookup, which may answer meanwhile.
+				saved: (line) => line.winning_ticket
 			});
 			if (problem) {
 				// A save from beforeunload cannot show anything.
