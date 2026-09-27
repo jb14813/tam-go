@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 pnpm_cmd="pnpm"
 if ! command -v pnpm >/dev/null 2>&1; then
-  pnpm_cmd="npx --yes pnpm@latest"
+  pnpm_cmd="npx --yes pnpm@12"
 fi
 
 case "${1:-}" in
