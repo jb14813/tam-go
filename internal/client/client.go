@@ -11,7 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,10 +25,11 @@ import (
 )
 
 type handler struct {
-	st   *store.Store
-	cfg  *config.File
-	sync *tamsync.Syncer
-	host string // this machine's name, under which the client names itself
+	st      *store.Store
+	cfg     *config.File
+	sync    *tamsync.Syncer
+	host    string // this machine's name, under which the client names itself
+	dataDir string // the folder of settings.json and the database
 
 	// shutdown, when set, is called after POST /api/shutdown has answered.
 	shutdown func()
@@ -41,8 +42,9 @@ type handler struct {
 	rcTLS  bool
 	rcPin  string
 
-	timings tamsync.Timings
-	runCtx  context.Context
+	timings     tamsync.Timings
+	runCtx      context.Context
+	syncStopped chan<- struct{}
 
 	// The last subnet sweep for servers, refreshed in the background.
 	sweepMu  sync.Mutex
@@ -67,6 +69,12 @@ func WithSyncLoop(ctx context.Context) Option {
 	return func(h *handler) { h.runCtx = ctx }
 }
 
+// WithSyncStopped has the handler close ch once the loop WithSyncLoop
+// started has stopped, so the program can close the database after it.
+func WithSyncStopped(ch chan<- struct{}) Option {
+	return func(h *handler) { h.syncStopped = ch }
+}
+
 // WithTimings shortens the syncer's delays (for tests).
 func WithTimings(t tamsync.Timings) Option {
 	return func(h *handler) { h.timings = t }
@@ -79,13 +87,18 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option
 }
 
 func newHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) *handler {
-	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings(), host: hostname()}
+	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings(), host: hostname(), dataDir: filepath.Dir(settingsPath)}
 	for _, opt := range opts {
 		opt(h)
 	}
 	h.sync = tamsync.New(st, h.cfg, h.remote, h.timings)
 	if h.runCtx != nil {
-		go h.sync.Run(h.runCtx)
+		go func() {
+			h.sync.Run(h.runCtx)
+			if h.syncStopped != nil {
+				close(h.syncStopped)
+			}
+		}()
 	}
 	return h
 }
@@ -265,8 +278,9 @@ func (s *spa) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// A missing asset is a 404; a missing page is the app itself.
-		if strings.Contains(path.Base(rel), ".") {
+		// A missing bundle file is a 404; any other address is a page of the
+		// app, whatever it looks like: a prefix may be named 5.00.
+		if strings.HasPrefix(rel, "_app/") && !strings.HasSuffix(rel, "/") {
 			http.NotFound(w, r)
 			return
 		}

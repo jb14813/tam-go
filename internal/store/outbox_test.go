@@ -93,30 +93,28 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("RetryFailed = %d, %v", n, err)
 	}
-	if next, _ := s.NextOutbox(); next == nil || next.ID != a {
-		t.Fatalf("a retried request keeps its place in the order: next = %+v", next)
+	// A retried request goes to the end of the queue, behind what still
+	// waits, as it is sent again after that (see RetryFailed).
+	if next, _ := s.NextOutbox(); next == nil || next.ID != b {
+		t.Fatalf("after a retry the request that waited comes first: next = %+v", next)
 	}
 	if p, f := counts(t, s); p != 2 || f != 0 {
 		t.Fatalf("counts = %d, %d; want 2, 0", p, f)
 	}
 
-	if err := s.FailOutbox(a, "again"); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := s.DiscardFailed(); err != nil || n != 1 {
-		t.Fatalf("DiscardFailed = %d, %v", n, err)
-	}
 	// Setting the queue aside (pairing with another server, unpairing)
-	// moves what waits to the failed list, with its id and the reason.
-	waiting, _ := s.NextOutbox()
-	if n, err := s.FailAllOutbox("set aside"); err != nil || n != 1 {
+	// moves what waits to the failed list, in order, with the reason.
+	if n, err := s.FailAllOutbox("set aside"); err != nil || n != 2 {
 		t.Fatalf("FailAllOutbox = %d, %v", n, err)
 	}
-	if p, f := counts(t, s); p != 0 || f != 1 {
-		t.Fatalf("counts after setting the queue aside = %d, %d; want 0, 1", p, f)
-	}
 	setAside, _ := s.ListFailed()
-	if len(setAside) != 1 || setAside[0].ID != waiting.ID || setAside[0].LastError != "set aside" {
-		t.Fatalf("failed list = %+v, want the request that waited, with the reason", setAside)
+	if len(setAside) != 2 || setAside[0].ID != b || string(setAside[1].Body) != `[1]` || setAside[1].ID <= b || setAside[0].LastError != "set aside" {
+		t.Fatalf("failed list = %+v, want the waiting request, then the retried one, with the reason", setAside)
+	}
+	if n, err := s.DiscardFailed(); err != nil || n != 2 {
+		t.Fatalf("DiscardFailed = %d, %v", n, err)
+	}
+	if p, f := counts(t, s); p != 0 || f != 0 {
+		t.Fatalf("counts after discarding = %d, %d; want 0, 0", p, f)
 	}
 }

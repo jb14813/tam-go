@@ -44,18 +44,26 @@ func Defaults() Settings {
 }
 
 // LoadError reports a settings file that could not be used. Load returns it
-// together with default settings so the application keeps working.
+// together with the settings of the backup copy (FromBackup), or else with
+// default settings, so the application keeps working.
 type LoadError struct {
-	Path string
-	Err  error
+	Path       string
+	Err        error
+	FromBackup bool // the settings returned are the backup's (BackupPath)
 }
 
 func (e *LoadError) Error() string { return fmt.Sprintf("settings file %s: %v", e.Path, e.Err) }
 func (e *LoadError) Unwrap() error { return e.Err }
 
+// BackupPath is where Save keeps a copy of the last settings it wrote, for
+// when the file itself cannot be read: a power cut can leave a file that was
+// being written empty or full of zeros, and a hand edit can break it.
+func BackupPath(path string) string { return path + ".bak" }
+
 // Load reads the settings file. A missing file is created with defaults. An
-// unreadable or malformed file yields defaults and a *LoadError; the file is
-// left untouched so a hand edit can be fixed.
+// unreadable or malformed file yields a *LoadError together with the backup
+// copy's settings when that copy is good, and defaults otherwise; the file
+// is left untouched so a hand edit can be fixed.
 func Load(path string) (Settings, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -65,28 +73,67 @@ func Load(path string) (Settings, error) {
 		}
 		return s, nil
 	}
-	if err != nil {
-		return Defaults(), &LoadError{Path: path, Err: err}
+	if err == nil {
+		s, perr := parse(data)
+		if perr == nil {
+			return s, nil
+		}
+		err = perr
 	}
+	if bak, rerr := os.ReadFile(BackupPath(path)); rerr == nil {
+		if s, perr := parse(bak); perr == nil {
+			return s, &LoadError{Path: path, Err: err, FromBackup: true}
+		}
+	}
+	return Defaults(), &LoadError{Path: path, Err: err}
+}
+
+// parse reads a settings document over the defaults. A file of nothing but
+// zeros or spaces, as a power cut can leave, is an error like any other.
+func parse(data []byte) (Settings, error) {
 	s := Defaults()
 	if err := json.Unmarshal(data, &s); err != nil {
-		return Defaults(), &LoadError{Path: path, Err: err}
+		return Defaults(), err
 	}
 	return s, nil
 }
 
-// Save writes the settings file. The document goes to a temporary file
-// that then replaces the real one, so a crash mid-write leaves the old
-// file intact. Windows refuses the replace while another process holds the
-// file open; the document is then written in place.
+// Save writes the settings file, then the same document as its backup copy
+// (BackupPath). Each goes to a temporary file, flushed to the disk, that
+// then replaces the real one, so a crash or a power cut mid-write leaves
+// the old file intact. Windows refuses the replace while another process
+// holds the file open; the document is then written in place.
 func Save(path string, s Settings) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
+	if err := replace(path, data); err != nil {
+		return err
+	}
+	if err := replace(BackupPath(path), data); err != nil {
+		log.Printf("settings backup %s: %v", BackupPath(path), err)
+	}
+	return nil
+}
+
+// replace writes data to path through a synced temporary file.
+func replace(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -101,42 +148,79 @@ func Save(path string, s Settings) error {
 // re-read only when its modification time or size changed, which is how a
 // hand edit is picked up while the daemon runs.
 type File struct {
-	path   string
-	mu     sync.RWMutex
-	cur    Settings
-	loaded bool
-	mtime  time.Time
-	size   int64
+	path    string
+	mu      sync.RWMutex
+	cur     Settings
+	loaded  bool
+	mtime   time.Time
+	size    int64
+	problem string // why the file could not be used, for the pages; "" when it could
 }
 
 // Open loads the settings file (creating it with defaults when missing)
-// and returns the live document. A broken file is logged; defaults are used
-// until it is fixed.
+// and returns the live document. A broken file is logged and reported by
+// Problem; the backup copy's settings are used until it is fixed, or the
+// defaults when there is no good copy.
 func Open(path string) *File {
 	f := &File{path: path}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.reload(); err != nil {
-		log.Printf("%v (using defaults)", err)
+		log.Printf("%v (%s)", err, f.problem)
+	} else if data, err := os.ReadFile(path); err == nil {
+		// A file written before backups were kept gets its copy now.
+		if bak, err := os.ReadFile(BackupPath(path)); err != nil || !bytes.Equal(bak, data) {
+			if err := replace(BackupPath(path), data); err != nil {
+				log.Printf("settings backup %s: %v", BackupPath(path), err)
+			}
+		}
 	}
 	return f
 }
 
+// Problem says why the settings file could not be used and what the client
+// does meanwhile, or "" when the file is fine. The pages show it.
+func (f *File) Problem() string {
+	f.Get() // picks up a fix made by hand
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.problem
+}
+
 // reload reads the file and remembers its stat. The caller holds mu for
-// writing. When the file cannot be used, the last good settings stay.
+// writing. When the file cannot be used, the last good settings stay: the
+// ones read before, or at start the backup copy's, or the defaults.
 func (f *File) reload() error {
 	s, err := Load(f.path)
 	if info, statErr := os.Stat(f.path); statErr == nil {
 		f.mtime, f.size = info.ModTime(), info.Size()
 	}
 	if err != nil {
-		if !f.loaded {
+		var le *LoadError
+		fromBackup := errors.As(err, &le) && le.FromBackup
+		switch {
+		case f.loaded:
+			f.problem = fmt.Sprintf("settings.json was changed and cannot be read (%v); the client keeps the settings it had. Fix the file or save the settings again.", unwrapLoad(err))
+		case fromBackup:
+			f.cur, f.loaded = s, true
+			f.problem = fmt.Sprintf("settings.json could not be read (%v); the client uses the copy it saved last (settings.json.bak). Save the settings again to repair the file.", unwrapLoad(err))
+		default:
 			f.cur = s
+			f.problem = fmt.Sprintf("settings.json could not be read (%v) and there is no good copy; the client runs with default settings, not paired with any server, until the file is fixed or the settings are saved again.", unwrapLoad(err))
 		}
 		return err
 	}
-	f.cur, f.loaded = s, true
+	f.cur, f.loaded, f.problem = s, true, ""
 	return nil
+}
+
+// unwrapLoad is the reason inside a *LoadError, without the path.
+func unwrapLoad(err error) error {
+	var le *LoadError
+	if errors.As(err, &le) {
+		return le.Err
+	}
+	return err
 }
 
 // changedOnDisk reports whether the file differs from what was last read.
@@ -185,7 +269,7 @@ func (f *File) Update(fn func(Settings) (Settings, error)) (Settings, error) {
 	if err := Save(f.path, next); err != nil {
 		return f.cur, err
 	}
-	f.cur, f.loaded = next, true
+	f.cur, f.loaded, f.problem = next, true, ""
 	if info, err := os.Stat(f.path); err == nil {
 		f.mtime, f.size = info.ModTime(), info.Size()
 	}

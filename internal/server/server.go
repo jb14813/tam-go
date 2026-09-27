@@ -3,7 +3,10 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -200,7 +203,8 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
-		if sw.status/100 == 2 {
+		// A repeat of a save already applied (X-TAM-Stale) changed nothing.
+		if sw.status/100 == 2 && sw.Header().Get("X-TAM-Stale") == "" {
 			h.presence.Updated(key)
 			h.markUpdated(key)
 		}
@@ -354,12 +358,24 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 // not make sense.
 var errOrder = errors.New("X-TAM-Client-Name must name the client, in at most 64 characters, and X-TAM-Save number its save, above 0")
 
+// behindError is a numbered save older than the last one applied from its
+// client (store.Behind); last is that last number.
+type behindError struct{ n, last int64 }
+
+func (e behindError) Error() string {
+	return fmt.Sprintf("save %d of this client is older than its save %d, which the server has applied; send it again with a number above %d", e.n, e.last, e.last)
+}
+
 // ordered runs a save in the order the client made it when the request
-// numbers it, as tam-client does: a save that is not newer than the last
-// one applied from that client is skipped (see store.InOrder) and the
-// answer says so with X-TAM-Stale; the client takes it as done. Saves
-// without numbers, as the original client sends them, apply as they come.
-func (h *handler) ordered(w http.ResponseWriter, r *http.Request, save func(*store.Store) error) (stale bool, err error) {
+// numbers it, as tam-client does (see store.InOrder). A repeat of the last
+// save applied from that client is not applied again, and the answer says
+// so with X-TAM-Stale; the client takes it as done. An older save is not
+// applied either, and is answered 409 with the last number applied
+// (X-TAM-Last-Save, and last_save in the body), so a client whose numbers
+// went back numbers it again and resends it. Saves without numbers, as the
+// original client sends them, apply as they come. content is the save as
+// decoded (nil when the path says it all), for the save's digest.
+func (h *handler) ordered(w http.ResponseWriter, r *http.Request, content any, save func(*store.Store) error) (stale bool, err error) {
 	client, number := r.Header.Get("X-TAM-Client-Name"), r.Header.Get("X-TAM-Save")
 	if client == "" && number == "" {
 		return false, save(h.st)
@@ -368,25 +384,45 @@ func (h *handler) ordered(w http.ResponseWriter, r *http.Request, save func(*sto
 	if client == "" || len(client) > 64 || perr != nil || n <= 0 {
 		return false, errOrder
 	}
-	applied, err := h.st.InOrder(client, n, save)
+	outcome, last, err := h.st.InOrder(client, n, digest(r, content), save)
 	if err != nil {
 		return false, err
 	}
-	if !applied {
+	switch outcome {
+	case store.Repeat:
 		w.Header().Set("X-TAM-Stale", "1")
-		log.Printf("skipped save %d of client %s: it arrived after a newer one (a late copy or a repeat)", n, client)
+		log.Printf("save %d of client %s arrived again; it was applied the first time", n, client)
+		return true, nil
+	case store.Behind:
+		log.Printf("save %d of client %s is older than its save %d, applied already; not applied, the client sends it again with a new number", n, client, last)
+		return false, behindError{n: n, last: last}
 	}
-	return !applied, nil
+	return false, nil
 }
 
-// write is ordered for the save routes: it answers a bad number (400) or a
-// failure (500) itself, and reports whether the save was stale and whether
-// the route goes on to answer.
-func (h *handler) write(w http.ResponseWriter, r *http.Request, save func(*store.Store) error) (stale, ok bool) {
-	stale, err := h.ordered(w, r, save)
+// digest names what a save says, for store.InOrder: its method, path and
+// query, and its content as decoded, so it does not depend on how the
+// client spaced its JSON.
+func digest(r *http.Request, content any) string {
+	body, _ := json.Marshal(content)
+	sum := sha256.Sum256([]byte(r.Method + " " + r.URL.Path + "?" + r.URL.Query().Encode() + "\n" + string(body)))
+	return hex.EncodeToString(sum[:])
+}
+
+// write is ordered for the save routes: it answers a bad number (400), a
+// save older than the client's last (409) or a failure (500) itself, and
+// reports whether the save was a repeat and whether the route goes on to
+// answer.
+func (h *handler) write(w http.ResponseWriter, r *http.Request, content any, save func(*store.Store) error) (stale, ok bool) {
+	stale, err := h.ordered(w, r, content, save)
+	var behind behindError
 	switch {
 	case errors.Is(err, errOrder):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return false, false
+	case errors.As(err, &behind):
+		w.Header().Set("X-TAM-Last-Save", strconv.FormatInt(behind.last, 10))
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{"detail": behind.Error(), "last_save": behind.last})
 		return false, false
 	case err != nil:
 		httpx.WriteInternal(w, err)
@@ -500,7 +536,7 @@ func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertPrefixes(ps) }); !ok {
+	if _, ok := h.write(w, r, ps, func(st *store.Store) error { return st.UpsertPrefixes(ps) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ps)
@@ -513,7 +549,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var gone *store.Prefix
-	stale, ok := h.write(w, r, func(st *store.Store) error {
+	stale, ok := h.write(w, r, nil, func(st *store.Store) error {
 		var err error
 		gone, err = st.DeletePrefix(name)
 		return err
@@ -568,7 +604,7 @@ func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertTickets(ts) }); !ok {
+	if _, ok := h.write(w, r, ts, func(st *store.Store) error { return st.UpsertTickets(ts) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ts)
@@ -617,7 +653,7 @@ func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertBaskets(bs) }); !ok {
+	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertBaskets(bs) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)
@@ -660,7 +696,7 @@ func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, func(st *store.Store) error { return st.UpsertWinning(bs) }); !ok {
+	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertWinning(bs) }); !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bs)

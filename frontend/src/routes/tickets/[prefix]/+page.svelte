@@ -1,7 +1,7 @@
 <script>
-	import { resolve } from '$app/paths';
+	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, postJSON, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -25,19 +25,44 @@
 		}
 	};
 
+	// The keys of the original's CALL/TEXT button, on the Pref select: C sets
+	// CALL, T sets TEXT, Space and Enter switch between them. The select's own
+	// handling of these keys is held back (its type-ahead kept "t" then "c"
+	// on TEXT, and Space opened the list); Tab, the arrow keys, the mouse and
+	// the Alt shortcuts work as usual.
+	function prefKey(e, item) {
+		if (e.altKey || e.ctrlKey || e.metaKey) return;
+		let pref;
+		if (e.key === 'c' || e.key === 'C') pref = 'CALL';
+		else if (e.key === 't' || e.key === 'T') pref = 'TEXT';
+		else if (e.key === ' ' || e.key === 'Enter') pref = item.pref === 'CALL' ? 'TEXT' : 'CALL';
+		else return;
+		e.preventDefault();
+		if (item.pref !== pref) {
+			item.pref = pref;
+			item.changed = true;
+		}
+	}
+
 	let pager = $state({ idFrom: 0, idTo: 0 });
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
 	const functions = {
-		async getPage() {
-			this.save();
+		// Saves the marked rows, then loads the pager's range, or `range` when given.
+		async getPage(range) {
+			// Rows that could not be saved stay on the page, with the message why.
+			if (!(await this.save())) return;
+			if (range) [pager.idFrom, pager.idTo] = range;
 			if (pager.idFrom > pager.idTo) {
 				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
 			}
 			if (pager.idTo - pager.idFrom > 300) {
 				pager.idTo = pager.idFrom + 300;
 			}
+			// Numbers start at 0: a row below it could not be saved.
+			if (pager.idFrom < 0) pager.idFrom = 0;
+			if (pager.idTo < 0) pager.idTo = 0;
 			let resData;
 			try {
 				resData = await getJSON(
@@ -59,18 +84,20 @@
 		pagerFromUpdate() {
 			pager.idTo = pager.idFrom + (itemsLength - 1);
 		},
+		// Resolves to false when the marked rows could not be saved.
 		async save(opts = {}) {
-			if (itemsBuffer.length > 0) {
-				const res = await postJSON('/api/tickets', itemsBuffer, { keepalive: !!opts.keepalive });
-				if (res.ok) {
-					itemsBuffer.forEach((i) => (i.changed = false));
-				} else {
-					alert('Error saving items.');
-				}
+			const problem = await saveMarked('/api/tickets', itemsBuffer, {
+				keepalive: !!opts.keepalive
+			});
+			if (problem) {
+				// A save from beforeunload cannot show anything.
+				if (!opts.keepalive) alert(problem);
+				return false;
 			}
 			setTimeout(() => {
 				focusIdx(0);
 			}, 1);
+			return true;
 		},
 		cancel() {
 			if (itemsBuffer.length > 0) {
@@ -79,12 +106,12 @@
 			}
 		},
 		prevPage() {
-			((pager.idFrom -= itemsLength), (pager.idTo -= itemsLength));
-			this.getPage();
+			// Stops at 0, keeping the page's size: 1-10 goes to 0-9.
+			const from = Math.max(0, pager.idFrom - itemsLength);
+			this.getPage([from, from + (pager.idTo - pager.idFrom)]);
 		},
 		nextPage() {
-			((pager.idFrom += itemsLength), (pager.idTo += itemsLength));
-			this.getPage();
+			this.getPage([pager.idFrom + itemsLength, pager.idTo + itemsLength]);
 		},
 		nextLine() {
 			if (items[nextIdx]) {
@@ -169,7 +196,7 @@
 					<div>Tickets:</div>
 					{#each prefixes as p (p.prefix)}
 						<a
-							href={resolve('/tickets/[prefix]', { prefix: p.prefix })}
+							href={prefixPage('/tickets/[prefix]', p.prefix)}
 							class={prefix.prefix == p.prefix ? bAS[p.color] : bS[p.color]}>{p.prefix}</a
 						>
 					{/each}
@@ -200,6 +227,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
+						aria-label="Ticket {item.t_id} first name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.first_name}
 					/></td
@@ -209,6 +237,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_second"
+						aria-label="Ticket {item.t_id} last name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.last_name}
 					/></td
@@ -218,6 +247,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_third"
+						aria-label="Ticket {item.t_id} phone number"
 						oninput={() => (item.changed = true)}
 						bind:value={item.phone_number}
 					/></td
@@ -226,6 +256,8 @@
 					><select
 						class="{iS.normal} w-full"
 						id="{idx}_fourth"
+						aria-label="Ticket {item.t_id} contact preference"
+						onkeydown={(e) => prefKey(e, item)}
 						onchange={() => (item.changed = true)}
 						bind:value={item.pref}
 					>

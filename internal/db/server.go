@@ -13,13 +13,24 @@ import (
 // shared with the original server keeps working. It is safe to run on
 // every start.
 func MigrateServer(sqldb *sql.DB) error {
-	// client_saves holds, per client, the number of the last save applied
-	// from it, so a copy of an older save the network delivers late is
-	// skipped (see store.InOrder).
+	// client_saves holds, per client, the number and digest of the last save
+	// applied from it, so a copy of an older save the network delivers late
+	// is skipped, and a repeat of the last one is told from a different save
+	// (see store.InOrder).
 	if _, err := sqldb.Exec(`CREATE TABLE IF NOT EXISTS client_saves (
 		client TEXT PRIMARY KEY,
-		last_save INTEGER NOT NULL)`); err != nil {
+		last_save INTEGER NOT NULL,
+		last_hash TEXT NOT NULL DEFAULT '')`); err != nil {
 		return fmt.Errorf("apply server schema: %w", err)
+	}
+	has, err := hasColumn(sqldb, "client_saves", "last_hash")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := sqldb.Exec(`ALTER TABLE client_saves ADD COLUMN last_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add client_saves.last_hash: %w", err)
+		}
 	}
 	return migrateKeyActivity(sqldb)
 }

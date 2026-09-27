@@ -1,6 +1,6 @@
 <script>
 	import { bS, iS, rBS, tS } from '$lib/client/styles';
-	import { postJSON } from '$lib/client/api';
+	import { getJSON, saveMarked, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
@@ -33,28 +33,40 @@
 	let searchForm = $state({ first_name: '', last_name: '', phone_number: '' });
 	let items = $state([]);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
+	// Whether a search has run, for what the empty table says.
+	let searched = $state(false);
 	const functions = {
 		async search() {
-			const searchParams = new URLSearchParams({ ...searchForm });
-			const res = await fetch(`/api/search/tickets?${searchParams.toString()}`);
-			if (res.ok) {
-				const resData = await res.json();
-				items = [...resData];
-				setTimeout(() => focusIdx(0), 1);
+			// Rows marked in the last results are saved first, as the forms do
+			// before they load other rows; the results would replace them.
+			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
+			if (problem) {
+				alert(problem);
+				return;
 			}
+			const searchParams = new URLSearchParams({ ...searchForm });
+			let resData;
+			try {
+				resData = await getJSON(`/api/search/tickets?${searchParams.toString()}`);
+			} catch (e) {
+				alert(`Error searching: ${errorMessage(e)}`);
+				return;
+			}
+			items = [...resData];
+			searched = true;
+			if (items.length > 0) setTimeout(() => focusIdx(0), 1);
 		},
+		// Resolves to false when the marked rows could not be saved.
 		async save() {
-			if (itemsBuffer.length > 0) {
-				const res = await postJSON('/api/search/tickets', itemsBuffer);
-				if (res.ok) {
-					itemsBuffer.forEach((i) => (i.changed = false));
-				} else {
-					alert('Error saving items.');
-				}
+			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
+			if (problem) {
+				alert(problem);
+				return false;
 			}
 			setTimeout(() => {
 				focusIdx(0);
 			}, 1);
+			return true;
 		},
 		nextLine() {
 			if (items[nextIdx]) {
@@ -171,6 +183,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
+						aria-label="Ticket {item.prefix} {item.t_id} first name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.first_name}
 					/></td
@@ -180,6 +193,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_second"
+						aria-label="Ticket {item.prefix} {item.t_id} last name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.last_name}
 					/></td
@@ -189,6 +203,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_third"
+						aria-label="Ticket {item.prefix} {item.t_id} phone number"
 						oninput={() => (item.changed = true)}
 						bind:value={item.phone_number}
 					/></td
@@ -224,8 +239,12 @@
 		{:else}
 			<tr>
 				<td class="p-0.5 border text-center" colspan="50">
-					No rows loaded. Please use the pager at the top to put in the first, then last number on
-					the sheet, click Go, and that should load in the sheet.
+					{#if searched}
+						No tickets match this search.
+					{:else}
+						Type a first name, last name or phone number (or part of one) above, then press Enter
+						or Search.
+					{/if}
 				</td>
 			</tr>
 		{/each}

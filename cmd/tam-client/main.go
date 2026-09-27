@@ -89,12 +89,14 @@ func main() {
 			}()
 		})
 	}
-	// The heartbeat and outbox replay run until the server stops serving.
+	// The heartbeat and outbox replay run until the server stops serving,
+	// and stop before the database closes.
 	syncCtx, stopSync := context.WithCancel(context.Background())
 	defer stopSync()
+	syncStopped := make(chan struct{})
 	srv = &http.Server{
 		Handler: client.NewHandler(store.New(sqldb), filepath.Join(dataDir, "settings.json"), dist,
-			client.WithShutdown(stop), client.WithSyncLoop(syncCtx)),
+			client.WithShutdown(stop), client.WithSyncLoop(syncCtx), client.WithSyncStopped(syncStopped)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute,
 		WriteTimeout:      2 * time.Minute,
@@ -139,6 +141,11 @@ func main() {
 		}, done)
 	} else {
 		<-done
+	}
+	stopSync()
+	select {
+	case <-syncStopped:
+	case <-time.After(3 * time.Second): // a request of the replay still on its way
 	}
 	if serveErr != nil {
 		log.Fatal(serveErr)

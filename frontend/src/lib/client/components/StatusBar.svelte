@@ -2,10 +2,14 @@
 	import { resolve } from '$app/paths';
 	import { pollJSON, saves } from '../api';
 
-	// The connection state of a client in remote mode, from GET /api/status.
-	// Nothing is rendered in standalone mode, when the client cannot be reached
-	// or when it does not have the route yet (an older client answers 404).
+	// Where the TAM client program stands, from GET /api/status: whether it
+	// answers at all, its connection to the server in remote mode, and a
+	// settings file it could not read (in any mode). Nothing is shown in
+	// standalone mode while all is well, nor when the client does not have
+	// the route yet (an older client answers 404). The bar is never printed.
 	let status = $state(null);
+	// The program did not answer: it was shut down or crashed.
+	let unreachable = $state(false);
 
 	const POLL_MS = 3000;
 
@@ -15,7 +19,8 @@
 		const poll = async () => {
 			const { status: code, data } = await pollJSON('/api/status');
 			if (stopped) return;
-			status = code === 200 && data && data.mode === 'remote' ? data : null;
+			unreachable = code === 0;
+			status = code === 200 && data ? data : null;
 			// An older client has no status route: no point asking again this page load.
 			if (code === 404) return;
 			timer = setTimeout(poll, POLL_MS);
@@ -36,45 +41,74 @@
 
 	const waiting = (n) => (n > 0 ? `, ${saves(n)} waiting` : '');
 
+	// The connection line: its colour, its text, and for the states only
+	// Settings can fix, a link there followed by `after`.
 	let view = $derived.by(() => {
-		if (!status) return null;
+		if (unreachable) {
+			return { color: 'red', text: 'TAM client not running: changes cannot be saved' };
+		}
+		if (!status || status.mode !== 'remote') return null;
 		const pending = Number(status.pending) || 0;
+		const server = status.server_name || status.server || 'server';
 		switch (status.state) {
 			case 'connected':
 				return {
 					color: 'green',
-					text: `Connected to ${status.server_name || status.server || 'server'}`,
-					settings: false
+					text: `Connected to ${server}${pending > 0 ? `, sending ${saves(pending)}` : ''}`
 				};
 			case 'reconnecting':
-				return { color: 'amber', text: `Reconnecting${waiting(pending)}`, settings: false };
+				return { color: 'amber', text: `Reconnecting${waiting(pending)}` };
 			case 'offline':
-				return { color: 'red', text: `Offline${waiting(pending)}`, settings: false };
+				return { color: 'red', text: `Offline${waiting(pending)}` };
 			case 'unauthenticated':
-				return { color: 'red', text: "The server rejected this client's key, open", settings: true };
+				return {
+					color: 'red',
+					text: `The server rejected this client's key${waiting(pending)}: open`,
+					settings: 'and pair again'
+				};
+			case 'certificate':
+				return {
+					color: 'red',
+					text: `The server's certificate changed${waiting(pending)}: open`,
+					settings: 'and pair again'
+				};
 			default:
-				return { color: 'gray', text: String(status.state || 'Unknown state'), settings: false };
+				return { color: 'gray', text: String(status.state || 'Unknown state') };
 		}
 	});
 
-	let failed = $derived((status && Number(status.failed)) || 0);
+	let failed = $derived((!unreachable && status && Number(status.failed)) || 0);
+	// settings.json could not be read: the client runs on its last good copy or on defaults.
+	let settingsError = $derived(
+		(!unreachable && status && typeof status.settings_error === 'string' && status.settings_error) ||
+			''
+	);
 </script>
 
-{#if view}
-	<div
-		id="status_bar"
-		role="status"
-		class="w-full truncate border-b px-2 py-0.5 text-sm {colors[view.color]}"
-	>
-		<span>
-			{view.text}
-			{#if view.settings}<a href={resolve('/settings')} class="font-bold underline">Settings</a>{/if}
-		</span>
-		{#if failed > 0}
-			<span class="font-bold">
-				&middot; {saves(failed)} could not be sent, open
-				<a href={resolve('/settings')} class="underline">Settings</a>
-			</span>
+{#if view || failed > 0 || settingsError}
+	<div id="status_bar" role="status" class="w-full text-sm print:hidden">
+		{#if view || failed > 0}
+			<div class="w-full truncate border-b px-2 py-0.5 {colors[view ? view.color : 'red']}">
+				{#if view}
+					<span>
+						{view.text}
+						{#if view.settings}<a href={resolve('/settings')} class="font-bold underline"
+								>Settings</a
+							>
+							{view.settings}{/if}
+					</span>
+				{/if}
+				{#if failed > 0}
+					<span class="font-bold">
+						{#if view}&middot;{/if}
+						{saves(failed)} could not be sent, open
+						<a href={resolve('/settings')} class="underline">Settings</a>
+					</span>
+				{/if}
+			</div>
+		{/if}
+		{#if settingsError}
+			<div class="w-full border-b px-2 py-0.5 break-words {colors.red}">{settingsError}</div>
 		{/if}
 	</div>
 {/if}
