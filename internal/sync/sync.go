@@ -91,6 +91,7 @@ type Syncer struct {
 	touched    map[string]bool // rows saved since the running pull began; nil when none runs
 	pulling    func()          // tests: runs as a pull starts
 	pullAt     time.Time       // no mirror pull before this, after a download that could not be used
+	running    context.Context // Run's context; the replay stops between saves when it ends
 
 	// numbering is held while a save is numbered and then sent or queued,
 	// so saves are numbered, queued and sent directly in one order (see
@@ -354,6 +355,9 @@ func (s *Syncer) Status() Status {
 // Run pings the server, replays the outbox and refreshes the mirror until
 // ctx ends. It is the only goroutine that talks to the server on its own.
 func (s *Syncer) Run(ctx context.Context) {
+	s.mu.Lock()
+	s.running = ctx
+	s.mu.Unlock()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -436,11 +440,22 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 // pull a mirror it cannot trust.
 func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
 	for ; ; handled++ {
+		if s.stopping() {
+			return handled, false
+		}
 		took, ok := s.replayOne(rc)
 		if !took || !ok {
 			return handled, ok
 		}
 	}
+}
+
+// stopping reports that Run's context has ended: the program is shutting
+// down, and the replay stops between saves so the database can close.
+func (s *Syncer) stopping() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running != nil && s.running.Err() != nil
 }
 
 // replayOne sends the oldest queued request, holding the way to the server
