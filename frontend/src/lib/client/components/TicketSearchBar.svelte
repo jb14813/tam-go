@@ -32,6 +32,14 @@
 			hotkeys.unbind('alt+e', selectPhoneNumber);
 		};
 	});
+
+	// Enter in any of the boxes runs the search, as the Search button does.
+	const searchOnEnter = (e) => {
+		if (e.key === 'Enter' && functions.search) {
+			e.preventDefault();
+			functions.search();
+		}
+	};
 </script>
 
 <div class="flex flex-row justify-between gap-1 p-1">
@@ -43,6 +51,7 @@
 			class={iS.normal}
 			bind:value={searchForm.first_name}
 			onclick={(e) => e.target.select()}
+			onkeydown={searchOnEnter}
 		/>
 		<div>Last Name:</div>
 		<input
@@ -51,6 +60,7 @@
 			class={iS.normal}
 			bind:value={searchForm.last_name}
 			onclick={(e) => e.target.select()}
+			onkeydown={searchOnEnter}
 		/>
 		<div>Phone Number:</div>
 		<input
@@ -59,6 +69,7 @@
 			class={iS.normal}
 			bind:value={searchForm.phone_number}
 			onclick={(e) => e.target.select()}
+			onkeydown={searchOnEnter}
 		/>
 		{#if functions.search}
 			<button class={bS[prefix.color]} onclick={() => functions.search()}>Search</button>
