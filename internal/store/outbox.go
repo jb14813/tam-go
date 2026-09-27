@@ -158,11 +158,13 @@ func (s *Store) OutboxWaiting() (bool, error) {
 	return waiting, err
 }
 
-// RetryFailed moves every failed request back to the outbox, in its
+// RetryFailed moves every failed request to the end of the outbox, in its
 // original order, and returns how many it moved. Each gets a new number
-// (see NextSave; host is this machine's name): it is sent again now, after
-// the client's newer saves, and under its old number the server would skip
-// it as stale.
+// (see NextSave; host is this machine's name) and a new place in the queue:
+// it is sent again now, after the saves already queued, and the server
+// takes a client's saves in the order of their numbers (see InOrder), so
+// the queue must be in that order too. The caller holds the client's saves
+// in line meanwhile (sync.Syncer.Sending).
 func (s *Store) RetryFailed(host string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
@@ -192,8 +194,8 @@ func (s *Store) RetryFailed(host string) (int, error) {
 				return err
 			}
 		}
-		res, err := tx.Exec(`INSERT INTO outbox (id, created_at, method, path, body, attempts, last_error, client, save_number)
-			SELECT id, created_at, method, path, body, attempts, last_error, client, save_number FROM outbox_failed`)
+		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, attempts, last_error, client, save_number)
+			SELECT created_at, method, path, body, attempts, last_error, client, save_number FROM outbox_failed ORDER BY id`)
 		if err != nil {
 			return err
 		}

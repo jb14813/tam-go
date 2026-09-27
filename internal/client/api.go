@@ -205,6 +205,29 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
+// sendNumbered sends a numbered save to the server now. When the server
+// answers that the save is older than the last one it applied from this
+// client (its data folder was put back from a copy, see store.InOrder), the
+// save is numbered past the server's count and sent again; order follows,
+// so a save that ends up queued keeps its latest number. The caller holds
+// the client's saves in line (Syncer.Sending).
+func (h *handler) sendNumbered(rc *remote.Client, method, path string, order *store.Order, body any) (*remote.Response, error) {
+	for attempt := 1; ; attempt++ {
+		res, err := rc.WithTimeout(writeTimeout).Do(method, path, tamsync.OrderHeaders(*order), body)
+		last, behind := tamsync.LastSave(res)
+		if err != nil || !behind || attempt == 3 {
+			return res, err
+		}
+		next, nerr := h.st.NextSaveAfter(h.host, last)
+		if nerr != nil {
+			log.Printf("save order: %v", nerr)
+			return res, err
+		}
+		log.Printf("server: this client's save %d is older than its save %d there (was its data folder put back from a copy?); sending it again as save %d", order.Save, last, next.Save)
+		*order = next
+	}
+}
+
 // prefixRow, ticketRow and basketRow name the rows a save writes.
 func prefixRow(p store.Prefix) string { return tamsync.Row("prefixes", p.Prefix, 0) }
 func ticketRow(t store.Ticket) string { return tamsync.Row("tickets", t.Prefix, t.TID) }
@@ -250,14 +273,17 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 		return
 	}
 	// The save is numbered before it leaves: sent now or queued, it is the
-	// same save to the server (see store.InOrder).
+	// same save to the server (see store.InOrder). Until it is answered or
+	// queued, this client's other saves wait, so they reach the server, and
+	// the queue, in the order of their numbers.
+	defer h.sync.Sending()()
 	order, err := h.st.NextSave(h.host)
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
 	if h.inStep() {
-		res, err := rc.WithTimeout(writeTimeout).Do(http.MethodPost, remotePath, tamsync.OrderHeaders(order), json.RawMessage(body))
+		res, err := h.sendNumbered(rc, http.MethodPost, remotePath, &order, json.RawMessage(body))
 		if h.observe(err, res) {
 			if !res.OK() {
 				forward(w, res)
@@ -408,6 +434,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	var order store.Order
 	if rc != nil {
 		defer h.sync.BeginSave([]string{prefixRow(store.Prefix{Prefix: name})})()
+		defer h.sync.Sending()() // numbered and sent or queued in line, as a save
 		var err error
 		if order, err = h.st.NextSave(h.host); err != nil {
 			httpx.WriteInternal(w, err)
@@ -415,7 +442,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		}
 		queue = true
 		if h.inStep() {
-			res, err := rc.WithTimeout(writeTimeout).Do(http.MethodDelete, remotePath, tamsync.OrderHeaders(order), nil)
+			res, err := h.sendNumbered(rc, http.MethodDelete, remotePath, &order, nil)
 			if h.observe(err, res) {
 				queue = false
 				if res.OK() {
