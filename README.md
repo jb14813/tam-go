@@ -258,6 +258,8 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - 500 and 502 responses carry a generic message; the reason is in the daemon's log.
 - `tam-server dev` binds localhost only when `-addr` is not given.
 - The counts report labels its last row `Total` on both daemons (the original server said `Totals`); the report views are recreated on every start so an older database picks that up.
+- A ticket numbered 0 is not the winner of the baskets not drawn yet: the report views join a winner only when a basket has a winning ticket (the original's views take the 0 of an undrawn basket as ticket 0).
+- The server password, whether for the admin page or for creating keys (`TAM-PW`), takes five wrong guesses per address and then waits 30 seconds; the original checks every guess.
 
 ## Layout
 
@@ -276,6 +278,7 @@ internal/sync                    connection state, heartbeat, outbox replay, mir
 internal/tlscert                 the self-signed certificate of tam-server -tls
 internal/discovery               mDNS announce (server) and browse (client)
 internal/admin                   the server's login-protected admin pages and password file
+internal/guard                   the limit on password guesses, shared by the admin login and the API
 scripts/compat                   the compatibility run against the original tam
 scripts/loadtest                 the load test: a whole event through one server and many clients
 flake.nix, nix/                  the Nix package, the NixOS module for both services and its NixOS test
