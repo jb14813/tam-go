@@ -496,6 +496,54 @@ func TestTicketsBasketsDrawingReports(t *testing.T) {
 	}
 }
 
+// TestTicketZeroWinsNothing: winning ticket 0 means the basket is not drawn
+// yet, so a ticket numbered 0 must not show as the winner of every basket
+// still to draw, on the drawing or in the reports; a drawn basket still
+// shows its winner.
+func TestTicketZeroWinsNothing(t *testing.T) {
+	a := newAPI(t)
+	for _, post := range []struct {
+		path string
+		body any
+	}{
+		{"/api/tickets", []store.Ticket{
+			{Prefix: "A", TID: 0, FirstName: "Zero", LastName: "Zed", PhoneNumber: "000", Pref: "CALL"},
+			{Prefix: "A", TID: 5, FirstName: "Fay", LastName: "Five", PhoneNumber: "555", Pref: "TEXT"},
+		}},
+		{"/api/baskets", []store.Basket{{Prefix: "A", BID: 1, Description: "Wine"}, {Prefix: "A", BID: 2, Description: "Cheese"}}},
+		{"/api/drawing", []store.Basket{{Prefix: "A", BID: 2, WinningTicket: 5}}},
+	} {
+		if code, body := a.keyed("POST", post.path, post.body); code != 200 {
+			t.Fatalf("POST %s = %d %s", post.path, code, body)
+		}
+	}
+
+	_, body := a.keyed("GET", "/api/drawing/A", nil)
+	drawing := decode[[]store.DrawingLine](t, body)
+	if len(drawing) != 2 || drawing[0].LastName != "" || drawing[0].FirstName != "" || drawing[0].PhoneNumber != "" || drawing[1].LastName != "Five" {
+		t.Fatalf("drawing = %+v; want basket 1 without a winner and basket 2 won by Five", drawing)
+	}
+	_, body = a.keyed("GET", "/api/drawing/A/1", nil)
+	if single := decode[[]store.DrawingLine](t, body); len(single) != 1 || single[0].LastName != "" {
+		t.Fatalf("drawing line 1 = %+v, want no winner", single)
+	}
+	_, body = a.keyed("GET", "/api/reports/byname/A", nil)
+	byName := decode[[]store.ReportByNameLine](t, body)
+	if len(byName) != 2 {
+		t.Fatalf("by name = %+v", byName)
+	}
+	for _, l := range byName {
+		if l.BID == 1 && (l.LastName != "" || l.FirstName != "" || l.PhoneNumber != "" || l.Pref != "") || l.BID == 2 && l.LastName != "Five" {
+			t.Fatalf("by name = %+v; want basket 1 without a winner and basket 2 won by Five", byName)
+		}
+	}
+	_, body = a.keyed("GET", "/api/reports/bybasket/A", nil)
+	byBasket := decode[[]store.ReportByBasketLine](t, body)
+	if len(byBasket) != 2 || byBasket[0].LastName != "" || byBasket[1].LastName != "Five" {
+		t.Fatalf("by basket = %+v; want basket 1 without a winner and basket 2 won by Five", byBasket)
+	}
+}
+
 func TestBackupRoundTrip(t *testing.T) {
 	a := newAPI(t)
 	a.keyed("POST", "/api/prefixes", []store.Prefix{{Prefix: "A", Color: "red", Weight: 1}})

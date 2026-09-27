@@ -44,19 +44,22 @@ type View struct {
 	SQL  string
 }
 
-// Views are the report views of the original.
+// Views are the report views of the original, but for one thing: a basket
+// joins its winner only once it is drawn. Winning ticket 0 means not drawn
+// yet, and the original's join made a ticket numbered 0 the winner of every
+// basket still to draw.
 var Views = []View{
 	{"drawing", `CREATE VIEW drawing AS
 		SELECT b.prefix, b.b_id, b.description, b.winning_ticket, t.last_name, t.first_name, t.phone_number
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY b.prefix, b.b_id`},
 	{"report_by_name", `CREATE VIEW report_by_name AS
 		SELECT t.last_name, t.first_name, t.phone_number, t.pref, b.prefix, b.b_id, b.description, b.donors, b.winning_ticket
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY t.last_name, t.first_name, t.phone_number, b.prefix, b.b_id`},
 	{"report_by_basket", `CREATE VIEW report_by_basket AS
 		SELECT b.prefix, b.b_id, b.description, b.donors, b.winning_ticket, t.last_name, t.first_name, t.phone_number, t.pref
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY b.prefix, b.b_id`},
 	{"report_counts", `CREATE VIEW report_counts AS
 		SELECT prefix, COUNT(DISTINCT(CONCAT(first_name, last_name, phone_number))) AS unique_buyers, COUNT(*) AS total_buys
