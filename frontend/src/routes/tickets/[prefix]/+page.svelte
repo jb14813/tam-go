@@ -227,6 +227,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
+						aria-label="Ticket {item.t_id} first name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.first_name}
 					/></td
@@ -236,6 +237,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_second"
+						aria-label="Ticket {item.t_id} last name"
 						oninput={() => (item.changed = true)}
 						bind:value={item.last_name}
 					/></td
@@ -245,6 +247,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_third"
+						aria-label="Ticket {item.t_id} phone number"
 						oninput={() => (item.changed = true)}
 						bind:value={item.phone_number}
 					/></td
@@ -253,6 +256,7 @@
 					><select
 						class="{iS.normal} w-full"
 						id="{idx}_fourth"
+						aria-label="Ticket {item.t_id} contact preference"
 						onkeydown={(e) => prefKey(e, item)}
 						onchange={() => (item.changed = true)}
 						bind:value={item.pref}

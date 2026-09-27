@@ -227,6 +227,7 @@
 						type="number"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
+						aria-label="Basket {item.b_id} winning ticket"
 						oninput={() => {
 							item.changed = true;
 							showWinner(item);

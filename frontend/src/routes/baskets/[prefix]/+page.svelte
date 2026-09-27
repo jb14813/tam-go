@@ -203,6 +203,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
+						aria-label="Basket {item.b_id} description"
 						oninput={() => (item.changed = true)}
 						bind:value={item.description}
 					/></td
@@ -212,6 +213,7 @@
 						type="text"
 						class="{iS.normal} w-full"
 						id="{idx}_second"
+						aria-label="Basket {item.b_id} donors"
 						oninput={() => (item.changed = true)}
 						bind:value={item.donors}
 					/></td
