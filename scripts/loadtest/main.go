@@ -58,6 +58,10 @@ type options struct {
 	keep                                      bool
 	seed                                      uint64
 	server, password, kill, restart           string
+	wifi                                      float64
+	wifiDrop, late, crashDown, storm          time.Duration
+	crashes                                   int
+	tls                                       bool
 }
 
 func main() {
@@ -74,6 +78,13 @@ func main() {
 	flag.StringVar(&o.bin, "bin", "", "folder with the tam-server and tam-client to test; by default both are built from this checkout")
 	flag.BoolVar(&o.keep, "keep", false, "keep the data folders and logs of a passing run")
 	flag.Uint64Var(&o.seed, "seed", 1, "seed of the made-up event")
+	flag.Float64Var(&o.wifi, "wifi", 0.25, "share of the laptops whose Wi-Fi drops once during ticket entry, silently; 0 for none")
+	flag.DurationVar(&o.wifiDrop, "wifi-drop", 12*time.Second, "how long their Wi-Fi is gone")
+	flag.DurationVar(&o.late, "late", 10*time.Second, "how late data held during a Wi-Fi drop may still arrive once it is back, as TCP retransmits")
+	flag.IntVar(&o.crashes, "crashes", 2, "laptops that crash (the program killed) while the server is down, and start again")
+	flag.DurationVar(&o.crashDown, "crash-down", 3*time.Second, "how long a crashed laptop stays off")
+	flag.DurationVar(&o.storm, "storm", 5*time.Second, "how long every laptop saves the same few tickets at once; 0 to skip")
+	flag.BoolVar(&o.tls, "tls", false, "run the server over HTTPS, with the laptops pinning its certificate")
 	flag.StringVar(&o.server, "server", "", "use the tam-server already running at this address (http://host:port) instead of starting one; it should have no data yet")
 	flag.StringVar(&o.password, "password", os.Getenv("TAM_PWD"), "with -server: that server's password (default $TAM_PWD)")
 	flag.StringVar(&o.kill, "kill", "", "with -server: a command that kills that server, for the outage (run by cmd on Windows, sh elsewhere)")
@@ -98,7 +109,13 @@ func (o options) valid() error {
 		return errors.New("-baskets must be at least -prefixes")
 	case o.page < 1 || o.page > 300:
 		return errors.New("-page must be between 1 and 300, the most a form shows")
-	case o.entry < 0 || o.outage < 0 || o.rush < 0 || o.settle <= 0:
+	case o.wifi < 0 || o.wifi > 1:
+		return errors.New("-wifi must be between 0 and 1")
+	case o.crashes < 0:
+		return errors.New("-crashes must not be negative")
+	case o.server != "" && o.tls:
+		return errors.New("with -server, give an https:// address instead of -tls")
+	case o.entry < 0 || o.outage < 0 || o.rush < 0 || o.settle <= 0 || o.wifiDrop < 0 || o.late < 0 || o.crashDown < 0 || o.storm < 0:
 		return errors.New("durations must not be negative, and -settle must be more than 0")
 	case o.server == "" && (o.kill != "" || o.restart != ""):
 		return errors.New("-kill and -restart go with -server")

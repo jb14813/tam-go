@@ -172,6 +172,8 @@ go run ./scripts/loadtest -laptops 50 -tickets 9000 -baskets 1000
 go run ./scripts/loadtest -h
 ```
 
+Along the way, every laptop reaches the server through a relay of its own, its Wi-Fi: a quarter of them lose it silently for 12 seconds between opening a sheet and saving it (the relay holds what was sent and delivers it up to 10 seconds after the link is back, as TCP retransmissions do, so a save the laptop gave up on can arrive after its replay), and the volunteer types a row again after a save that hung. Two laptops crash while the server is down and start again with their queue. An admin deletes a laptop's key and the volunteer pairs again. Then every laptop saves the same ten tickets at once for five seconds. The checks include that every save reaches the server in the order it was made, that nothing queued is lost, that tickets saved by everyone end whole and read the same on every laptop, and that no page waited more than six seconds. `-tls` runs it all over HTTPS; `-h` lists the knobs.
+
 It exits with status 1 when a check fails and then keeps the data folders and logs for a look. `-bin <folder>` tests programs built elsewhere, such as a release or a build with `-race`.
 
 To test over a real network, start `tam-server` on another machine with an empty data folder and a password, and point the laptops at it; `-kill` and `-restart` take the commands that kill that server and start it again (through ssh, for example) for the outage, and without them the run has no outage:
@@ -223,7 +225,7 @@ What happens with the connection:
 
 - **Reads** come from the server while it answers and nothing saved on this laptop is still waiting to reach it, and are copied into the laptop's own database on the way. Otherwise the pages read that copy, so the forms, reports and search keep working, and a sheet saved while the server was away shows what was saved until the server has it too. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything; rows the laptop saves while that download is on its way keep what was saved.
 - **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), or this laptop still has saves waiting for it, the rows are stored on the laptop and queued in an outbox behind the ones already there, so the server takes a laptop's saves in the order they were made; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again with the same server (at its old address, or by its name at a new one) sends it. Pairing with another server, or unpairing, sets the saves still queued aside in the failed list rather than sending them anywhere by themselves.
-- **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A laptop replaying an old edit after another laptop changed the same ticket wins with the older edit.
+- **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A laptop replaying an old edit after another laptop changed the same ticket wins with the older edit. Within one laptop, its saves apply in the order it made them: when the Wi-Fi drops in the middle of a save, the network may still deliver that request seconds after the laptop gave up on it and sent it again, and the server skips that late copy instead of letting it undo newer saves (see API).
 - **Refused saves** (the server answered 4xx during a replay), and saves set aside when the laptop paired with another server or was unpaired, are kept in a failed list, counted in the bar, and can be retried (sent to the server the laptop is paired with now) or discarded from Settings. Nothing queued is ever dropped without a Discard.
 
 Backup/Restore can still push the local prefixes, tickets or baskets to the server and download the server's data; those two actions are direct and report failure instead of queueing.
@@ -287,6 +289,8 @@ Both daemons answer JSON with the original's field names and `{"detail": "..."}`
 | `/admin/...` | login, status, keys, backup, password (HTML) | |
 
 Writes to the client require `Content-Type: application/json`, and a browser request from another site (`Sec-Fetch-Site: cross-site`) is refused, which replaces the original's per-process client id header.
+
+`tam-client` names and numbers the saves it sends to the server: `X-TAM-Laptop` is the laptop's name (made once and kept with its data; a data folder copied to another machine makes a new one) and `X-TAM-Save` a number that only grows. `tam-server` applies a numbered save only when it is newer than the last one it applied from that laptop, and answers an older one, or a repeat, `200` with `X-TAM-Stale: 1` without applying it, so a request the network delivers late cannot undo newer saves. Saves without the headers, as the original client sends them, apply as they come, and the original server ignores the headers.
 
 ## Differences from the original
 

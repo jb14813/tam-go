@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 
 // web is how the simulated browsers and the checks reach the programs: many
 // connections kept open, never through a proxy.
+// A server run with -tls has a self-signed certificate; the laptops pin it,
+// and the test itself only needs to reach it.
 var web = &http.Client{
 	Timeout: time.Minute,
 	Transport: &http.Transport{
@@ -28,13 +31,14 @@ var web = &http.Client{
 		MaxIdleConns:        4096,
 		MaxIdleConnsPerHost: 64,
 		IdleConnTimeout:     time.Minute,
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 	},
 }
 
 // probe asks whether a program answers yet.
 var probe = &http.Client{
 	Timeout:   2 * time.Second,
-	Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+	Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 }
 
 // program is one tam-server or tam-client under test.
