@@ -22,7 +22,7 @@ const outboxCols = `id, created_at, method, path, body, attempts, last_error`
 
 // EnqueueOutbox appends a request to the outbox and returns its id.
 func (s *Store) EnqueueOutbox(method, path string, body []byte) (int64, error) {
-	res, err := s.db.Exec(`INSERT INTO outbox (created_at, method, path, body) VALUES (?, ?, ?, ?)`,
+	res, err := s.exec(`INSERT INTO outbox (created_at, method, path, body) VALUES (?, ?, ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339Nano), method, path, body)
 	if err != nil {
 		return 0, err
@@ -74,13 +74,13 @@ func (s *Store) ListFailed() ([]Outbox, error) {
 
 // DeleteOutbox removes a request the server has taken.
 func (s *Store) DeleteOutbox(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM outbox WHERE id = ?`, id)
+	_, err := s.exec(`DELETE FROM outbox WHERE id = ?`, id)
 	return err
 }
 
 // NoteOutboxAttempt records a failed attempt that will be retried.
 func (s *Store) NoteOutboxAttempt(id int64, errText string) error {
-	_, err := s.db.Exec(`UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?`, errText, id)
+	_, err := s.exec(`UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?`, errText, id)
 	return err
 }
 
@@ -135,7 +135,7 @@ func (s *Store) RetryFailed() (int, error) {
 
 // DiscardFailed drops every failed request and returns how many there were.
 func (s *Store) DiscardFailed() (int, error) {
-	res, err := s.db.Exec(`DELETE FROM outbox_failed`)
+	res, err := s.exec(`DELETE FROM outbox_failed`)
 	if err != nil {
 		return 0, err
 	}
