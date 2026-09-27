@@ -112,3 +112,26 @@ jobs:
           mkdir -p "$RUNNER_TEMP/tam"
           go build -race -o "$RUNNER_TEMP/tam/" ./cmd/tam-server ./cmd/tam-client
           go run -race ./scripts/loadtest -bin "$RUNNER_TEMP/tam" -laptops 12 -tickets 3000 -baskets 500 -entry 20s -outage 5s -rush 5s
+
+  nix:
+    name: Nix package and NixOS test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Let the NixOS test use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: Package (the web app and both programs, with the unit tests)
+        run: nix build -L
+
+      - name: NixOS test (a server, a laptop that pairs with it, and an HTTPS server)
+        run: nix flake check -L

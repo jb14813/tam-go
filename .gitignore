@@ -4,3 +4,4 @@
 /build/
 /cmd/tam-client/dist/
 .claude-flow/
+/result

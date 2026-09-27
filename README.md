@@ -89,6 +89,12 @@ To test over a real network, start `tam-server` on another machine with an empty
 go run ./scripts/loadtest -server http://<that machine>:8000 -password <its password> -laptops 100
 ```
 
+With Nix, the package and the NixOS module have their own check: it builds the package, which runs the unit tests in the build sandbox, and starts three NixOS machines (it needs KVM). A laptop finds the server by its announcement, pairs with it, saves a prefix and a ticket, and the ticket is on the server, also after both services restart; a second server serves HTTPS with a certificate of its own; and Shut Down TAM stops the laptop's service until it is started again:
+
+```
+nix flake check -L
+```
+
 ## Configuration
 
 | Setting | Where | Default |
@@ -147,15 +153,60 @@ The API is the original's, so the original `tam-client` (Linux/Docker) and the G
 
 ## Deployment
 
-Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime involved. The original's Docker, Caddy, portable-Node and NixOS deployment files are therefore not carried over; the server's `-tls` flag replaces the reverse proxy.
+Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime involved. The original's Docker, Caddy and portable-Node deployment files are therefore not carried over, the server's `-tls` flag replaces the reverse proxy, and on NixOS this repository's flake replaces `nixos/tam.nix` (see [NixOS](#nixos)).
 
 | Original | Here |
 |---|---|
 | `dbob16/tam-client` container on port 3000 | `tam-client` (or `tam-client.exe`) on port 3080 |
 | `dbob16/tam-server` container plus a Caddy proxy on 8443 | `tam-server -tls` on 8443, or `tam-server` on 8000 |
 | Data volume `/data` | the `data` folder next to the program, or `TAM_DATA_DIR` |
+| `nixos/tam.nix`, a laptop running the client container | `services.tam-client` from this flake, and `services.tam-server` for the server |
 
 On Windows the executables carry the TAM icons and version information; `go generate ./cmd/...` regenerates the resource files with [go-winres](https://github.com/tc-hib/go-winres) after changing `icon.ico`.
+
+### NixOS
+
+The repository is a flake. `nix build` builds both programs from source into `result/bin` (the web app with pnpm, then Go, running the unit tests on the way); `nix run github:ticket-auction-manager/tam-go` starts `tam-client`, `nix run github:ticket-auction-manager/tam-go#tam-server` the server, and `nix develop` gives Go, Node and pnpm. Its NixOS module runs either program as a service under its own unprivileged user, with its data in `/var/lib/tam-server` or `/var/lib/tam-client` and its log in the journal (`journalctl -u tam-client`). In a flake-based configuration, a laptop:
+
+```nix
+{
+  inputs.tam-go.url = "github:ticket-auction-manager/tam-go";
+
+  outputs = { nixpkgs, tam-go, ... }: {
+    nixosConfigurations.laptop1 = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        tam-go.nixosModules.default
+        {
+          services.tam-client.enable = true;              # the web app on http://localhost:3080/
+          services.tam-client.openBrowserAtLogin = true;  # opened at login: with automatic login, a kiosk
+          services.tam-client.openFirewall = true;        # UDP 5353, to find the server by its announcement
+        }
+      ];
+    };
+  };
+}
+```
+
+And the machine that holds the event's data:
+
+```nix
+services.tam-server = {
+  enable = true;
+  openFirewall = true;                           # TCP 8000 (8443 with tls), and UDP 5353 for the announcement
+  # tls = true;                                  # HTTPS with a self-signed certificate, or certFile and keyFile
+  # passwordFile = "/run/secrets/tam-password";  # otherwise the password is set on the first visit of /admin
+};
+```
+
+A configuration without flakes can import the module from a pinned commit, with flakes enabled in `nix.settings.experimental-features`:
+
+```nix
+imports = [ (builtins.getFlake "github:ticket-auction-manager/tam-go/<commit>").nixosModules.default ];
+```
+
+Compared with `nixos/tam.nix`, the laptop runs `tam-client` natively instead of the Docker image, finds and pairs with the server from its Settings page instead of a `tam.lan` hosts entry, and keeps the automatic login in its own configuration (`services.displayManager.autoLogin`). Shut Down TAM in the web app stops the service until the next boot or `systemctl start tam-client`. The flake pins its nixpkgs, because the build needs Go 1.27, which NixOS 26.05 does not have; a machine on a stable release runs the same build. When `go.sum` or `frontend/pnpm-lock.yaml` changes, `nix/package.nix` needs the new `vendorHash` or pnpm `hash`: set it to `lib.fakeHash`, run `nix build`, and copy the hash Nix reports. CI's Nix job fails until then.
 
 ## API
 
@@ -226,6 +277,7 @@ internal/discovery               mDNS announce (server) and browse (client)
 internal/admin                   the server's login-protected admin pages and password file
 scripts/compat                   the compatibility run against the original tam
 scripts/loadtest                 the load test: a whole event through one server and many laptops
+flake.nix, nix/                  the Nix package, the NixOS module for both services and its NixOS test
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
 
@@ -249,3 +301,5 @@ Remote mode v2 (2026-09-26, Windows 11): `scripts/compat/run.sh` passed locally,
 Load test (2026-09-27, `scripts/loadtest`): its first runs found three problems, each now fixed and pinned by a test. A laptop that saw its server again while saves were still queued sent new saves straight to the server, so an older queued save of the same ticket could land after a newer one and win, and a sheet opened meanwhile showed the server's older rows; now a laptop works from its own copy and queues new saves behind the old ones until its queue is empty. The refresh after a reconnect could copy the server's older rows over saves made while it downloaded; now it leaves those rows alone, and waits until the queue has been sent. On a Linux server whose disk is slow to flush, 50 laptops pairing at once made SQLite give up on a write (`database is locked`), because its busy wait is not first come, first served; now the writes of each program take turns.
 
 Harder tests (2026-09-27): a review of the pairing code, the relay that drops a laptop's Wi-Fi silently and delivers late, crashes of laptops with saves queued, and fuzz tests of every route found more, each fixed with a test that failed first. Pairing again, as the bar asks when the server refuses a laptop's key, dropped every save queued meanwhile; now the queue is sent, or set aside in the failed list when the laptop pairs with another server. A save queued offline was written to the laptop and to its queue in two transactions, so a laptop stopping in between kept a save it would never send; now both happen in one. A page reading from a server that went silent waited ten seconds; now four. A save the laptop gave up on while its Wi-Fi was gone could still reach the server seconds later, after its replay and after newer saves, and undo them; now the laptop numbers its saves and the server skips a late copy (see API). A range of ids ending at the largest number made the laptop allocate until it ran out of memory; search missed text after a NUL and failed on very long fragments; the prefix names `.` and `..` were accepted but unreachable; and one prefix name from the original that today's form refuses (`A/B`) made a restore, and every laptop's copy of its server's data, fail. With the fixes every run on this branch passes all its checks (24; the two that read the admin page's status as JSON are skipped, since this server's status page is HTML only), on Windows 11 (Ryzen 9 7900X3D, NVMe): 50 laptops with 9,000 tickets and 1,000 baskets, and 20 laptops over HTTPS with the server down for 45 s (all 209 saves queued meanwhile sent 5.2 s after it was back). No request failed and the programs logged no error. Throughput, with every save changing every row of its sheet (a save of unchanged rows writes nothing in SQLite): 1,794 saves (44,858 rows) a second from 50 laptops, median 28 ms, the server peaking at 103 MB. The same sync and store code in the fork's `all-systems` build also passed with 100 laptops on the Windows machine using a server on an Ubuntu 24.04 machine over the LAN, where each commit waits about 12 ms for its SATA SSD and the server took 68 saves (1,700 rows) a second, and in a 45-minute soak with 25 laptops and 9,000 tickets that kept the server at 46 MB and about 470 open handles from the first rounds to the last. A real event saves a sheet every half minute or so per laptop, so even the slow disk leaves a large margin. CI runs the unit tests and a 12-laptop load test with the race detector on every push.
+
+NixOS (2026-09-27): in a `nixos/nix` container with the build sandbox on and KVM, `nix build` built the web app and both programs with nixpkgs' Go 1.27.1, Node 24 and pnpm 12 and passed every unit test inside the sandbox, and `nix flake check` passed, including the NixOS test with three machines. The package and module also evaluate for aarch64-linux and aarch64-darwin; those builds were not run.
