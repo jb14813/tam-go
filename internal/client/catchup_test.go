@@ -144,3 +144,26 @@ func TestPullKeepsSavesMadeWhileItDownloads(t *testing.T) {
 		t.Fatalf("the laptop's copy has %+v after the download, want the newer save (New)", lt)
 	}
 }
+
+// TestPullTakesLegacyPrefixNames: a server whose database came from the
+// original app can hold prefix names the pages would not let anyone type
+// now, such as A/B. A laptop copying the server's data must take them as
+// they are; refusing one refused the whole copy, and the laptop kept none of
+// the server's tickets.
+func TestPullTakesLegacyPrefixNames(t *testing.T) {
+	f := newFixture(t)
+	rst, _ := remoteFixture(t, f)
+	if err := rst.UpsertPrefixes([]store.Prefix{{Prefix: "A/B", Color: "red", Weight: 1}, {Prefix: "C", Color: "blue", Weight: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rst.UpsertTickets([]store.Ticket{{Prefix: "A/B", TID: 1, FirstName: "Old", Pref: "CALL"}, {Prefix: "C", TID: 2, FirstName: "New", Pref: "CALL"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.h.sync.Tick() // connects and copies the server's data
+	if ps, _ := f.st.ListPrefixes(); len(ps) != 2 {
+		t.Fatalf("the laptop's prefixes after the copy = %+v, want A/B and C", ps)
+	}
+	if ts, _ := f.st.AllTickets(); len(ts) != 2 {
+		t.Fatalf("the laptop's tickets after the copy = %+v, want both", ts)
+	}
+}
