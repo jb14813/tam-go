@@ -48,6 +48,11 @@ func (h *handler) unreachable(w http.ResponseWriter, err error) {
 // online reports whether a call to the server is worth making right now.
 func (h *handler) online() bool { return h.sync.Online() }
 
+// inStep reports whether the data routes should go through the server right
+// now: it answers and nothing saved here is still waiting to reach it (see
+// Syncer.InStep).
+func (h *handler) inStep() bool { return h.sync.InStep() }
+
 // observe feeds what a server call returned to the syncer and reports
 // whether the answer is usable: a 2xx, or a 4xx that describes the data
 // rather than the connection. Transport failures, 5xx and a refused key
@@ -70,10 +75,11 @@ func (h *handler) observe(err error, res *remote.Response) bool {
 }
 
 // listOr answers with a list. In remote mode it comes from the server while
-// the server answers, and is copied into the mirror on the way; otherwise
-// it comes from the mirror, which in standalone mode is the only store.
+// the laptop is in step with it (see inStep), and is copied into the mirror
+// on the way; otherwise it comes from the mirror, which in standalone mode
+// is the only store.
 func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, mirror func([]T) error, local func() ([]T, error)) {
-	if rc != nil && h.online() {
+	if rc != nil && h.inStep() {
 		res, err := rc.Get(remotePath)
 		if h.observe(err, res) && res.OK() {
 			out := []T{}
@@ -101,7 +107,7 @@ func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remoteP
 
 // singleOr answers with one row, or a placeholder when it does not exist.
 func singleOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, placeholder T, mirror func([]T) error, local func() (*T, error)) {
-	if rc != nil && h.online() {
+	if rc != nil && h.inStep() {
 		res, err := rc.Get(remotePath)
 		if h.observe(err, res) && res.OK() {
 			var rows []T
@@ -154,7 +160,7 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	}
 	var rows []T
 	fromServer := false
-	if rc != nil && h.online() {
+	if rc != nil && h.inStep() {
 		res, err := rc.Get(remotePath(from, to))
 		if h.observe(err, res) && res.OK() && res.JSON(&rows) == nil {
 			fromServer = true
@@ -187,13 +193,19 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
+// prefixRow, ticketRow and basketRow name the rows a save writes.
+func prefixRow(p store.Prefix) string { return tamsync.Row("prefixes", p.Prefix, 0) }
+func ticketRow(t store.Ticket) string { return tamsync.Row("tickets", t.Prefix, t.TID) }
+func basketRow(b store.Basket) string { return tamsync.Row("baskets", b.Prefix, b.BID) }
+
 // writeThrough decodes and validates a list and saves it. In remote mode
-// the server is asked first while it answers; when it does not, the rows
-// are kept in the mirror and queued for it, and the answer carries
-// X-TAM-Queued so a page can tell. A server that rejects the data answers
-// with its error and nothing is written anywhere.
+// the server is asked first while it answers and nothing saved here waits
+// for it; otherwise the rows are kept in the mirror and queued behind the
+// saves already waiting, and the answer carries X-TAM-Queued so a page can
+// tell. A server that rejects the data answers with its error and nothing
+// is written anywhere. row names each item for the syncer (see BeginSave).
 func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remote.Client, remotePath string,
-	validate func([]T) error, local func([]T) error) {
+	validate func([]T) error, row func(T) string, local func([]T) error) {
 	var items []T
 	if err := httpx.DecodeJSON(w, r, &items); err != nil {
 		httpx.WriteDecodeError(w, err)
@@ -214,12 +226,17 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 		httpx.WriteJSON(w, http.StatusOK, items)
 		return
 	}
+	rows := make([]string, len(items))
+	for i, item := range items {
+		rows[i] = row(item)
+	}
+	defer h.sync.BeginSave(rows)()
 	body, err := json.Marshal(items)
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
-	if h.online() {
+	if h.inStep() {
 		res, err := rc.WithTimeout(writeTimeout).Post(remotePath, json.RawMessage(body))
 		if h.observe(err, res) {
 			if !res.OK() {
@@ -356,7 +373,7 @@ func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/prefixes", store.ValidatePrefixes, h.st.UpsertPrefixes)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/prefixes", store.ValidatePrefixes, prefixRow, h.st.UpsertPrefixes)
 }
 
 // deletePrefix removes a prefix on the server (in remote mode) and in the
@@ -373,8 +390,9 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	remotePath := "/api/prefixes?p=" + url.QueryEscape(name)
 	remoteHadIt, queue := false, false
 	if rc != nil {
+		defer h.sync.BeginSave([]string{prefixRow(store.Prefix{Prefix: name})})()
 		queue = true
-		if h.online() {
+		if h.inStep() {
 			res, err := rc.WithTimeout(writeTimeout).Delete(remotePath)
 			if h.observe(err, res) {
 				queue = false
@@ -452,7 +470,7 @@ func (h *handler) ticketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/tickets", store.ValidateTickets, h.st.UpsertTickets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/tickets", store.ValidateTickets, ticketRow, h.st.UpsertTickets)
 }
 
 func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
@@ -467,7 +485,7 @@ func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postSearch(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/search/tickets", store.ValidateTickets, h.st.UpsertTickets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/search/tickets", store.ValidateTickets, ticketRow, h.st.UpsertTickets)
 }
 
 // --- baskets ---
@@ -511,7 +529,7 @@ func (h *handler) basketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/baskets", store.ValidateBaskets, h.st.UpsertBaskets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/baskets", store.ValidateBaskets, basketRow, h.st.UpsertBaskets)
 }
 
 // --- drawing ---
@@ -566,7 +584,7 @@ func (h *handler) drawingRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/drawing", store.ValidateBaskets, h.st.UpsertWinning)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/drawing", store.ValidateBaskets, basketRow, h.st.UpsertWinning)
 }
 
 // --- reports ---

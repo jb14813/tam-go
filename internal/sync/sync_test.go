@@ -238,3 +238,42 @@ func TestUnreachableServer(t *testing.T) {
 		t.Fatalf("state = %q, want reconnecting", s.State())
 	}
 }
+
+// TestPullWaitsForSavesQueuedAfterTheReplay: a page save can be queued in
+// the moment between the replay finding nothing left to send and the pull
+// starting. The server does not have that save yet, so the pull must wait
+// until it has been sent instead of copying the server's older row over it.
+func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
+	f := newFakeServer(t)
+	s, st := newSyncer(t, f.ts.URL)
+	s.pulling = func() {
+		s.pulling = nil
+		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Laptop", PhoneNumber: "2", Pref: "CALL"}}
+		if err := st.UpsertTickets(row); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(row)
+		if err := s.Enqueue("POST", "/api/tickets", body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tick()
+	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Laptop" {
+		t.Fatalf("the laptop's copy has %+v, want its queued save (Laptop)", tk)
+	}
+	for _, r := range f.seen() {
+		if r == "GET /api/backuprestore" {
+			t.Fatalf("the pull downloaded while a save was still queued: %v", f.seen())
+		}
+	}
+
+	// The next tick sends the save first, then pulls.
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 0 {
+		t.Fatalf("pending after the second tick = %d, want 0", p)
+	}
+	seen := f.seen()
+	if n := len(seen); n < 2 || seen[n-2] != "POST /api/tickets" || seen[n-1] != "GET /api/backuprestore" {
+		t.Fatalf("requests = %v, want the queued save sent before the download", seen)
+	}
+}
