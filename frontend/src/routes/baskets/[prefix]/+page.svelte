@@ -211,6 +211,7 @@
 				<td class="p-0.5 border"
 					><button
 						class={bS[prefix.color]}
+						tabindex="-1"
 						onclick={() => {
 							item.changed ? (item.changed = false) : (item.changed = true);
 						}}>{item.changed ? 'Yes' : 'No'}</button
