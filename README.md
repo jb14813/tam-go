@@ -57,7 +57,7 @@ For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost
 
 ## Running the tests
 
-The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push and keeps what they print: each run's page on GitHub (Actions) shows the unit tests, the compatibility run, the tests with the race detector, the load test's report and the NixOS test, and has them as files to download under Artifacts.
+The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push and keeps what they print: each run's page on GitHub (Actions) shows the unit tests, the compatibility run, the tests with the race detector, the load test's report and the NixOS test, and has them as files to download under Artifacts. [docs/test-results.md](docs/test-results.md) has the printed results of the longer runs, made on a real machine.
 
 Unit and integration tests; the client tests drive the real server handler as their server:
 
