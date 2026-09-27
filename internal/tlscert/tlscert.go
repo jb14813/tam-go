@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -17,8 +18,45 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
+
+// Files returns the certificate and key files tam-server -tls serves, from
+// its -cert and -key flags, and whether it created them. Without either
+// flag they are server.crt and server.key in dataDir, a self-signed pair
+// for hosts created there on first use. Files the flags name must exist,
+// and the flags go together: a new pair made at a path someone typed,
+// perhaps with a typo, would be served in place of the certificate they
+// meant. Either way the pair must load, so a broken one stops the start
+// with the reason instead of failing every connection.
+func Files(dataDir, cert, key string, hosts []string) (string, string, bool, error) {
+	created := false
+	switch {
+	case cert == "" && key == "":
+		cert, key = filepath.Join(dataDir, "server.crt"), filepath.Join(dataDir, "server.key")
+		var err error
+		if created, err = EnsurePair(cert, key, hosts); err != nil {
+			return "", "", false, err
+		}
+	case cert == "":
+		return "", "", false, errors.New("-key needs -cert: name both files, or neither for a self-signed pair in the data directory")
+	case key == "":
+		return "", "", false, errors.New("-cert needs -key: name both files, or neither for a self-signed pair in the data directory")
+	default:
+		for _, f := range []struct{ flag, path string }{{"-cert", cert}, {"-key", key}} {
+			if _, err := os.Stat(f.path); errors.Is(err, fs.ErrNotExist) {
+				return "", "", false, fmt.Errorf("%s %s: no such file (a self-signed pair is only made in the data directory, without -cert and -key)", f.flag, f.path)
+			} else if err != nil {
+				return "", "", false, fmt.Errorf("%s: %w", f.flag, err)
+			}
+		}
+	}
+	if _, err := tls.LoadX509KeyPair(cert, key); err != nil {
+		return "", "", false, fmt.Errorf("certificate %s with key %s: %w", cert, key, err)
+	}
+	return cert, key, created, nil
+}
 
 // EnsurePair makes sure a certificate and key exist at the given paths,
 // generating a self-signed pair valid for ten years when both are missing.
