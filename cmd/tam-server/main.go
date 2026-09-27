@@ -151,6 +151,7 @@ func main() {
 	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
+	mux.Handle("/favicon.ico", adminPages)
 	mux.Handle("/", server.NewHandler(st, password))
 	srv = &http.Server{
 		Handler:           mux,

@@ -96,6 +96,7 @@ func (h *handler) routes(dist fs.FS) http.Handler {
 
 	mux.Handle("GET /{$}", http.RedirectHandler("/web/", http.StatusFound))
 	mux.Handle("GET /web/", newSPA(dist))
+	mux.HandleFunc("GET /favicon.ico", icon(dist))
 
 	mux.HandleFunc("GET /api", h.root)
 	mux.HandleFunc("GET /api/{$}", h.root)
@@ -216,6 +217,21 @@ func (h *handler) remote(s config.Settings) *remote.Client {
 }
 
 // --- single page app ---
+
+// icon serves the web app's icon at /favicon.ico, where a browser asks for
+// it on pages that name no icon, such as the API's own answers.
+func icon(dist fs.FS) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(dist, "favicon.ico")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(data)
+	}
+}
 
 type spa struct {
 	dist  fs.FS

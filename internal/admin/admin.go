@@ -19,6 +19,12 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
+// staticFS holds the TAM logo and icon, copies of the web app's
+// (frontend/src/lib/assets/logo.svg and frontend/static/favicon.ico).
+//
+//go:embed static
+var staticFS embed.FS
+
 // pages holds one parsed template set per page: the layout plus the page's
 // title and content blocks.
 var pages = parsePages("login", "setup", "status", "keys", "backup", "password", "error")
@@ -61,6 +67,9 @@ func NewHandler(st *store.Store, pw *Password, info Info) http.Handler {
 	h.mux.HandleFunc("POST /admin/setup", h.setup)
 	h.mux.HandleFunc("GET /admin/logout", h.logout)
 	h.mux.HandleFunc("POST /admin/logout", h.logout)
+	h.mux.HandleFunc("GET /admin/logo.svg", asset("static/logo.svg", "image/svg+xml"))
+	h.mux.HandleFunc("GET /admin/favicon.ico", asset("static/favicon.ico", "image/x-icon"))
+	h.mux.HandleFunc("GET /favicon.ico", asset("static/favicon.ico", "image/x-icon"))
 
 	in := h.loggedIn
 	h.mux.Handle("GET /admin/status", in(h.status))
@@ -82,7 +91,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Referrer-Policy", "no-referrer")
-	hd.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	hd.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, httpx.MaxBody)
 	}
@@ -99,6 +108,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.errorPage(w, r, http.StatusMethodNotAllowed)
 	default:
 		h.errorPage(w, r, http.StatusNotFound)
+	}
+}
+
+// asset serves one of the embedded images, which every page shows whether
+// or not the visitor is logged in; unlike the pages it may be cached.
+func asset(name, contentType string) http.HandlerFunc {
+	data, err := staticFS.ReadFile(name)
+	if err != nil {
+		panic(err) // embedded when the program is built
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(data)
 	}
 }
 

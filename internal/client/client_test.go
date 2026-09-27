@@ -76,6 +76,7 @@ var testDist = fstest.MapFS{
 	"index.html":          {Data: []byte("<!doctype html><title>TAM</title><div id=app></div>")},
 	"_app/immutable/x.js": {Data: []byte("console.log('x')")},
 	"robots.txt":          {Data: []byte("User-agent: *")},
+	"favicon.ico":         {Data: []byte("\x00\x00\x01\x00icon")},
 }
 
 type fixture struct {
@@ -209,6 +210,21 @@ func TestSPA(t *testing.T) {
 	}
 	if code, _ := f.do("GET", "/web/_app/", nil, nil); code != 200 {
 		t.Fatalf("directory path falls back to the app = %d", code)
+	}
+}
+
+// TestIconAtTheRoot: a browser asks for /favicon.ico on pages that name no
+// icon, such as the API's own answers; it gets the web app's icon.
+func TestIconAtTheRoot(t *testing.T) {
+	f := newFixture(t)
+	res, err := http.Get(f.url + "/favicon.ico")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/x-icon" || string(body) != string(testDist["favicon.ico"].Data) {
+		t.Fatalf("/favicon.ico = %d %q %q", res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
 }
 
