@@ -94,6 +94,20 @@ func (r *recorder) saves() int {
 	return n
 }
 
+// slowest returns the slowest request of the phase and its action.
+func (r *recorder) slowest() (op string, took time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range r.order {
+		for _, d := range r.ops[name].times {
+			if d > took {
+				op, took = name, d
+			}
+		}
+	}
+	return op, took
+}
+
 // table writes the timing of every action of the phase.
 func (r *recorder) table(b *strings.Builder) {
 	r.mu.Lock()

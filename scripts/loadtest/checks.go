@@ -308,16 +308,26 @@ func (t *test) checkRequests() {
 		l.mu.Lock()
 		for _, at := range l.queuedAt {
 			total++
-			down := !t.outage.stoppedAt.IsZero() && !at.Before(t.outage.stoppedAt.Add(-5*time.Second)) &&
-				(l.caughtUp.IsZero() || at.Before(l.caughtUp))
-			if !down {
+			if !l.queuedRightly(at) {
 				unexpected++
 			}
 		}
 		l.mu.Unlock()
 	}
-	t.record("saves were queued only while the server was away", unexpected == 0,
-		"%d saves queued, %d of them while the server was up", total, unexpected)
+	t.record("saves were queued only while the server was out of reach", unexpected == 0,
+		"%d saves queued, %d of them while the laptop could reach the server", total, unexpected)
+
+	// A page waits for the server five seconds at most, then works from the
+	// laptop's own copy; a second more covers the rest of the work.
+	const patience = 6 * time.Second
+	var slowOp, slowPhase string
+	var slow time.Duration
+	for _, ph := range t.phases {
+		if op, took := ph.rec.slowest(); took > slow {
+			slowOp, slowPhase, slow = op, ph.name, took
+		}
+	}
+	t.record("no page action waited more than 6 s", slow <= patience, "the slowest: %s in %s, %s", slowOp, slowPhase, ms(slow))
 	if t.outageOn() {
 		inside := 0
 		for _, l := range t.laptops {
@@ -337,6 +347,16 @@ func (t *test) checkRequests() {
 	t.record("a sheet opened again showed what was saved", t.problemFree("stale sheet"), "%s", t.problemText("stale sheet"))
 	t.record("reports, searches and winner lookups match the data", t.problemFree("report"), "%s", t.problemText("report"))
 	t.record("the laptops sent everything they queued", t.problemFree("settle"), "%s", t.problemText("settle"))
+	if t.outageOn() && t.o.crashes > 0 {
+		t.record("every crashed laptop came back with its queue", t.problemFree("crash"), "%d crashed%s", t.outage.crashed, t.problemText("crash"))
+	}
+	if len(t.wifi.dropped) > 0 {
+		t.record("every laptop whose Wi-Fi dropped sent what it queued", t.problemFree("reconnect"), "laptops %v%s", t.wifi.dropped, t.problemText("reconnect"))
+	}
+	t.record("a laptop whose key was deleted said so, and pairing again sent its queue", t.problemFree("key"), "%s", t.problemText("key"))
+	if t.o.storm > 0 {
+		t.record("tickets everyone saved at once end whole, and every laptop shows them", t.problemFree("storm"), "%s", t.problemText("storm"))
+	}
 }
 
 func (t *test) problemFree(kind string) bool {
