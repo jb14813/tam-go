@@ -1,5 +1,5 @@
 <script>
-	import favicon from '$lib/assets/favicon.svg';
+	import logo from '$lib/assets/logo.svg';
 	import { tS, bS, bAS } from '$lib/client/styles.js';
 	import { resolve } from '$app/paths';
 	import hotkeys from 'hotkeys-js';
@@ -87,7 +87,7 @@
 <div class="p-1" id="app_container">
 	<div class="flex flex-row gap-1 items-center">
 		<div>
-			<img src={favicon} alt="TAM Logo" style="height: 4rem" />
+			<img src={logo} alt="TAM Logo" style="height: 1.75rem" />
 		</div>
 		<div>
 			<h1 class="text-xl font-bold">{pageTitle}</h1>

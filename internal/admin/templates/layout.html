@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{template "title" .}} - TAM Server</title>
+<link rel="icon" href="/admin/favicon.ico">
 <style>
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 1rem; line-height: 1.5; color: #1f2933; background: #f5f7fa; }
   header { background: #243b53; color: #fff; padding: 0.75rem 1rem; }
-  header .brand { font-weight: bold; font-size: 1.1rem; }
+  header .brand { display: flex; align-items: center; gap: 0.6rem; font-weight: bold; font-size: 1.1rem; }
+  header .brand img { height: 1.75rem; width: auto; }
   nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center; margin-top: 0.5rem; }
   nav a { color: #fff; text-decoration: none; padding: 0.25rem 0; }
   nav a.active { border-bottom: 2px solid #fff; }
@@ -35,7 +37,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">TAM Server</div>
+  <div class="brand"><img src="/admin/logo.svg" alt="" width="62" height="28">TAM Server</div>
   {{if .LoggedIn}}
   <nav>
     <a href="/admin/status"{{if eq .Active "status"}} class="active"{{end}}>Status</a>
