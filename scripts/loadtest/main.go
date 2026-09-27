@@ -28,7 +28,7 @@
 //  5. a rush: every laptop saves its sheets again as fast as it can for
 //     -rush, which measures how much the server takes;
 //  6. the checks: the server's data, every laptop's own copy, the admin
-//     page's Laptops table, and the logs.
+//     page's Clients table, and the logs.
 //
 // The exit status is 1 when a check fails. The data folders and logs are
 // kept then (and with -keep) and their location is printed.

@@ -169,7 +169,7 @@ func TestSetupModeUntilThePasswordIsSet(t *testing.T) {
 	}
 	// Setup logs the browser in and says so once.
 	res, body = s.get("/admin/status")
-	if res.StatusCode != 200 || !strings.Contains(body, "Password set.") || !strings.Contains(body, "Laptops and keys") {
+	if res.StatusCode != 200 || !strings.Contains(body, "Password set.") || !strings.Contains(body, "Clients and keys") {
 		t.Fatalf("status after setup = %d\n%s", res.StatusCode, body)
 	}
 	if _, body = s.get("/admin/status"); strings.Contains(body, "Password set.") {
@@ -233,7 +233,7 @@ func TestLoginLogoutAndPages(t *testing.T) {
 	}
 
 	body, _ = s.page("/admin/status")
-	for _, want := range []string{":8000", "off", s.dir, "0.0.1", "1 min 30 s", "No laptop has paired yet", "Log out", `href="/admin/keys"`} {
+	for _, want := range []string{":8000", "off", s.dir, "0.0.1", "1 min 30 s", "No client has paired yet", "Log out", `href="/admin/keys"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}
@@ -338,7 +338,7 @@ func TestKeysPage(t *testing.T) {
 	}
 
 	res, body := s.post("/admin/keys", url.Values{"csrf": {token}, "description": {"  "}})
-	if res.StatusCode != 400 || !strings.Contains(body, "Give the laptop a name.") {
+	if res.StatusCode != 400 || !strings.Contains(body, "Give the client a name.") {
 		t.Fatalf("blank description = %d\n%s", res.StatusCode, body)
 	}
 	res, body = s.post("/admin/keys", url.Values{"csrf": {token}, "description": {" Laptop <A> "}})

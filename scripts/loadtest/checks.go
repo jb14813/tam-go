@@ -279,20 +279,20 @@ func (t *test) checkLaptops() {
 		"%d laptops: %d not connected, %d saves waiting, %d refused by the server", len(t.laptops), away, waiting, failed)
 }
 
-// checkPresence reads the Laptops table of the server's admin page.
+// checkPresence reads the Clients table of the server's admin page.
 func (t *test) checkPresence() {
 	st, _, err := t.admin.status()
 	if errors.Is(err, errNoTable) {
-		t.skip("the admin page lists every laptop as connected and caught up", "%v", err)
+		t.skip("the admin page's Clients table lists every laptop as connected and caught up", "%v", err)
 		t.skip("the admin page counts every prefix, ticket and basket", "%v", err)
 		return
 	}
 	if err != nil {
-		t.record("the admin page lists every laptop as connected and caught up", false, "%v", err)
+		t.record("the admin page's Clients table lists every laptop as connected and caught up", false, "%v", err)
 		return
 	}
 	connected, updated, caughtUp := 0, 0, 0
-	for _, l := range st.Laptops {
+	for _, l := range st.Clients {
 		if l.State == "connected" {
 			connected++
 		}
@@ -304,9 +304,9 @@ func (t *test) checkPresence() {
 		}
 	}
 	n := len(t.laptops)
-	t.record("the admin page lists every laptop as connected and caught up",
-		len(st.Laptops) == n && connected == n && updated == n && caughtUp == n,
-		"%d rows for %d laptops: %d connected, %d with a last update, %d with nothing queued", len(st.Laptops), n, connected, updated, caughtUp)
+	t.record("the admin page's Clients table lists every laptop as connected and caught up",
+		len(st.Clients) == n && connected == n && updated == n && caughtUp == n,
+		"%d rows for %d laptops: %d connected, %d with a last update, %d with nothing queued", len(st.Clients), n, connected, updated, caughtUp)
 	t.ev.mu.Lock()
 	tickets, baskets := len(t.ev.ticket), len(t.ev.basket)
 	t.ev.mu.Unlock()
@@ -475,14 +475,14 @@ type adminStatus struct {
 	Prefixes int `json:"prefixes"`
 	Tickets  int `json:"tickets"`
 	Baskets  int `json:"baskets"`
-	Laptops  []struct {
-		Laptop     string `json:"laptop"`
-		Client     string `json:"client"`
+	Clients  []struct {
+		Name       string `json:"name"`
+		Program    string `json:"program"`
 		State      string `json:"state"`
 		LastSeen   string `json:"last_seen"`
 		LastUpdate string `json:"last_update"`
 		Queued     *int   `json:"queued"`
-	} `json:"laptops"`
+	} `json:"clients"`
 }
 
 var csrfField = regexp.MustCompile(`name="csrf" value="([^"]+)"`)

@@ -125,7 +125,7 @@ Backup/Restore can still push the local prefixes, tickets or baskets to the serv
 
 ### Server admin page
 
-`tam-server` serves its own pages under `/admin`, protected by the server password: status (address, TLS, data directory, counts, and the paired laptops with the time each was last seen), keys (create and delete), backup download and restore, and a password change. The password hash lives in `server.json` in the data directory and wins over `TAM_PWD`; with neither set the server starts in setup mode, logs the address to open, and refuses to hand out keys until a password exists.
+`tam-server` serves its own pages under `/admin`, protected by the server password: status (address, TLS, data directory, counts, and the paired clients with the time each was last seen), keys (create and delete), backup download and restore, and a password change. The password hash lives in `server.json` in the data directory and wins over `TAM_PWD`; with neither set the server starts in setup mode, logs the address to open, and refuses to hand out keys until a password exists.
 
 ### Compatibility with the original
 

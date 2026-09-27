@@ -13,15 +13,15 @@
   <tr><th>Tickets</th><td>{{.Tickets}}</td></tr>
   <tr><th>Baskets</th><td>{{.Baskets}}</td></tr>
 </table>
-<h2>Paired laptops</h2>
+<h2>Clients</h2>
 {{if .Keys}}
 <table>
-  <tr><th>Laptop</th><th>Last seen</th></tr>
+  <tr><th>Client</th><th>Last seen</th></tr>
   {{range .Keys}}<tr><td>{{.Description}}</td><td>{{.LastSeen}}</td></tr>
   {{end}}
 </table>
 {{else}}
-<p>No laptop has paired yet. Pair one from its Settings page, or <a href="/admin/keys">create a key</a> here.</p>
+<p>No client has paired yet. Pair one from its Settings page, or <a href="/admin/keys">create a key</a> here.</p>
 {{end}}
 {{end}}
 {{end}}

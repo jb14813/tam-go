@@ -343,7 +343,7 @@ func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 	addr := remoteIP(r)
 	log.Printf("admin: password set from %s", addr)
 	n := h.startSession(w, r, s)
-	h.ss.setFlash(n.id, "Password set. Laptops can pair with this server now.")
+	h.ss.setFlash(n.id, "Password set. Clients can pair with this server now.")
 	http.Redirect(w, r, "/admin/status", http.StatusSeeOther)
 }
 
@@ -464,7 +464,7 @@ func (h *handler) renderKeys(w http.ResponseWriter, r *http.Request, s *session,
 func (h *handler) createKey(w http.ResponseWriter, r *http.Request, s *session) {
 	description := strings.TrimSpace(r.PostFormValue("description"))
 	if description == "" {
-		h.renderKeys(w, r, s, http.StatusBadRequest, keysData{}, "Give the laptop a name.")
+		h.renderKeys(w, r, s, http.StatusBadRequest, keysData{}, "Give the client a name.")
 		return
 	}
 	k, err := h.st.CreateKey(description)
@@ -483,7 +483,7 @@ func (h *handler) deleteKey(w http.ResponseWriter, r *http.Request, s *session) 
 		return
 	}
 	if r.PostFormValue("confirm") == "" {
-		// First step: show which laptop this is and ask.
+		// First step: show which client this is and ask.
 		keys, err := h.st.ListKeys()
 		if err != nil {
 			h.internal(w, r, err)
