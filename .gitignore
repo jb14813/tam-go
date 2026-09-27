@@ -5,3 +5,4 @@
 /deploy/docker/data/
 /deploy/docker/client-data/
 .claude-flow/
+/result
