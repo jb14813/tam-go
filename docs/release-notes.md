@@ -1,4 +1,4 @@
-Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-person benefit auction. This is the Go version: one self-contained program per machine, no runtime to install and no container needed. Each client at the event runs **tam-client**, the web app it opens in the browser. One machine runs **tam-server**, the shared database the clients pair with; a client keeps working when the server is out of reach and catches up when it is back, and the server's admin page lists every client, whether it is connected, and when it last saved. The full manual is the [README at this version](https://github.com/{REPO}/blob/{VERSION}/README.md).
+Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-person benefit auction. This is the Go version: one self-contained program per machine, no runtime to install and no container needed. Each client at the event runs **tam-client**, the web app it opens in the browser. One machine runs **tam-server**, the shared database the clients pair with; a client keeps working when the server is out of reach and catches up when it is back, and the server's admin page lists every client, whether it is connected, and when it last saved. The full manual is the [README at this version](https://github.com/{REPO}/blob/{TAG}/README.md).
 
 ## Which file to download
 
@@ -28,6 +28,7 @@ The data files are the same: `tam-remote.db` for the server, `tam-local.db` and 
 
 ## Good to know
 
+- `SHA256SUMS` lists the SHA-256 checksum of every file of the release; `sha256sum -c --ignore-missing SHA256SUMS` in the download folder checks the ones you took.
 - The programs are not signed. Windows SmartScreen asks once (More info, then Run anyway); on macOS clear the quarantine flag once with `xattr -dr com.apple.quarantine tam-client` or `tam-server`.
 - GitHub shows a package with a pre-release version as `1.0.0.rc1` in the file name; the package inside is `1.0.0~rc1` and installs under any file name.
 - The Windows programs keep a small icon in the notification area while they run; right-click it to shut them down. On Linux and macOS, Ctrl+C or the Shut Down button on the main menu does that.
