@@ -103,6 +103,7 @@ The [releases page](https://github.com/ticket-auction-manager/tam-go/releases) h
 - **Fedora, RHEL, Rocky, Alma and their relatives**: the `.rpm` of the program (`sudo dnf install ./tam-server-<version>.x86_64.rpm`).
 - **Any other Linux**: the `-linux-amd64.tar.gz` (or `-linux-arm64`) of the program, with an installer script for systemd; run `chmod +x` on the program if your unzip tool dropped the executable bit.
 - **macOS**: the `-darwin-arm64.tar.gz` (Apple silicon) or `-darwin-amd64.tar.gz` (Intel) of the program, with a launchd file; clear the quarantine flag once with `xattr -dr com.apple.quarantine tam-client` (or `tam-server`).
+- **NixOS**: nothing to download; the flake in this repository builds both programs and has a NixOS module for them (see NixOS under [Deployment](#deployment)).
 
 Then, on the server's machine, open `http://<that machine>:8000/admin` and set the server password. On each other computer start the client, press Alt(option)+A, open Settings, pick the server from the list, enter the password once and press Pair. See [Deployment](#deployment) for the details per system.
 
@@ -140,9 +141,11 @@ pnpm install
 ./build.sh release      # every system: build/<os>-<arch>/ and one archive per program and target
 ```
 
+With Nix, `nix build` builds both programs into `result/bin` (see NixOS under [Deployment](#deployment)).
+
 `./build.sh release` builds the web pages once, then both programs for Windows, Linux and macOS on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w"`) into `build/<os>-<arch>/`, and packs each program of each target into `build/tam-server-<version>-<os>-<arch>.zip` and `build/tam-client-<version>-<os>-<arch>.zip` (Windows, where the bare program is also copied to `build/tam-server-<version>-windows-<arch>.exe` and `build/tam-client-<version>-windows-<arch>.exe`) or `.tar.gz` (Linux, macOS): one folder with that program, `README.md`, `LICENSE.md` and its files from `deploy/linux` or `deploy/macos` (its unit and `install.sh`, plus the application-menu entry for the client; its launchd file and the macOS notes as `INSTALL.md`). For Linux it also writes a `.deb` and an `.rpm` of each program with [nfpm](https://nfpm.goreleaser.com), from `deploy/linux/nfpm`, which `build.sh` installs with `go install` when it is not on the PATH. The version stamped into both programs, `internal/version.Version`, is `$VERSION` when set and otherwise `git describe --tags --always --dirty`; both programs print it in their banner and the server reports it on `GET /api` and its admin page. `SKIP_WEB=1` keeps an existing `cmd/tam-client/dist`. A tag `1.2.3` (or `v1.2.3`) becomes version 1.2.3 everywhere: the programs' banners and `GET /api`, the admin page, the Windows file properties, the `.deb` and `.rpm` versions and every file name; a tag `1.2.3-rc1` is a pre-release, marked so on GitHub and sorted before 1.2.3 by apt and dnf. To cut a release: `git tag -a 1.2.3 -m "1.2.3"` on the commit, then `git push origin 1.2.3`. The archives are written with `zip` and `tar` where those exist and with Python otherwise. Both Windows builds carry the TAM icons and version information from the `rsrc_windows_*.syso` files, which `go generate ./cmd/...` makes with [go-winres](https://github.com/tc-hib/go-winres) from `cmd/*/winres/winres.json`; a release build remakes them with the release version first and puts the committed files back afterwards.
 
-Releases come from `.github/workflows/release.yml`: pushing a version tag runs `VERSION=<tag> ./build.sh release` on GitHub and attaches the twelve archives (two programs, six targets), the four bare Windows programs and the eight Linux packages to a GitHub release of that tag. The release's description is `docs/release-notes.md` with the version filled in (what to download for which machine, the first start, upgrading, switching from the original), followed by the list of changes GitHub generates. `ci.yml` vets, tests and cross-compiles all six targets on every push, and runs the compatibility check against the original.
+Releases come from `.github/workflows/release.yml`: pushing a version tag runs `VERSION=<tag> ./build.sh release` on GitHub and attaches the twelve archives (two programs, six targets), the four bare Windows programs and the eight Linux packages to a GitHub release of that tag. The release's description is `docs/release-notes.md` with the version filled in (what to download for which machine, the first start, upgrading, switching from the original), followed by the list of changes GitHub generates. `ci.yml` vets, tests and cross-compiles all six targets on every push, runs the compatibility check against the original, runs the unit tests and a load test with the race detector, and builds the Nix package and runs its NixOS test.
 
 ## Running dev instances
 
@@ -194,6 +197,12 @@ To test over a real network, start `tam-server` on another machine with an empty
 
 ```
 go run ./scripts/loadtest -server http://<that machine>:8000 -password <its password> -laptops 100
+```
+
+With Nix, the package and the NixOS module have their own check: it builds the package, which runs the unit tests in the build sandbox, and starts three NixOS machines (it needs KVM). A laptop finds the server by its announcement, pairs with it, saves a prefix and a ticket, and the ticket is on the server, also after both services restart; a second server serves HTTPS with a certificate of its own; and Shut Down TAM stops the laptop's service until it is started again:
+
+```
+nix flake check -L
 ```
 
 ## Configuration
@@ -258,17 +267,60 @@ The API is the original's, so the original `tam-client` (Linux/Docker) and the G
 
 ## Deployment
 
-Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime is needed. The original's Caddy, portable-Node and NixOS deployment files are not carried over, and the server's `-tls` flag replaces the reverse proxy; a Dockerfile and a compose file under `deploy/docker` are there for those who ran the original's containers.
+Both programs are single, self-contained executables: copy the one you need to the machine and run it. There is nothing to install and no container runtime is needed. The original's Caddy and portable-Node deployment files are not carried over, and the server's `-tls` flag replaces the reverse proxy; a Dockerfile and a compose file under `deploy/docker` are there for those who ran the original's containers, and on NixOS this repository's flake takes the place of `nixos/tam.nix`.
 
 | Original | Here |
 |---|---|
 | `dbob16/tam-client` container on port 3000 | `tam-client` (or `tam-client.exe`) on port 3080 |
 | `dbob16/tam-server` container plus a Caddy proxy on 8443 | `tam-server -tls` on 8443, or `tam-server` on 8000 |
 | Data volume `/data` | the `data` folder next to the program, or `TAM_DATA_DIR` |
+| `nixos/tam.nix`, a laptop running the client container | `services.tam-client` from this flake, and `services.tam-server` for the server |
 
 **Windows.** Download `tam-client-<version>-windows-amd64.exe` on a laptop, or `tam-server-<version>-windows-amd64.exe` on the machine that hosts the server (`-arm64` for a Snapdragon machine), put it in a folder of its own and double-click it; the zip of the same name holds the same program with this README and the license. The program is not signed, so SmartScreen asks once: More info, then Run anyway. Each shows a TAM icon in the notification area while it runs (right-click it for Open and Shut Down) and keeps its console window; Windows asks once whether to allow the server through the firewall. To start one at logon, put a shortcut to it in the Startup folder (`shell:startup`), with `-open=false` if the browser should not open by itself. The executables carry the TAM icons and version information (right-click, Properties, Details); `go generate ./cmd/...` regenerates the resource files with [go-winres](https://github.com/tc-hib/go-winres) after changing `icon.ico` or `winres/winres.json`.
 
 **Linux.** On Debian, Ubuntu and their relatives install the `.deb` of the program (`sudo apt install ./tam-server_<version>_amd64.deb`), on Fedora, RHEL and their relatives the `.rpm` (`sudo dnf install ./tam-server-<version>.x86_64.rpm`); the client's package is `tam-client`. Either puts the program in `/usr/bin` with its unit, creates the `tam` user, and starts the service at once (the same units as below, so the server listens on port 8000 and asks for its password on the first visit of the admin page); `apt remove` or `dnf remove` stops and removes it, keeping the data in `/var/lib/tam-server` or `/var/lib/tam-client` for a reinstall. For any other distribution, or without root, extract `tam-server-<version>-linux-amd64.tar.gz` or `tam-client-<version>-linux-amd64.tar.gz` (or `-arm64`) and run the program by hand (`./tam-client` opens the browser; Ctrl+C, SIGTERM or the Shut Down button stops either), or install it as a service: `sudo ./install.sh` in the extracted folder installs the program found next to it (`server`, `client` or `all` as the argument chooses explicitly, for example from a checkout's build folder), copies it to `/usr/local/bin`, creates a `tam` system user with the data folders `/var/lib/tam-server` and `/var/lib/tam-client`, puts the icons and an application-menu entry for the client under `/usr/local/share`, and installs, enables and starts the units `tam-server.service` (`-addr :8000`, for the whole network) and `tam-client.service` (`-addr :3080 -open=false`), the files in `deploy/linux`. The units run as `tam` with `ProtectSystem=strict`, so only the data folder is writable; `journalctl -u tam-server` has the log, and the program's own log file is in the data folder. The server's admin page at `http://<host>:8000/admin` asks you to set a password on the first visit unless `TAM_PWD` is set in the unit (a commented line is there for it). On a laptop used by one person the client is better run by hand or from the menu entry, which keeps its data in `~/.local/share/tam-client`, than as a service; the script says so, and `sudo systemctl disable --now tam-client` turns the service off. The comment at the top of `install.sh` lists the commands that undo the installation. Without systemd, run the programs by hand.
+
+**NixOS.** The repository is a flake. `nix build` builds both programs from source into `result/bin` (the web app with pnpm, then Go, running the unit tests on the way); `nix run github:ticket-auction-manager/tam-go` starts `tam-client`, `nix run github:ticket-auction-manager/tam-go#tam-server` the server, and `nix develop` gives Go, Node and pnpm. The version the programs report is the commit they were built from. Its NixOS module runs either program as a service under its own unprivileged user, with its data in `/var/lib/tam-server` or `/var/lib/tam-client` and its log in the journal (`journalctl -u tam-client`). In a flake-based configuration, a laptop:
+
+```nix
+{
+  inputs.tam-go.url = "github:ticket-auction-manager/tam-go";
+
+  outputs = { nixpkgs, tam-go, ... }: {
+    nixosConfigurations.laptop1 = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        tam-go.nixosModules.default
+        {
+          services.tam-client.enable = true;              # the web app on http://localhost:3080/
+          services.tam-client.openBrowserAtLogin = true;  # opened at login: with automatic login, a kiosk
+          services.tam-client.openFirewall = true;        # UDP 5353, to find the server by its announcement
+        }
+      ];
+    };
+  };
+}
+```
+
+And the machine that holds the event's data:
+
+```nix
+services.tam-server = {
+  enable = true;
+  openFirewall = true;                           # TCP 8000 (8443 with tls), and UDP 5353 for the announcement
+  # tls = true;                                  # HTTPS with a self-signed certificate, or certFile and keyFile
+  # passwordFile = "/run/secrets/tam-password";  # otherwise the password is set on the first visit of /admin
+};
+```
+
+A configuration without flakes can import the module from a pinned commit, with flakes enabled in `nix.settings.experimental-features`:
+
+```nix
+imports = [ (builtins.getFlake "github:ticket-auction-manager/tam-go/<commit>").nixosModules.default ];
+```
+
+Compared with `nixos/tam.nix`, the laptop runs `tam-client` natively instead of the Docker image, finds and pairs with the server from its Settings page instead of a `tam.lan` hosts entry, and keeps the automatic login in its own configuration (`services.displayManager.autoLogin`). Shut Down TAM in the web app stops the service until the next boot or `systemctl start tam-client`. The programs in the Linux archives are static, so they also run by hand on NixOS; `install.sh` stops there, since NixOS keeps `/etc` and the units in its configuration. The flake pins its nixpkgs, because the build needs Go 1.27, which NixOS 26.05 does not have; a machine on a stable release runs the same build. When `go.sum` or `frontend/pnpm-lock.yaml` changes, `nix/package.nix` needs the new `vendorHash` or pnpm `hash`: set it to `lib.fakeHash`, run `nix build`, and copy the hash Nix reports. CI's Nix job fails until then.
 
 **macOS.** Extract `tam-server-<version>-darwin-arm64.tar.gz` or `tam-client-<version>-darwin-arm64.tar.gz` (Apple silicon; `-darwin-amd64` for Intel). The programs are not signed, so clear the quarantine flag once (`xattr -dr com.apple.quarantine tam-client` or `tam-server`) and make sure the program is executable (`chmod +x`), then run it by hand, or start it at login with the launchd agents `com.ticket-auction-manager.tam-server.plist` and `com.ticket-auction-manager.tam-client.plist` from `deploy/macos` (`INSTALL.md` in the archive has the `launchctl bootstrap` and `bootout` commands). The agents keep the data under `~/Library/Application Support/tam-server` and `~/Library/Application Support/tam-client` and restart a program after a crash. There is no notification-area icon on macOS.
 
@@ -351,6 +403,7 @@ internal/admin                   the server's login-protected admin pages and pa
 internal/version                 the version both programs report, stamped at build time
 scripts/compat                   the compatibility run against the original tam
 scripts/loadtest                 the load test: a whole event through one server and many laptops
+flake.nix, nix/                  the Nix package, the NixOS module for both services and its NixOS test
 deploy/linux, deploy/macos, deploy/docker   systemd units, installer and .deb/.rpm definitions (nfpm/), launchd agents, Dockerfile and compose
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```

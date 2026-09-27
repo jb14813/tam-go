@@ -10,6 +10,7 @@ Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-p
 | Fedora, RHEL, Rocky, Alma and their relatives | the `.rpm` of the program, `.x86_64.rpm` or `.aarch64.rpm` |
 | Any other Linux | the `-linux-amd64.tar.gz` (or `-arm64`) of the program: it holds the program, an installer script for systemd, and the menu entry for the client |
 | macOS | the `-darwin-arm64.tar.gz` (Apple silicon) or `-darwin-amd64.tar.gz` (Intel) of the program, with a launchd file |
+| NixOS | nothing: the repository's flake builds both programs, and its NixOS module runs them as services (see the README) |
 | Docker | build from source with `deploy/docker` in the repository; see the README |
 
 ## First start

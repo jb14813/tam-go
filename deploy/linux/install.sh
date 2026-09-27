@@ -42,6 +42,12 @@ case "$what" in
   all) programs=(tam-server tam-client) ;;
   *) echo "usage: sudo $0 [server|client|all]  (no argument: the program found next to the script)" >&2; exit 1 ;;
 esac
+if [ -e /etc/NIXOS ]; then
+  # /etc and the units come from the NixOS configuration, which the flake's
+  # module fills in; the programs here still run by hand.
+  echo "$0: this is NixOS; use the NixOS module of this repository's flake instead (services.tam-server, services.tam-client; see README.md)" >&2
+  exit 1
+fi
 if [ "$(id -u)" -ne 0 ]; then
   echo "$0: run it as root: sudo $0 $what" >&2
   exit 1
