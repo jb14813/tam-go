@@ -746,8 +746,9 @@ func (s *site) getJSON(path string) (*http.Response, string) {
 // earlier run of the server would have left them.
 func (s *site) stamp(key string, seen, update time.Time) {
 	s.t.Helper()
-	if _, err := s.sqldb.Exec(`UPDATE auth_keys SET last_seen = ?, last_update = ? WHERE auth_key = ?`,
-		seen.UTC().Format(time.RFC3339), update.UTC().Format(time.RFC3339), key); err != nil {
+	if _, err := s.sqldb.Exec(`INSERT INTO auth_key_activity (auth_key, last_seen, last_update) VALUES (?, ?, ?)
+		ON CONFLICT (auth_key) DO UPDATE SET last_seen = excluded.last_seen, last_update = excluded.last_update`,
+		key, seen.UTC().Format(time.RFC3339), update.UTC().Format(time.RFC3339)); err != nil {
 		s.t.Fatal(err)
 	}
 }

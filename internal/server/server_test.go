@@ -257,7 +257,7 @@ func TestKeyRoutesTouchLastSeenOncePerInterval(t *testing.T) {
 
 	// Within the interval nothing is written, even when the stored value
 	// changed underneath.
-	if _, err := a.sqldb.Exec(`UPDATE auth_keys SET last_seen = '2000-01-01T00:00:00Z'`); err != nil {
+	if _, err := a.sqldb.Exec(`UPDATE auth_key_activity SET last_seen = '2000-01-01T00:00:00Z'`); err != nil {
 		t.Fatal(err)
 	}
 	a.keyed("POST", "/api/tickets", `[]`)
@@ -741,7 +741,7 @@ func TestAcceptedWritesPersistLastUpdateOncePerInterval(t *testing.T) {
 	if updated, err := time.Parse(time.RFC3339, lastUpdate()); err != nil || time.Since(updated) > 5*time.Second {
 		t.Fatalf("last_update after an accepted write = %q (%v)", lastUpdate(), err)
 	}
-	if _, err := a.sqldb.Exec(`UPDATE auth_keys SET last_update = '2000-01-01T00:00:00Z'`); err != nil {
+	if _, err := a.sqldb.Exec(`UPDATE auth_key_activity SET last_update = '2000-01-01T00:00:00Z'`); err != nil {
 		t.Fatal(err)
 	}
 	a.keyed("POST", "/api/baskets", `[]`)
