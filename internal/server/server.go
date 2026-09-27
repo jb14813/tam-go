@@ -289,7 +289,7 @@ func (h *handler) ordered(w http.ResponseWriter, r *http.Request, content any, s
 		log.Printf("save %d of client %s arrived again; it was applied the first time", n, client)
 		return true, nil
 	case store.Behind:
-		log.Printf("save %d of client %s is older than its save %d, applied already; not applied, the client sends it again with a new number", n, client, last)
+		log.Printf("save %d of client %s is older than its save %d, applied already: not applied (a late copy of a save sent again since, or a client whose numbers went back)", n, client, last)
 		return false, behindError{n: n, last: last}
 	}
 	return false, nil
