@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -19,10 +18,6 @@ const (
 	// anonymousLife is how long a login form can sit open before its token
 	// expires. Anyone can open the form, so these sessions are short.
 	anonymousLife = time.Hour
-	// maxFailures is how many wrong passwords an address may send before it
-	// has to wait failureWait.
-	maxFailures = 5
-	failureWait = 30 * time.Second
 )
 
 // session is one browser's state: an id in the cookie, a token every form
@@ -35,22 +30,16 @@ type session struct {
 	flash    string // a message shown once on the next page
 }
 
-// sessions is the in-memory session table plus the login rate limit. Both
-// are lost on restart, which just means logging in again.
+// sessions is the in-memory session table. It is lost on restart, which
+// just means logging in again.
 type sessions struct {
-	mu       sync.Mutex
-	byID     map[string]*session
-	failures map[string]*failure // by remote address
-	now      func() time.Time
-}
-
-type failure struct {
-	count int
-	until time.Time // when count reached maxFailures: the end of the wait
+	mu   sync.Mutex
+	byID map[string]*session
+	now  func() time.Time
 }
 
 func newSessions() *sessions {
-	return &sessions{byID: map[string]*session{}, failures: map[string]*failure{}, now: time.Now}
+	return &sessions{byID: map[string]*session{}, now: time.Now}
 }
 
 func randomHex() string {
@@ -133,55 +122,6 @@ func (ss *sessions) takeFlash(id string) string {
 // validToken reports whether token is the session's form token.
 func (s *session) validToken(token string) bool {
 	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.csrf)) == 1
-}
-
-// --- login rate limit ---
-
-// remoteIP is the address part of r.RemoteAddr.
-func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// loginAllowed reports whether addr may try a password now. Once the wait
-// after maxFailures wrong passwords is over the count starts again.
-func (ss *sessions) loginAllowed(addr string) bool {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	f, ok := ss.failures[addr]
-	if !ok || f.count < maxFailures {
-		return true
-	}
-	if ss.now().Before(f.until) {
-		return false
-	}
-	delete(ss.failures, addr)
-	return true
-}
-
-// noteFailure counts a wrong password from addr.
-func (ss *sessions) noteFailure(addr string) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	f, ok := ss.failures[addr]
-	if !ok {
-		f = &failure{}
-		ss.failures[addr] = f
-	}
-	f.count++
-	if f.count >= maxFailures {
-		f.until = ss.now().Add(failureWait)
-	}
-}
-
-// noteSuccess forgets addr's wrong passwords.
-func (ss *sessions) noteSuccess(addr string) {
-	ss.mu.Lock()
-	delete(ss.failures, addr)
-	ss.mu.Unlock()
 }
 
 // --- cookies ---

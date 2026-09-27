@@ -23,6 +23,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/tlscert"
@@ -147,12 +148,15 @@ func main() {
 		absDataDir = dataDir
 	}
 	st := store.New(sqldb)
+	// One limit on wrong passwords per address covers the admin login and
+	// the API's key routes, so guesses cannot be split between the two.
+	guesses := guard.New()
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()}, admin.WithGuesses(guesses))
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
 	mux.Handle("/favicon.ico", adminPages)
-	mux.Handle("/", server.NewHandler(st, password))
+	mux.Handle("/", server.NewHandler(st, password, server.WithGuesses(guesses)))
 	srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
