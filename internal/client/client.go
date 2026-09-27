@@ -43,8 +43,9 @@ type handler struct {
 	rcTLS  bool
 	rcPin  string
 
-	timings tamsync.Timings
-	runCtx  context.Context
+	timings     tamsync.Timings
+	runCtx      context.Context
+	syncStopped chan<- struct{}
 
 	// The last subnet sweep for servers, refreshed in the background.
 	sweepMu  sync.Mutex
@@ -69,6 +70,12 @@ func WithSyncLoop(ctx context.Context) Option {
 	return func(h *handler) { h.runCtx = ctx }
 }
 
+// WithSyncStopped has the handler close ch once the loop WithSyncLoop
+// started has stopped, so the program can close the database after it.
+func WithSyncStopped(ch chan<- struct{}) Option {
+	return func(h *handler) { h.syncStopped = ch }
+}
+
 // WithTimings shortens the syncer's delays (for tests).
 func WithTimings(t tamsync.Timings) Option {
 	return func(h *handler) { h.timings = t }
@@ -87,7 +94,12 @@ func newHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option
 	}
 	h.sync = tamsync.New(st, h.cfg, h.remote, h.timings)
 	if h.runCtx != nil {
-		go h.sync.Run(h.runCtx)
+		go func() {
+			h.sync.Run(h.runCtx)
+			if h.syncStopped != nil {
+				close(h.syncStopped)
+			}
+		}()
 	}
 	return h
 }
