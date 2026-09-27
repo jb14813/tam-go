@@ -41,6 +41,38 @@ go test ./...           # store, server and client tests, including remote mode
 
 For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost:5173/web/ and proxies `/api` to a running `tam-client`.
 
+## Running the tests
+
+The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push.
+
+Unit and integration tests; the client tests drive the real server handler as their server:
+
+```
+go test ./...
+```
+
+The compatibility run against the original tam, its FastAPI server at a pinned commit and its SvelteKit client next to the Go programs (needs Python 3, Node with pnpm, git and curl):
+
+```
+bash scripts/compat/run.sh
+```
+
+The load test runs a whole event through one real `tam-server` and many real `tam-client` programs on the machine, each laptop with its own data folder and paired through its Settings route. Ticket entry is paced over 40 seconds, fixing a typo now and then and opening sheets again; a quarter of the way in the server is killed and started again 8 seconds later while the laptops keep saving, and each laptop goes back to correct the sheets it saved meanwhile as soon as it sees the server again. Then another laptop corrects every 40th ticket, the baskets are entered and drawn (each winner looked up as the page does), every report and a few searches are read, and for 10 seconds every laptop saves as fast as it can. It then checks every ticket, basket and winner on the server and in each laptop's own copy, and everything the programs wrote, and prints the time of every page action:
+
+```
+go run ./scripts/loadtest
+go run ./scripts/loadtest -laptops 50 -tickets 9000 -baskets 1000
+go run ./scripts/loadtest -h
+```
+
+It exits with status 1 when a check fails and then keeps the data folders and logs for a look. `-bin <folder>` tests programs built elsewhere, such as a release or a build with `-race`.
+
+To test over a real network, start `tam-server` on another machine with an empty data folder and a password, and point the laptops at it; `-kill` and `-restart` take the commands that kill that server and start it again (through ssh, for example) for the outage, and without them the run has no outage:
+
+```
+go run ./scripts/loadtest -server http://<that machine>:8000 -password <its password> -laptops 100
+```
+
 ## Configuration
 
 | Setting | Where | Default |
@@ -82,8 +114,8 @@ Remote mode is for events with several laptops: one `tam-server` holds the data 
 
 What happens with the connection:
 
-- **Reads** come from the server while it answers and are copied into the laptop's own database on the way. When the server does not answer, the pages read that copy instead, so the forms, reports and search keep working. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything.
-- **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), the rows are stored on the laptop and queued in an outbox; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again drains it.
+- **Reads** come from the server while it answers and nothing saved on this laptop is still waiting to reach it, and are copied into the laptop's own database on the way. Otherwise the pages read that copy, so the forms, reports and search keep working, and a sheet saved while the server was away shows what was saved until the server has it too. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything; rows the laptop saves while that download is on its way keep what was saved.
+- **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), or this laptop still has saves waiting for it, the rows are stored on the laptop and queued in an outbox behind the ones already there, so the server takes a laptop's saves in the order they were made; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again drains it.
 - **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A laptop replaying an old edit after another laptop changed the same ticket wins with the older edit.
 - **Refused saves** (the server answered 4xx during a replay) are kept in a failed list, counted in the bar, and can be retried or discarded from Settings.
 
@@ -175,6 +207,7 @@ internal/sync                    connection state, heartbeat, outbox replay, mir
 internal/discovery               mDNS announce (server) and browse (client)
 internal/admin                   the server's login-protected admin pages and password file
 scripts/compat                   the compatibility run against the original tam
+scripts/loadtest                 the load test: a whole event through one server and many laptops
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
 

@@ -77,3 +77,38 @@ jobs:
 
       - name: Original server with the Go client, then the Go server with both clients
         run: bash scripts/compat/run.sh
+
+  load:
+    name: Race detector and load test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tests with the race detector
+        run: go test -race ./...
+
+      - name: Load test with the race detector (12 laptops, the server killed during ticket entry)
+        run: |
+          mkdir -p "$RUNNER_TEMP/tam"
+          go build -race -o "$RUNNER_TEMP/tam/" ./cmd/tam-server ./cmd/tam-client
+          go run -race ./scripts/loadtest -bin "$RUNNER_TEMP/tam" -laptops 12 -tickets 3000 -baskets 500 -entry 20s -outage 5s -rush 5s
