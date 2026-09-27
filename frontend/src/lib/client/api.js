@@ -69,10 +69,18 @@ export const SAVE_UNREACHABLE =
  * nothing to save), otherwise the message to show: the API's own reason, or
  * that the client program could not be reached (it was shut down or crashed).
  * Either way nothing was saved and the rows stay marked.
+ *
+ * `saved(row)` is the part of a row the save stores, the whole row unless
+ * the form says otherwise; a row whose part changed while the save was on
+ * its way stays marked.
  */
-export async function saveMarked(url, rows, { keepalive = false } = {}) {
+export async function saveMarked(
+	url,
+	rows,
+	{ keepalive = false, saved = (r) => JSON.stringify(r) } = {}
+) {
 	if (rows.length === 0) return '';
-	const sent = rows.map((r) => JSON.stringify(r));
+	const sent = rows.map(saved);
 	let res;
 	try {
 		res = await postJSON(url, rows, { keepalive });
@@ -86,7 +94,7 @@ export async function saveMarked(url, rows, { keepalive = false } = {}) {
 	// A row typed in again while the save was on its way keeps its mark, so
 	// the next save sends what is on the screen now.
 	rows.forEach((r, i) => {
-		if (JSON.stringify(r) === sent[i]) r.changed = false;
+		if (saved(r) === sent[i]) r.changed = false;
 	});
 	return '';
 }
