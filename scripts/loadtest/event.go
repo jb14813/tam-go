@@ -280,8 +280,8 @@ func (ev *event) buyerOf(prefix string, winning int) store.Ticket {
 }
 
 // searchCount is how many saved tickets a search by last name finds. The
-// server matches with SQL LIKE: anywhere in the name, ignoring the case of
-// ASCII letters only.
+// server matches anywhere in the name, ignoring the case of ASCII letters
+// only.
 func (ev *event) searchCount(last string) int {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
