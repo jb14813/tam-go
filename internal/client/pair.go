@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,7 +26,11 @@ const browseWait = 1500 * time.Millisecond
 func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 	st := h.sync.Status()
 	if st.Mode == "standalone" {
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"mode": "standalone"})
+		out := map[string]string{"mode": "standalone"}
+		if st.SettingsError != "" {
+			out["settings_error"] = st.SettingsError
+		}
+		httpx.WriteJSON(w, http.StatusOK, out)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, st)
@@ -89,9 +95,15 @@ type pairRequest struct {
 //
 // Saves still queued stay queued when the client pairs with the server it
 // was paired with (at the same address, or by the same name at a new one),
-// which is how a client whose key was refused gets going again. Pairing with
-// another server moves them to the failed list instead: they are not sent
-// anywhere by themselves, and Settings offers Retry and Discard.
+// which is how a client whose key was refused, or whose server has a new
+// certificate, gets going again. Pairing with another server moves them to
+// the failed list instead: they are not sent anywhere by themselves, and
+// Settings offers Retry and Discard.
+//
+// Pairing with another server while this client holds data of its own (from
+// working standalone, or a copy of another server's data) first saves that
+// data to a file in the data folder (see keepLocalData): the first copy of
+// the server's data replaces the rows with the same numbers here.
 func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	var req pairRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -152,6 +164,9 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		name = root.Name
 	}
 
+	prev := h.settings()
+	same := prev.RemoteURL() != "" &&
+		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
 	res, err = rc.Do(http.MethodPost, "/api/auth", map[string]string{"TAM-PW": req.Password}, map[string]string{"description": h.host})
 	if err != nil {
 		h.unreachableAt(w, hostPort, err)
@@ -176,9 +191,16 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prev := h.settings()
-	same := prev.RemoteURL() != "" &&
-		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
+	// Before the settings change: from then on the syncer may copy the
+	// server's data in at any moment.
+	kept := ""
+	if !same {
+		kept = h.keepLocalData(name)
+	}
+
+	// The settings and the queue change together, while no save is on its
+	// way to the old server.
+	defer h.sync.Sending()()
 	if _, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
 		cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
 		cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = key.AuthKey, name, fingerprint
@@ -187,7 +209,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
-	msg := "Paired with " + name
+	msg := "Paired with " + name + "." + kept
 	if !same {
 		from := "before this pairing"
 		if prev.RemoteURL() != "" {
@@ -199,7 +221,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 			log.Printf("outbox: %v", err)
 		case moved > 0:
 			log.Printf("paired with %s: %s queued %s set aside in the failed list", name, plural(moved, "save"), from)
-			msg += fmt.Sprintf(". %s queued %s %s set aside: Settings lists them under could not be sent, to retry here or discard.",
+			msg += fmt.Sprintf(" %s queued %s %s set aside: Settings lists them under could not be sent, to retry here or discard.",
 				plural(moved, "save"), from, wasWere(moved))
 		}
 	}
@@ -207,6 +229,35 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	h.sync.Kick()
 	log.Printf("paired with %s (%s)", name, hostPort)
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": msg, "server": hostPort})
+}
+
+// keepLocalData saves the data this client holds of its own to a file in
+// its data folder before it pairs with another server, whose data then
+// replaces the rows with the same numbers here: nothing entered on this
+// client is lost, and Backup and Restore can load the file again or send
+// it to the server. It returns the sentence the pairing's message adds, or
+// "" when the client holds no data.
+func (h *handler) keepLocalData(server string) string {
+	bf, err := h.st.Export()
+	if err != nil {
+		log.Printf("pair: keeping this client's data: %v", err)
+		return ""
+	}
+	if len(bf.Prefixes)+len(bf.Tickets)+len(bf.Baskets) == 0 {
+		return ""
+	}
+	name := "before-pairing-" + time.Now().Format("20060102-150405") + ".json"
+	data, err := json.MarshalIndent(bf, "", "  ")
+	if err == nil {
+		err = os.WriteFile(filepath.Join(h.dataDir, name), data, 0o600)
+	}
+	what := fmt.Sprintf("%s, %s and %s", count(len(bf.Prefixes), "prefix", "prefixes"), plural(len(bf.Tickets), "ticket"), plural(len(bf.Baskets), "basket"))
+	if err != nil {
+		log.Printf("pair: keeping this client's data (%s): %v", what, err)
+		return fmt.Sprintf(" This client's own data (%s) could not be saved to a file first (%v); %s's data replaces rows with the same numbers.", what, err, server)
+	}
+	log.Printf("pair: this client's own data (%s) saved to %s before pairing with %s", what, name, server)
+	return fmt.Sprintf(" This client's own data (%s) was saved to %s in its data folder first; Backup and Restore can load it again or send it to the server.", what, name)
 }
 
 // serverLabel names the server of the settings as the pages do.
@@ -239,6 +290,7 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "This client is not paired with a server")
 		return
 	}
+	defer h.sync.Sending()() // no save is on its way while the queue is set aside
 	if req.Password != "" && s.RemoteKey != "" {
 		if rc := h.remote(s); rc != nil {
 			res, err := rc.WithTimeout(5*time.Second).Do(http.MethodDelete, "/api/auth?key_to_del="+url.QueryEscape(s.RemoteKey),
@@ -281,7 +333,9 @@ func (h *handler) retryOutbox(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
+	done := h.sync.Sending() // renumbered in line with the saves being made
 	n, err := h.st.RetryFailed(h.host)
+	done()
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
@@ -313,6 +367,14 @@ func (h *handler) discardOutbox(w http.ResponseWriter, r *http.Request) {
 func (h *handler) unreachableAt(w http.ResponseWriter, hostPort string, err error) {
 	log.Printf("pair %s: %v", hostPort, err)
 	httpx.WriteError(w, http.StatusBadGateway, "Remote server unreachable")
+}
+
+// count is plural for a noun whose plural is not noun+"s".
+func count(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func plural(n int, noun string) string {

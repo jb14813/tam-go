@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,10 +26,11 @@ import (
 )
 
 type handler struct {
-	st   *store.Store
-	cfg  *config.File
-	sync *tamsync.Syncer
-	host string // this machine's name, under which the client names itself
+	st      *store.Store
+	cfg     *config.File
+	sync    *tamsync.Syncer
+	host    string // this machine's name, under which the client names itself
+	dataDir string // the folder of settings.json and the database
 
 	// shutdown, when set, is called after POST /api/shutdown has answered.
 	shutdown func()
@@ -79,7 +81,7 @@ func NewHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option
 }
 
 func newHandler(st *store.Store, settingsPath string, dist fs.FS, opts ...Option) *handler {
-	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings(), host: hostname()}
+	h := &handler{st: st, cfg: config.Open(settingsPath), timings: tamsync.DefaultTimings(), host: hostname(), dataDir: filepath.Dir(settingsPath)}
 	for _, opt := range opts {
 		opt(h)
 	}

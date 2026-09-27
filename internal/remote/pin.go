@@ -27,6 +27,11 @@ func (c *Client) WithTimeout(d time.Duration) *Client {
 	return &cp
 }
 
+// ErrCertificateChanged is a server whose certificate is not the one pinned
+// when the client was paired (see NewPinned). A request fails with an error
+// that wraps it.
+var ErrCertificateChanged = errors.New("server certificate changed")
+
 // NewPinned returns an HTTPS client that accepts only the server
 // certificate whose SHA-256 fingerprint is fingerprint (lowercase hex, as
 // returned by Fingerprint). This is trust-on-first-use: the fingerprint is
@@ -42,7 +47,7 @@ func NewPinned(baseURL, key, fingerprint string) *Client {
 				return errors.New("server sent no certificate")
 			}
 			if got := fingerprintOf(raw[0]); got != want {
-				return fmt.Errorf("server certificate changed (fingerprint %s); pair with the server again", got)
+				return fmt.Errorf("%w (fingerprint %s); pair with the server again", ErrCertificateChanged, got)
 			}
 			return nil
 		},
