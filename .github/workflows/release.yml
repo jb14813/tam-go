@@ -44,10 +44,7 @@ jobs:
           # The description: docs/release-notes.md with the version filled in,
           # then the list of changes GitHub generates.
           sed -e "s#{VERSION}#$GITHUB_REF_NAME#g" -e "s#{REPO}#$GITHUB_REPOSITORY#g" docs/release-notes.md > build/release-notes.md
-          printf '
-## Changes
-
-' >> build/release-notes.md
+          printf '\n## Changes\n\n' >> build/release-notes.md
           gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body >> build/release-notes.md
           gh release create "$GITHUB_REF_NAME" $pre --title "Ticket Auction Manager $GITHUB_REF_NAME" --notes-file build/release-notes.md \
             build/tam-server-*.exe build/tam-client-*.exe \
