@@ -1,5 +1,5 @@
 <script>
-	import { resolve } from '$app/paths';
+	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
 	import { getJSON, saveMarked, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
@@ -177,7 +177,7 @@
 					<div>Tickets:</div>
 					{#each prefixes as p (p.prefix)}
 						<a
-							href={resolve('/tickets/[prefix]', { prefix: p.prefix })}
+							href={prefixPage('/tickets/[prefix]', p.prefix)}
 							class={prefix.prefix == p.prefix ? bAS[p.color] : bS[p.color]}>{p.prefix}</a
 						>
 					{/each}

@@ -2,6 +2,7 @@
 	import logo from '$lib/assets/logo.svg';
 	import { tS, bS, bAS } from '$lib/client/styles.js';
 	import { resolve } from '$app/paths';
+	import { prefixPage } from '$lib/client/paths.js';
 	import hotkeys from 'hotkeys-js';
 
 	const pageTitle = 'Main Menu | TAM';
@@ -114,25 +115,20 @@
 			<div class="flex flex-col gap-1 items-center p-1 border border-black rounded">
 				<h2 class="text-lg font-bold">Forms:</h2>
 				<div class="grid grid-cols-2 gap-1 p-1 text-center">
-					<a href={resolve('/tickets/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
-						>Tickets</a
-					>
-					<a href={resolve('/baskets/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
-						>Baskets</a
-					>
-					<a
-						href={resolve('/drawing/[prefix]', { prefix: curPrefix })}
-						class="{bS[pColor]} col-span-2">Drawing Form</a
+					<a href={prefixPage('/tickets/[prefix]', curPrefix)} class={bS[pColor]}>Tickets</a>
+					<a href={prefixPage('/baskets/[prefix]', curPrefix)} class={bS[pColor]}>Baskets</a>
+					<a href={prefixPage('/drawing/[prefix]', curPrefix)} class="{bS[pColor]} col-span-2"
+						>Drawing Form</a
 					>
 				</div>
 			</div>
 			<div class="flex flex-col gap-1 items-center p-1 border border-black rounded">
 				<h2 class="text-lg font-bold">Reports:</h2>
 				<div class="grid grid-cols-2 gap-1 p-1 text-center">
-					<a href={resolve('/reports/byname/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
+					<a href={prefixPage('/reports/byname/[prefix]', curPrefix)} class={bS[pColor]}
 						>Winners By Name</a
 					>
-					<a href={resolve('/reports/bybasket/[prefix]', { prefix: curPrefix })} class={bS[pColor]}
+					<a href={prefixPage('/reports/bybasket/[prefix]', curPrefix)} class={bS[pColor]}
 						>Winners By Basket</a
 					>
 				</div>

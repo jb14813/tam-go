@@ -1,5 +1,5 @@
 <script>
-	import { resolve } from '$app/paths';
+	import { prefixPage } from '$lib/client/paths';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import { bAS, bS } from '$lib/client/styles';
 
@@ -35,7 +35,7 @@
 					<div>By Name Reports:</div>
 					{#each data.prefixes as p (p.prefix)}
 						<a
-							href={resolve('/reports/byname/[prefix]', { prefix: p.prefix })}
+							href={prefixPage('/reports/byname/[prefix]', p.prefix)}
 							class={p.prefix == prefix.prefix ? bAS[p.color] : bS[p.color]}>{p.prefix}</a
 						>
 					{/each}
