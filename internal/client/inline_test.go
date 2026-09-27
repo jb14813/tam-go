@@ -486,6 +486,8 @@ func TestSaveDoesNotWaitForAStuckReplay(t *testing.T) {
 	var mu sync.Mutex
 	hang := false
 	release := make(chan struct{})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		h := hang && r.Method == http.MethodPost
@@ -495,7 +497,7 @@ func TestSaveDoesNotWaitForAStuckReplay(t *testing.T) {
 		}
 		inner.ServeHTTP(w, r)
 	}))
-	t.Cleanup(func() { close(release); rs.Close() })
+	t.Cleanup(func() { letGo(); rs.Close() })
 	u, _ := url.Parse(rs.URL)
 	s := config.Defaults()
 	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), k.AuthKey
@@ -517,7 +519,8 @@ func TestSaveDoesNotWaitForAStuckReplay(t *testing.T) {
 	mu.Lock()
 	hang = true
 	mu.Unlock()
-	go f.h.sync.Tick()
+	replayed := make(chan struct{})
+	go func() { f.h.sync.Tick(); close(replayed) }()
 	time.Sleep(300 * time.Millisecond)
 
 	began := time.Now()
@@ -528,4 +531,8 @@ func TestSaveDoesNotWaitForAStuckReplay(t *testing.T) {
 	if p, _ := pending(t, f.st); p != 2 {
 		t.Fatalf("pending = %d, want the page's save queued behind the hung one", p)
 	}
+	// The link comes back; the replay finishes before the test's folders go
+	// (Windows does not remove a database that is still being written).
+	letGo()
+	<-replayed
 }
