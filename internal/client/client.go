@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -279,8 +278,9 @@ func (s *spa) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// A missing asset is a 404; a missing page is the app itself.
-		if strings.Contains(path.Base(rel), ".") {
+		// A missing bundle file is a 404; any other address is a page of the
+		// app, whatever it looks like: a prefix may be named 5.00.
+		if strings.HasPrefix(rel, "_app/") && !strings.HasSuffix(rel, "/") {
 			http.NotFound(w, r)
 			return
 		}
