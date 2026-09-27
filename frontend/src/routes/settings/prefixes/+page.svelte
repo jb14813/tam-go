@@ -1,5 +1,5 @@
 <script>
-	import { onMount, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import { bS, bAS, iS, tS } from '$lib/client/styles';
 	import { postJSON, readDetail } from '$lib/client/api';
@@ -14,14 +14,17 @@
 	let editPrefix = $state({ prefix: '', color: 'white', weight: 1 });
 	let status = $state('');
 
+	// Back to the prefix name when a name is refused. After a save the page
+	// reloads, and the name field's autofocus puts the cursor there instead:
+	// SvelteKit sets the focus itself once a page has loaded, on the element
+	// with autofocus or else on the page, so focusing earlier does not hold.
 	const selectPrefixInput = () => {
 		const form_prefix = document.getElementById('form_prefix');
-		if (form_prefix) form_prefix.select();
+		if (form_prefix) {
+			form_prefix.focus();
+			form_prefix.select();
+		}
 	};
-
-	onMount(() => {
-		selectPrefixInput();
-	});
 
 	async function addChange() {
 		const name = String(editPrefix.prefix ?? '').trim();
@@ -81,7 +84,9 @@
 	<div class="flex flex-row gap-1 py-1 items-center">
 		<div class="flex flex-col gap-1">
 			<div>Prefix</div>
-			<input type="text" id="form_prefix" class={iS.normal} bind:value={editPrefix.prefix} />
+			<!-- The cursor belongs in the first field of this form; see selectPrefixInput. -->
+			<!-- svelte-ignore a11y_autofocus -->
+			<input type="text" id="form_prefix" class={iS.normal} bind:value={editPrefix.prefix} autofocus />
 		</div>
 		<div class="flex flex-col gap-1">
 			<div>Color</div>
