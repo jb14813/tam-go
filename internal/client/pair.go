@@ -194,8 +194,9 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		kept = h.keepLocalData(name)
 	}
 
-	// The settings and the queue change together, while no save is on its
-	// way to the old server.
+	// The settings and the queue change together, while no save is numbered
+	// or on its way to the old server.
+	defer h.sync.Numbering()()
 	defer h.sync.Sending()()
 	if _, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
 		cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
@@ -286,7 +287,8 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "This client is not paired with a server")
 		return
 	}
-	defer h.sync.Sending()() // no save is on its way while the queue is set aside
+	defer h.sync.Numbering()() // no save is numbered or on its way while the queue is set aside
+	defer h.sync.Sending()()
 	if req.Password != "" && s.RemoteKey != "" {
 		if rc := h.remote(s); rc != nil {
 			res, err := rc.WithTimeout(5*time.Second).Do(http.MethodDelete, "/api/auth?key_to_del="+url.QueryEscape(s.RemoteKey),
@@ -329,7 +331,7 @@ func (h *handler) retryOutbox(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
-	done := h.sync.Sending() // renumbered in line with the saves being made
+	done := h.sync.Numbering() // renumbered in line with the saves being made
 	n, err := h.st.RetryFailed(h.host)
 	done()
 	if err != nil {
