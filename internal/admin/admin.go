@@ -287,7 +287,7 @@ func (h *handler) formSession(w http.ResponseWriter, r *http.Request) *session {
 	if !h.parseForm(w, r) {
 		return nil
 	}
-	s := h.ss.get(cookieID(r))
+	s := h.ss.visitor(cookieID(r))
 	if s == nil || !s.validToken(r.PostFormValue("csrf")) {
 		h.errorPage(w, r, http.StatusForbidden)
 		return nil
@@ -308,6 +308,10 @@ func (h *handler) loggedIn(next func(http.ResponseWriter, *http.Request, *sessio
 			if s = h.formSession(w, r); s == nil {
 				return
 			}
+			if !s.loggedIn { // logged out in between
+				http.Redirect(w, r, "/admin/", http.StatusSeeOther)
+				return
+			}
 		}
 		next(w, r, s)
 	})
@@ -319,7 +323,7 @@ func (h *handler) startSession(w http.ResponseWriter, r *http.Request, old *sess
 	if old != nil {
 		h.ss.delete(old.id)
 	}
-	s := h.ss.create(true)
+	s := h.ss.create()
 	setCookie(w, r, s, h.ss.now())
 	return s
 }
@@ -327,13 +331,13 @@ func (h *handler) startSession(w http.ResponseWriter, r *http.Request, old *sess
 // --- login and setup ---
 
 func (h *handler) home(w http.ResponseWriter, r *http.Request) {
-	s := h.ss.get(cookieID(r))
+	s := h.ss.visitor(cookieID(r))
 	if s != nil && s.loggedIn && h.pw.IsSet() {
 		http.Redirect(w, r, "/admin/status", http.StatusSeeOther)
 		return
 	}
 	if s == nil {
-		s = h.ss.create(false)
+		s = h.ss.visit()
 		setCookie(w, r, s, h.ss.now())
 	}
 	if !h.pw.IsSet() {
