@@ -339,12 +339,12 @@ func TestReports(t *testing.T) {
 
 func TestAuthKeys(t *testing.T) {
 	s := newTestStore(t)
-	k, err := s.CreateKey("laptop 1")
+	k, err := s.CreateKey("client 1")
 	must(t, err)
 	if !regexp.MustCompile(`^[A-Z0-9]{32}$`).MatchString(k.AuthKey) {
 		t.Fatalf("key format: %q", k.AuthKey)
 	}
-	k2, _ := s.CreateKey("laptop 2")
+	k2, _ := s.CreateKey("client 2")
 	if k2.AuthKey == k.AuthKey {
 		t.Fatal("keys must be unique")
 	}
@@ -356,12 +356,12 @@ func TestAuthKeys(t *testing.T) {
 		t.Fatal("empty key must never exist")
 	}
 	list, _ := s.ListKeys()
-	if len(list) != 2 || list[0].Description != "laptop 1" {
+	if len(list) != 2 || list[0].Description != "client 1" {
 		t.Fatalf("ListKeys = %v", list)
 	}
 	gone, err := s.DeleteKey(k.AuthKey)
 	must(t, err)
-	if gone == nil || gone.Description != "laptop 1" {
+	if gone == nil || gone.Description != "client 1" {
 		t.Fatalf("DeleteKey should return the deleted row, got %+v", gone)
 	}
 	if ok, _ := s.KeyExists(k.AuthKey); ok {
@@ -376,7 +376,7 @@ func TestKeyLastSeen(t *testing.T) {
 	// Without the server migration there is no column: ListKeys still works
 	// and LastSeen stays empty, which keeps the JSON the original's.
 	plain := newTestStore(t)
-	k, err := plain.CreateKey("laptop")
+	k, err := plain.CreateKey("client")
 	must(t, err)
 	list, err := plain.ListKeys()
 	must(t, err)
@@ -392,7 +392,7 @@ func TestKeyLastSeen(t *testing.T) {
 
 	s := newTestStore(t)
 	must(t, db.MigrateServer(s.db))
-	k, err = s.CreateKey("laptop")
+	k, err = s.CreateKey("client")
 	must(t, err)
 	if list, _ = s.ListKeys(); list[0].LastSeen != "" {
 		t.Fatalf("a new key has no last_seen, got %q", list[0].LastSeen)

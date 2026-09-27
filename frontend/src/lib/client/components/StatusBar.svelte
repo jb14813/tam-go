@@ -51,7 +51,7 @@
 			case 'offline':
 				return { color: 'red', text: `Offline${waiting(pending)}`, settings: false };
 			case 'unauthenticated':
-				return { color: 'red', text: "The server rejected this laptop's key, open", settings: true };
+				return { color: 'red', text: "The server rejected this client's key, open", settings: true };
 			default:
 				return { color: 'gray', text: String(status.state || 'Unknown state'), settings: false };
 		}

@@ -8,7 +8,7 @@ import (
 // TestBackupKeepsPrefixesAsTheyAre: the rules for a new prefix name (no /
 // or \, not . or .., at most 100 characters, trimmed) are for names typed
 // now. A backup carries the names a database already has, possibly from the
-// original app, which allowed any: restoring it, or a laptop copying its
+// original app, which allowed any: restoring it, or a client copying its
 // server's data, takes them as they are. Renaming one would cut it off from
 // its tickets and baskets, and refusing it would refuse the whole backup.
 func TestBackupKeepsPrefixesAsTheyAre(t *testing.T) {

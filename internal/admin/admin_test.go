@@ -341,12 +341,12 @@ func TestKeysPage(t *testing.T) {
 	if res.StatusCode != 400 || !strings.Contains(body, "Give the client a name.") {
 		t.Fatalf("blank description = %d\n%s", res.StatusCode, body)
 	}
-	res, body = s.post("/admin/keys", url.Values{"csrf": {token}, "description": {" Laptop <A> "}})
+	res, body = s.post("/admin/keys", url.Values{"csrf": {token}, "description": {" Client <A> "}})
 	if res.StatusCode != 200 {
 		t.Fatalf("create key = %d\n%s", res.StatusCode, body)
 	}
 	m := regexp.MustCompile(`<p class="key">([A-Z0-9]{32})</p>`).FindStringSubmatch(body)
-	if m == nil || !strings.Contains(body, "Laptop &lt;A&gt;") || !strings.Contains(body, "not shown again") {
+	if m == nil || !strings.Contains(body, "Client &lt;A&gt;") || !strings.Contains(body, "not shown again") {
 		t.Fatalf("the new key must be shown once, escaped:\n%s", body)
 	}
 	key := m[1]
@@ -367,13 +367,13 @@ func TestKeysPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ = s.page("/admin/status")
-	if !strings.Contains(body, "Laptop &lt;A&gt;") || !strings.Contains(body, "just now") {
-		t.Fatalf("status must list the laptop with its last-seen time:\n%s", body)
+	if !strings.Contains(body, "Client &lt;A&gt;") || !strings.Contains(body, "just now") {
+		t.Fatalf("status must list the client with its last-seen time:\n%s", body)
 	}
 
 	// Deleting asks first, then deletes.
 	res, body = s.post("/admin/keys/delete", url.Values{"csrf": {token}, "key": {key}})
-	if res.StatusCode != 200 || !strings.Contains(body, "Delete the key for <strong>Laptop &lt;A&gt;</strong>") {
+	if res.StatusCode != 200 || !strings.Contains(body, "Delete the key for <strong>Client &lt;A&gt;</strong>") {
 		t.Fatalf("delete without confirmation = %d\n%s", res.StatusCode, body)
 	}
 	if ok, _ := s.st.KeyExists(key); !ok {
@@ -382,7 +382,7 @@ func TestKeysPage(t *testing.T) {
 	res, _ = s.post("/admin/keys/delete", url.Values{"csrf": {token}, "key": {key}, "confirm": {"yes"}})
 	wantRedirect(t, res, "/admin/keys")
 	body, _ = s.page("/admin/keys")
-	if !strings.Contains(body, "Deleted the key for Laptop &lt;A&gt;.") || !strings.Contains(body, "No keys yet.") {
+	if !strings.Contains(body, "Deleted the key for Client &lt;A&gt;.") || !strings.Contains(body, "No keys yet.") {
 		t.Fatalf("after the delete:\n%s", body)
 	}
 	if ok, _ := s.st.KeyExists(key); ok {

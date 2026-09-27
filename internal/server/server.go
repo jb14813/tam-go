@@ -159,7 +159,7 @@ func keyOf(r *http.Request) string {
 }
 
 // touch records the key's last_seen time, at most once per touchEvery so
-// the heartbeat of every laptop does not turn into a write every 5 s. A
+// the heartbeat of every client does not turn into a write every 5 s. A
 // failure is logged and never fails the request; last_seen is informational.
 func (h *handler) touch(key string) {
 	now := time.Now()
@@ -213,31 +213,31 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errOrder is a save whose name and number (X-TAM-Laptop, X-TAM-Save) do
+// errOrder is a save whose name and number (X-TAM-Client-Name, X-TAM-Save) do
 // not make sense.
-var errOrder = errors.New("X-TAM-Laptop must name the laptop, in at most 64 characters, and X-TAM-Save number its save, above 0")
+var errOrder = errors.New("X-TAM-Client-Name must name the client, in at most 64 characters, and X-TAM-Save number its save, above 0")
 
-// ordered runs a save in the order the laptop made it when the request
+// ordered runs a save in the order the client made it when the request
 // numbers it, as tam-client does: a save that is not newer than the last
-// one applied from that laptop is skipped (see store.InOrder) and the
-// answer says so with X-TAM-Stale; the laptop takes it as done. Saves
+// one applied from that client is skipped (see store.InOrder) and the
+// answer says so with X-TAM-Stale; the client takes it as done. Saves
 // without numbers, as the original client sends them, apply as they come.
 func (h *handler) ordered(w http.ResponseWriter, r *http.Request, save func(*store.Store) error) (stale bool, err error) {
-	laptop, number := r.Header.Get("X-TAM-Laptop"), r.Header.Get("X-TAM-Save")
-	if laptop == "" && number == "" {
+	client, number := r.Header.Get("X-TAM-Client-Name"), r.Header.Get("X-TAM-Save")
+	if client == "" && number == "" {
 		return false, save(h.st)
 	}
 	n, perr := strconv.ParseInt(number, 10, 64)
-	if laptop == "" || len(laptop) > 64 || perr != nil || n <= 0 {
+	if client == "" || len(client) > 64 || perr != nil || n <= 0 {
 		return false, errOrder
 	}
-	applied, err := h.st.InOrder(laptop, n, save)
+	applied, err := h.st.InOrder(client, n, save)
 	if err != nil {
 		return false, err
 	}
 	if !applied {
 		w.Header().Set("X-TAM-Stale", "1")
-		log.Printf("skipped save %d of laptop %s: it arrived after a newer one (a late copy or a repeat)", n, laptop)
+		log.Printf("skipped save %d of client %s: it arrived after a newer one (a late copy or a repeat)", n, client)
 	}
 	return !applied, nil
 }
@@ -384,7 +384,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !ok:
 	case stale:
-		// Done before: answered as done, so a laptop replaying it does
+		// Done before: answered as done, so a client replaying it does
 		// not file it as refused.
 		httpx.WriteJSON(w, http.StatusOK, store.Prefix{Prefix: name})
 	case gone == nil:

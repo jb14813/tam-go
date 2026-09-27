@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// relay stands between one laptop and the server, like that laptop's
+// relay stands between one client and the server, like that client's
 // Wi-Fi. While the link is up it passes bytes both ways. While it is down
 // nothing passes and nothing is refused: requests hang, as they do when a
-// laptop walks out of range. What was sent meanwhile is held, as TCP holds
+// client walks out of range. What was sent meanwhile is held, as TCP holds
 // it for retransmission, and delivered after the link is back, up to late
-// after it: a request its laptop gave up on can still reach the server,
+// after it: a request its client gave up on can still reach the server,
 // even after newer ones.
 type relay struct {
 	ln     net.Listener
@@ -36,7 +36,7 @@ func newRelay(target string, late time.Duration, seed uint64) (*relay, error) {
 	return r, nil
 }
 
-// port is where the laptop connects instead of the server.
+// port is where the client connects instead of the server.
 func (r *relay) port() string {
 	_, port, _ := net.SplitHostPort(r.ln.Addr().String())
 	return port
@@ -84,10 +84,10 @@ func (r *relay) serve() {
 }
 
 // handle carries one connection. A connection opened while the link is
-// down reaches the server only once it is back, with what the laptop sent
+// down reaches the server only once it is back, with what the client sent
 // in the meantime.
-func (r *relay) handle(laptop net.Conn) {
-	defer laptop.Close()
+func (r *relay) handle(client net.Conn) {
+	defer client.Close()
 	r.hold()
 	server, err := net.DialTimeout("tcp", r.target, 10*time.Second)
 	if err != nil {
@@ -95,8 +95,8 @@ func (r *relay) handle(laptop net.Conn) {
 	}
 	defer server.Close()
 	done := make(chan struct{}, 2)
-	go r.pump(server, laptop, done)
-	go r.pump(laptop, server, done)
+	go r.pump(server, client, done)
+	go r.pump(client, server, done)
 	<-done
 	<-done
 }

@@ -101,7 +101,7 @@
 		if (busy) return;
 		if (
 			!confirm(
-				`Unpair from ${pairedName}? This laptop goes back to standalone mode and keeps its local data.`
+				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps its local data.`
 			)
 		)
 			return;

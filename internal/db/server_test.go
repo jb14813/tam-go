@@ -28,7 +28,7 @@ func TestMigrateServerAddsLastSeen(t *testing.T) {
 	if err != nil || !has {
 		t.Fatalf("last_seen after MigrateServer: has=%v err=%v", has, err)
 	}
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z')`); err != nil {
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'client', '2026-09-25T10:00:00Z')`); err != nil {
 		t.Fatalf("insert with last_seen: %v", err)
 	}
 	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description) VALUES ('L', 'old style')`); err != nil {
@@ -38,7 +38,7 @@ func TestMigrateServerAddsLastSeen(t *testing.T) {
 
 func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
 	sqldb := openWithSchema(t, originalServerSchema)
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys VALUES ('K', 'laptop')`); err != nil {
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys VALUES ('K', 'client')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(sqldb); err != nil {
@@ -52,8 +52,8 @@ func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
 	if err := sqldb.QueryRow(`SELECT description, last_seen FROM auth_keys WHERE auth_key = 'K'`).Scan(&desc, &seen); err != nil {
 		t.Fatalf("existing key after migration: %v", err)
 	}
-	if desc != "laptop" || seen != nil {
-		t.Fatalf("existing key = %q last_seen=%v, want laptop and NULL", desc, seen)
+	if desc != "client" || seen != nil {
+		t.Fatalf("existing key = %q last_seen=%v, want client and NULL", desc, seen)
 	}
 }
 

@@ -1,5 +1,5 @@
-# A NixOS test of the module: a server and a laptop on one network. The
-# laptop finds the server by its announcement, pairs with it the way its
+# A NixOS test of the module: a server and a client on one network. The
+# client finds the server by its announcement, pairs with it the way its
 # Settings page does, and saves a prefix and a ticket; the ticket is then
 # on the server, also after both services restart. A second server serves
 # HTTPS with a certificate of its own.
@@ -40,7 +40,7 @@ in
       };
     };
 
-    laptop = {
+    client = {
       imports = [ flake.nixosModules.default ];
       services.tam-client = {
         enable = true;
@@ -63,25 +63,25 @@ in
     start_all()
     server.wait_for_unit("tam-server.service")
     server.wait_for_open_port(8000)
-    laptop.wait_for_unit("tam-client.service")
-    laptop.wait_for_open_port(3080)
+    client.wait_for_unit("tam-client.service")
+    client.wait_for_open_port(3080)
 
-    with subtest("the laptop serves the web app"):
-        laptop.succeed("curl -sSf http://localhost:3080/web/ | grep -q '<html'")
-        laptop.succeed("grep -q 'xdg-open http://localhost:3080/' /etc/xdg/autostart/tam-client.desktop")
+    with subtest("the client serves the web app"):
+        client.succeed("curl -sSf http://localhost:3080/web/ | grep -q '<html'")
+        client.succeed("grep -q 'xdg-open http://localhost:3080/' /etc/xdg/autostart/tam-client.desktop")
 
     with subtest("the server answers through its open port"):
-        root = json.loads(laptop.succeed("curl -sSf http://server:8000/api"))
+        root = json.loads(client.succeed("curl -sSf http://server:8000/api"))
         assert root["whoami"] == "TAM Server", root
 
-    with subtest("the laptop finds the server by its announcement"):
-        laptop.wait_until_succeeds("curl -sSf http://localhost:3080/api/servers | grep -q '\"name\":\"server\"'", timeout=60)
+    with subtest("the client finds the server by its announcement"):
+        client.wait_until_succeeds("curl -sSf http://localhost:3080/api/servers | grep -q '\"name\":\"server\"'", timeout=60)
 
-    with subtest("the laptop pairs and saves through the server"):
-        post(laptop, "http://localhost:3080/api/pair", {"host": "server", "port": "8000", "password": "${password}"})
-        laptop.wait_until_succeeds("curl -sSf http://localhost:3080/api/status | grep -q '\"state\":\"connected\"'", timeout=30)
-        post(laptop, "http://localhost:3080/api/prefixes", [{"prefix": "NIX", "color": "blue", "weight": 1}])
-        post(laptop, "http://localhost:3080/api/tickets", [{"prefix": "NIX", "t_id": 1, "first_name": "Ada", "last_name": "Lovelace", "phone_number": "555-0100", "pref": "CALL"}])
+    with subtest("the client pairs and saves through the server"):
+        post(client, "http://localhost:3080/api/pair", {"host": "server", "port": "8000", "password": "${password}"})
+        client.wait_until_succeeds("curl -sSf http://localhost:3080/api/status | grep -q '\"state\":\"connected\"'", timeout=30)
+        post(client, "http://localhost:3080/api/prefixes", [{"prefix": "NIX", "color": "blue", "weight": 1}])
+        post(client, "http://localhost:3080/api/tickets", [{"prefix": "NIX", "t_id": 1, "first_name": "Ada", "last_name": "Lovelace", "phone_number": "555-0100", "pref": "CALL"}])
 
     def server_has_the_ticket():
         key = json.loads(post(server, "http://localhost:8000/api/auth", {"description": "test"}, "-H 'TAM-PW: ${password}'"))["auth_key"]
@@ -96,21 +96,21 @@ in
         server.systemctl("restart tam-server.service")
         server.wait_for_open_port(8000)
         server_has_the_ticket()
-        laptop.systemctl("restart tam-client.service")
-        laptop.wait_for_open_port(3080)
-        laptop.wait_until_succeeds("curl -sSf http://localhost:3080/api/status | grep -q '\"state\":\"connected\"'", timeout=30)
-        laptop.succeed("curl -sSf http://localhost:3080/api/tickets/NIX/1 | grep -q Lovelace")
+        client.systemctl("restart tam-client.service")
+        client.wait_for_open_port(3080)
+        client.wait_until_succeeds("curl -sSf http://localhost:3080/api/status | grep -q '\"state\":\"connected\"'", timeout=30)
+        client.succeed("curl -sSf http://localhost:3080/api/tickets/NIX/1 | grep -q Lovelace")
 
     with subtest("a server with its own certificate serves it"):
         secure.wait_for_unit("tam-server.service")
         secure.wait_for_open_port(8443)
-        root = json.loads(laptop.succeed("curl -sSf --cacert ${cert}/cert.pem https://secure:8443/api"))
+        root = json.loads(client.succeed("curl -sSf --cacert ${cert}/cert.pem https://secure:8443/api"))
         assert root["whoami"] == "TAM Server", root
 
     with subtest("Shut Down TAM stops the client until it is started again"):
-        laptop.succeed("curl -sSf -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:3080/api/shutdown")
-        laptop.wait_until_succeeds("systemctl show -p ActiveState --value tam-client.service | grep -qx inactive", timeout=30)
-        laptop.succeed("systemctl start tam-client.service")
-        laptop.wait_for_open_port(3080)
+        client.succeed("curl -sSf -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:3080/api/shutdown")
+        client.wait_until_succeeds("systemctl show -p ActiveState --value tam-client.service | grep -qx inactive", timeout=30)
+        client.succeed("systemctl start tam-client.service")
+        client.wait_for_open_port(3080)
   '';
 }

@@ -27,7 +27,7 @@ func TestConcurrentWritesTakeTurns(t *testing.T) {
 		}
 	}
 	s := New(sqldb)
-	key, err := s.CreateKey("laptop")
+	key, err := s.CreateKey("client")
 	if err != nil {
 		t.Fatal(err)
 	}

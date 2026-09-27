@@ -1,4 +1,4 @@
-// Package admin is the server's login page: status, paired laptops and
+// Package admin is the server's login page: status, paired clients and
 // keys, backup and restore, and the server password. It also owns the
 // password itself, which the API's key routes check through server.Password.
 package admin

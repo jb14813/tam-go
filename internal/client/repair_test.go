@@ -29,7 +29,7 @@ func namedServer(t *testing.T, st *store.Store, name string) *httptest.Server {
 	return rs
 }
 
-// TestPairingAgainSendsTheQueue: when the server refuses a laptop's key
+// TestPairingAgainSendsTheQueue: when the server refuses a client's key
 // (an admin deleted it by mistake), the bar says so and the volunteer pairs
 // again. The saves queued meanwhile must then reach the server, not vanish.
 func TestPairingAgainSendsTheQueue(t *testing.T) {
@@ -62,7 +62,7 @@ func TestPairingAgainSendsTheQueue(t *testing.T) {
 
 // TestPairingTheSameServerAtANewAddress: a server that came back on another
 // address (a new DHCP lease) is still the same server; the queue for it is
-// sent there once the laptop is paired with the new address.
+// sent there once the client is paired with the new address.
 func TestPairingTheSameServerAtANewAddress(t *testing.T) {
 	f := newFixture(t)
 	rst := newServerStore(t)

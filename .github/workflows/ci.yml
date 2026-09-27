@@ -107,11 +107,11 @@ jobs:
       - name: Tests with the race detector
         run: go test -race ./...
 
-      - name: Load test with the race detector (12 laptops, the server killed during ticket entry)
+      - name: Load test with the race detector (12 clients, the server killed during ticket entry)
         run: |
           mkdir -p "$RUNNER_TEMP/tam"
           go build -race -o "$RUNNER_TEMP/tam/" ./cmd/tam-server ./cmd/tam-client
-          go run -race ./scripts/loadtest -bin "$RUNNER_TEMP/tam" -laptops 12 -tickets 3000 -baskets 500 -entry 20s -outage 5s -rush 5s
+          go run -race ./scripts/loadtest -bin "$RUNNER_TEMP/tam" -clients 12 -tickets 3000 -baskets 500 -entry 20s -outage 5s -rush 5s
 
   nix:
     name: Nix package and NixOS test
@@ -133,5 +133,5 @@ jobs:
       - name: Package (the web app and both programs, with the unit tests)
         run: nix build -L
 
-      - name: NixOS test (a server, a laptop that pairs with it, and an HTTPS server)
+      - name: NixOS test (a server, a client that pairs with it, and an HTTPS server)
         run: nix flake check -L

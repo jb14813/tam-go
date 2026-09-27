@@ -25,21 +25,21 @@ var ClientTables = []string{
 		attempts INTEGER NOT NULL DEFAULT 0,
 		last_error TEXT NOT NULL DEFAULT '',
 		failed_at TEXT NOT NULL)`,
-	// save_order is the laptop's name for the server and the number of its
+	// save_order is the client's name for the server and the number of its
 	// last save (see store.NextSave): one row.
 	`CREATE TABLE IF NOT EXISTS save_order (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
-		laptop TEXT NOT NULL,
+		client TEXT NOT NULL,
 		host TEXT NOT NULL,
 		last_save INTEGER NOT NULL)`,
 }
 
 // clientColumns were added to the client tables after they first shipped:
-// a queued save keeps the laptop name and number it was first sent with.
+// a queued save keeps the client name and number it was first sent with.
 var clientColumns = []struct{ table, column, decl string }{
-	{"outbox", "laptop", "TEXT NOT NULL DEFAULT ''"},
+	{"outbox", "client", "TEXT NOT NULL DEFAULT ''"},
 	{"outbox", "save_number", "INTEGER NOT NULL DEFAULT 0"},
-	{"outbox_failed", "laptop", "TEXT NOT NULL DEFAULT ''"},
+	{"outbox_failed", "client", "TEXT NOT NULL DEFAULT ''"},
 	{"outbox_failed", "save_number", "INTEGER NOT NULL DEFAULT 0"},
 }
 

@@ -183,7 +183,7 @@ func main() {
 	}
 	fmt.Print(banner)
 	fmt.Printf("%s://%s/\n", scheme, browseAddr(*addr))
-	// The addresses a laptop on the network can be pointed at by hand when
+	// The addresses a client on the network can be pointed at by hand when
 	// the network drops the announcement.
 	for _, u := range reachable {
 		fmt.Println(u)

@@ -26,7 +26,7 @@ const rangeLimit = 300
 const writeTimeout = 5 * time.Second
 
 // readTimeout bounds a page's read from the server. A read that takes
-// longer is answered from the laptop's own copy: when the Wi-Fi drops
+// longer is answered from the client's own copy: when the Wi-Fi drops
 // without a word the server neither answers nor refuses, and a page would
 // otherwise wait out the connection's own, longer, limits. It is a variable
 // so tests can shorten it.
@@ -82,7 +82,7 @@ func (h *handler) observe(err error, res *remote.Response) bool {
 }
 
 // listOr answers with a list. In remote mode it comes from the server while
-// the laptop is in step with it (see inStep), and is copied into the mirror
+// the client is in step with it (see inStep), and is copied into the mirror
 // on the way; otherwise it comes from the mirror, which in standalone mode
 // is the only store.
 func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, mirror func([]T) error, local func() ([]T, error)) {
@@ -461,7 +461,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, gone)
 }
 
-// errNoPrefix is a delete of a prefix neither the server nor the laptop has.
+// errNoPrefix is a delete of a prefix neither the server nor the client has.
 var errNoPrefix = errors.New("prefix not found")
 
 // --- tickets ---

@@ -31,8 +31,8 @@ func (s sheet) path(form string) string {
 
 func (s sheet) size() int { return s.to - s.from + 1 }
 
-// deal hands sheets out like a stack of paper: sheet i goes to laptop
-// (i+offset) mod n, so every laptop gets sheets of every prefix and
+// deal hands sheets out like a stack of paper: sheet i goes to client
+// (i+offset) mod n, so every client gets sheets of every prefix and
 // neighbouring sheets are entered at the same time.
 func deal(sheets []sheet, n, offset int) [][]sheet {
 	out := make([][]sheet, n)
@@ -103,10 +103,10 @@ type event struct {
 
 	mu      sync.Mutex
 	ticket  map[key]store.Ticket // every ticket as last saved
-	tWriter map[key]int          // the laptop that saved it
+	tWriter map[key]int          // the client that saved it
 	basket  map[key]store.Basket // every basket as last saved, with its winner
-	bWriter map[key]int          // the laptop that saved the description
-	wWriter map[key]int          // the laptop that saved the winner
+	bWriter map[key]int          // the client that saved the description
+	wWriter map[key]int          // the client that saved the winner
 }
 
 func newEvent(o options) *event {
@@ -167,39 +167,39 @@ func (ev *event) cards(s sheet) []store.Basket {
 	return out
 }
 
-// savedTickets notes tickets a laptop has saved.
-func (ev *event) savedTickets(laptop int, ts []store.Ticket) {
+// savedTickets notes tickets a client has saved.
+func (ev *event) savedTickets(client int, ts []store.Ticket) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	for _, t := range ts {
 		k := key{t.Prefix, t.TID}
-		ev.ticket[k], ev.tWriter[k] = t, laptop
+		ev.ticket[k], ev.tWriter[k] = t, client
 	}
 }
 
-// savedCards notes baskets a laptop has saved from the baskets form, which
+// savedCards notes baskets a client has saved from the baskets form, which
 // sets the description and the donors.
-func (ev *event) savedCards(laptop int, bs []store.Basket) {
+func (ev *event) savedCards(client int, bs []store.Basket) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	for _, b := range bs {
 		k := key{b.Prefix, b.BID}
 		cur := ev.basket[k]
 		cur.Prefix, cur.BID, cur.Description, cur.Donors = b.Prefix, b.BID, b.Description, b.Donors
-		ev.basket[k], ev.bWriter[k] = cur, laptop
+		ev.basket[k], ev.bWriter[k] = cur, client
 	}
 }
 
-// savedWinners notes drawing lines a laptop has saved, which set the
+// savedWinners notes drawing lines a client has saved, which set the
 // winning ticket.
-func (ev *event) savedWinners(laptop int, ls []store.DrawingLine) {
+func (ev *event) savedWinners(client int, ls []store.DrawingLine) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	for _, l := range ls {
 		k := key{l.Prefix, l.BID}
 		cur := ev.basket[k]
 		cur.Prefix, cur.BID, cur.WinningTicket = l.Prefix, l.BID, l.WinningTicket
-		ev.basket[k], ev.wWriter[k] = cur, laptop
+		ev.basket[k], ev.wWriter[k] = cur, client
 	}
 }
 
@@ -214,7 +214,7 @@ func (ev *event) saved(s sheet) []store.Ticket {
 	return out
 }
 
-// ticketNow returns a ticket as last saved and the laptop that saved it.
+// ticketNow returns a ticket as last saved and the client that saved it.
 func (ev *event) ticketNow(k key) (store.Ticket, int, bool) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
@@ -227,15 +227,15 @@ func (ev *event) ticketNow(k key) (store.Ticket, int, bool) {
 // row is right for them.
 func (ev *event) stale(rows []store.Ticket) (int, string) { return ev.staleFor(rows, 0) }
 
-// staleFor is stale for the rows the given laptop saved last; 0 is any.
-func (ev *event) staleFor(rows []store.Ticket, laptop int) (int, string) {
+// staleFor is stale for the rows the given client saved last; 0 is any.
+func (ev *event) staleFor(rows []store.Ticket, client int) (int, string) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 	n, first := 0, ""
 	for _, r := range rows {
 		k := key{r.Prefix, r.TID}
 		want, ok := ev.ticket[k]
-		if !ok || r == want || laptop != 0 && ev.tWriter[k] != laptop {
+		if !ok || r == want || client != 0 && ev.tWriter[k] != client {
 			continue
 		}
 		n++

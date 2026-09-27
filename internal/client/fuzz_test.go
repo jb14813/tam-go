@@ -16,19 +16,19 @@ import (
 )
 
 // The fuzz targets below double as ordinary tests: go test runs every seed
-// and every input saved under testdata/fuzz. Each input gets a laptop of its
+// and every input saved under testdata/fuzz. Each input gets a client of its
 // own, and a server of its own when it runs paired (newFixture and
 // remoteFixture), so an input that fails fails again when it runs alone.
 
 // FuzzTicketRoundTrip: a ticket that tam-client accepts, paired with a
-// server or standalone, is in every store the save reaches (the laptop's
-// own copy, and the server's, directly or through the laptop's queue) as it
+// server or standalone, is in every store the save reaches (the client's
+// own copy, and the server's, directly or through the client's queue) as it
 // was sent: prefix and preference trimmed, the text as a JSON decoder reads
 // it. Every route the pages read it through returns it: the list of all
 // tickets, and the single ticket, the range and the prefix's list with the
 // prefix escaped as the web app escapes it, and as tam-client escapes it for
 // the server. A search for its own name and phone number finds it, and a
-// pull leaves the laptop's copy equal to the server's. A batch the client
+// pull leaves the client's copy equal to the server's. A batch the client
 // refuses answers 4xx with a detail and changes nothing anywhere.
 func FuzzTicketRoundTrip(f *testing.F) {
 	type seed struct {
@@ -94,9 +94,9 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			prefix, first, last, phone, pref = lengthen(prefix, n), lengthen(first, n), lengthen(last, n), lengthen(phone, n), lengthen(pref, n)
 		}
 		fx := newFixture(t)
-		// Bit 2 of batch leaves the laptop standalone. Bit 3 has the server
-		// refuse the laptop's key during the save, so a save it accepts waits
-		// in the laptop's queue and goes to the server once the key is good
+		// Bit 2 of batch leaves the client standalone. Bit 3 has the server
+		// refuse the client's key during the save, so a save it accepts waits
+		// in the client's queue and goes to the server once the key is good
 		// again.
 		sts := stores(t, fx, batch&4 != 0)
 		queued := len(sts) == 2 && batch&8 != 0
@@ -207,7 +207,7 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			t.Fatalf("a search for the ticket's own fields found %d tickets, not %+v", len(found), want)
 		}
 		if len(sts) == 2 {
-			// A pull copies the server's data into the laptop's copy, which
+			// A pull copies the server's data into the client's copy, which
 			// then holds what the server holds, a row only the server had
 			// included.
 			only := store.Ticket{Prefix: "Z", TID: 1, FirstName: "Server only", Pref: "CALL"}
@@ -217,7 +217,7 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			saveTickets(t, sts[1:], []store.Ticket{only})
 			fx.h.sync.Reset()
 			fx.h.sync.Tick()
-			laptop, err := sts[0].Export()
+			client, err := sts[0].Export()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -225,8 +225,8 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(laptop, server) {
-				t.Fatalf("after a pull the laptop's copy holds %+v, the server %+v", laptop.Tickets, server.Tickets)
+			if !reflect.DeepEqual(client, server) {
+				t.Fatalf("after a pull the client's copy holds %+v, the server %+v", client.Tickets, server.Tickets)
 			}
 		}
 	})
@@ -288,7 +288,7 @@ func FuzzBasketRoundTrip(f *testing.F) {
 			prefix, description, donors = lengthen(prefix, n), lengthen(description, n), lengthen(donors, n)
 		}
 		fx := newFixture(t)
-		// Bit 2 of mode leaves the laptop standalone.
+		// Bit 2 of mode leaves the client standalone.
 		sts := stores(t, fx, mode&4 != 0)
 
 		spelledID, bid, idOK := jsonID(id, form)
@@ -442,7 +442,7 @@ func FuzzPrefixRoundTrip(f *testing.F) {
 			color = store.Colors[pick%8]
 		}
 		fx := newFixture(t)
-		// Bit 3 of pick leaves the laptop standalone.
+		// Bit 3 of pick leaves the client standalone.
 		sts := stores(t, fx, pick&8 != 0)
 
 		spelled, w, weightOK := jsonID(weight, form)
@@ -796,8 +796,8 @@ func get[T any](t *testing.T, fx *fixture, path string) T {
 	return decode[T](t, body)
 }
 
-// stores leaves the laptop standalone or pairs it with a server of its own,
-// and returns the stores a save through the laptop reaches: its own copy
+// stores leaves the client standalone or pairs it with a server of its own,
+// and returns the stores a save through the client reaches: its own copy
 // and, when paired, the server's.
 func stores(t *testing.T, fx *fixture, standalone bool) []*store.Store {
 	t.Helper()
@@ -811,7 +811,7 @@ func stores(t *testing.T, fx *fixture, standalone bool) []*store.Store {
 // side names the store at index i of what stores returned.
 func side(i int) string {
 	if i == 0 {
-		return "the laptop's copy"
+		return "the client's copy"
 	}
 	return "the server"
 }
@@ -840,7 +840,7 @@ func saveBaskets(t *testing.T, sts []*store.Store, bs []store.Basket) {
 }
 
 // snapshot is what a refused save must leave alone: the data in every
-// store, and the laptop's queue.
+// store, and the client's queue.
 type snapshot struct {
 	data            []store.BackupFile
 	pending, failed int
@@ -879,7 +879,7 @@ func refused(t *testing.T, what string, code int, body []byte) {
 }
 
 // notQueued fails the test when a save that should have reached every
-// store at once waits in the laptop's queue instead.
+// store at once waits in the client's queue instead.
 func notQueued(t *testing.T, fx *fixture) {
 	t.Helper()
 	if p, fl := pending(t, fx.st); p != 0 || fl != 0 {
