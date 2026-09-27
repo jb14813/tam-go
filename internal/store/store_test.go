@@ -228,6 +228,20 @@ func TestDotPrefixNamesAreRefused(t *testing.T) {
 	}
 }
 
+// TestPrefixNameLengthCountsCharacters: the limit is 100 characters, as the
+// error and the README say, not 100 bytes, which refused names in scripts
+// that take two to four bytes a character well before the limit.
+func TestPrefixNameLengthCountsCharacters(t *testing.T) {
+	for _, name := range []string{strings.Repeat("é", 100), strings.Repeat("€", 100), strings.Repeat("🎟", 100)} {
+		if got, err := ValidatePrefixName(name); err != nil || got != name {
+			t.Errorf("a name of 100 %q = %v; want it accepted", []rune(name)[0], err)
+		}
+		if _, err := ValidatePrefixName(name + "x"); err == nil {
+			t.Errorf("a name of 101 characters (100 %q and x) should fail", []rune(name)[0])
+		}
+	}
+}
+
 func TestBasketsAndDrawing(t *testing.T) {
 	s := newTestStore(t)
 	must(t, s.UpsertTickets([]Ticket{{"A", 5, "Winnie", "Won", "555-0005", "CALL"}}))

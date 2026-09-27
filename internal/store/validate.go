@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Colors is the palette the pages know how to render.
 var Colors = []string{"white", "blue", "yellow", "green", "orange", "purple", "red"}
 
-// maxPrefixLen matches the VARCHAR(100) of the first schema.
+// maxPrefixLen matches the VARCHAR(100) of the first schema, which counts
+// characters, not bytes.
 const maxPrefixLen = 100
 
 func validColor(c string) bool {
@@ -33,7 +35,7 @@ func ValidatePrefixName(name string) (string, error) {
 	if name == "" {
 		return "", errors.New("prefix name must not be empty")
 	}
-	if len(name) > maxPrefixLen {
+	if utf8.RuneCountInString(name) > maxPrefixLen {
 		return "", fmt.Errorf("prefix name must be at most %d characters", maxPrefixLen)
 	}
 	if strings.ContainsAny(name, `/\`) {
