@@ -32,7 +32,7 @@ func TestMigrateServerAddsLastSeenAndLastUpdate(t *testing.T) {
 			t.Fatalf("%s after MigrateServer: has=%v err=%v", column, has, err)
 		}
 	}
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen, last_update) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z', '2026-09-25T10:01:00Z')`); err != nil {
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen, last_update) VALUES ('K', 'client', '2026-09-25T10:00:00Z', '2026-09-25T10:01:00Z')`); err != nil {
 		t.Fatalf("insert with last_seen and last_update: %v", err)
 	}
 	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description) VALUES ('L', 'old style')`); err != nil {
@@ -55,7 +55,7 @@ func TestMigrateServerAddsLastUpdateToAnEarlierGoDatabase(t *testing.T) {
 	if _, err := sqldb.Exec(`ALTER TABLE auth_keys ADD COLUMN last_seen TEXT`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'laptop', '2026-09-25T10:00:00Z')`); err != nil {
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description, last_seen) VALUES ('K', 'client', '2026-09-25T10:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := MigrateServer(sqldb); err != nil {
@@ -72,7 +72,7 @@ func TestMigrateServerAddsLastUpdateToAnEarlierGoDatabase(t *testing.T) {
 
 func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
 	sqldb := openWithSchema(t, originalServerSchema)
-	if _, err := sqldb.Exec(`INSERT INTO auth_keys VALUES ('K', 'laptop')`); err != nil {
+	if _, err := sqldb.Exec(`INSERT INTO auth_keys VALUES ('K', 'client')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(sqldb); err != nil {
@@ -86,8 +86,8 @@ func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
 	if err := sqldb.QueryRow(`SELECT description, last_seen, last_update FROM auth_keys WHERE auth_key = 'K'`).Scan(&desc, &seen, &update); err != nil {
 		t.Fatalf("existing key after migration: %v", err)
 	}
-	if desc != "laptop" || seen != nil || update != nil {
-		t.Fatalf("existing key = %q last_seen=%v last_update=%v, want laptop and NULLs", desc, seen, update)
+	if desc != "client" || seen != nil || update != nil {
+		t.Fatalf("existing key = %q last_seen=%v last_update=%v, want client and NULLs", desc, seen, update)
 	}
 }
 

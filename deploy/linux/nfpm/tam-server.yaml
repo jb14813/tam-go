@@ -15,7 +15,7 @@ homepage: https://github.com/ticket-auction-manager/tam-go
 license: MIT
 description: |
   Ticket Auction Manager server.
-  The shared database of an event: the laptops running tam-client pair with
+  The shared database of an event: the clients running tam-client pair with
   it and keep working when it is away. Runs as the tam-server service on
   port 8000; the admin page at http://<host>:8000/admin sets the password.
 contents:

@@ -28,7 +28,7 @@ type handler struct {
 	st   *store.Store
 	cfg  *config.File
 	sync *tamsync.Syncer
-	host string // this machine's name, under which the laptop names itself
+	host string // this machine's name, under which the client names itself
 
 	// shutdown, when set, is called after POST /api/shutdown has answered.
 	shutdown func()
@@ -169,12 +169,12 @@ func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
 	go h.shutdown()
 }
 
-// hostname is this machine's name, "laptop" when it has none.
+// hostname is this machine's name, "client" when it has none.
 func hostname() string {
 	if name, _ := os.Hostname(); name != "" {
 		return name
 	}
-	return "laptop"
+	return "client"
 }
 
 // guard refuses writes that a browser reports as coming from another site.

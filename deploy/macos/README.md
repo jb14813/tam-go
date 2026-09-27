@@ -16,10 +16,10 @@ chmod +x tam-server tam-client
 
 ```sh
 ./tam-client            # opens http://localhost:3080/ in your browser
-./tam-server            # the shared database for several laptops, on port 8000
+./tam-server            # the shared database for several clients, on port 8000
 ```
 
-Each keeps its data in a `data` folder in the directory it is started from, or in `TAM_DATA_DIR`. Ctrl+C stops either; the client also stops from **Shut Down TAM** under `Alt+A` (Option+A) on its main menu. macOS asks once whether tam-server may accept incoming connections; allow it so the laptops can reach it. There is no notification-area icon on macOS.
+Each keeps its data in a `data` folder in the directory it is started from, or in `TAM_DATA_DIR`. Ctrl+C stops either; the client also stops from **Shut Down TAM** under `Alt+A` (Option+A) on its main menu. macOS asks once whether tam-server may accept incoming connections; allow it so the clients can reach it. There is no notification-area icon on macOS.
 
 ## Starting at login with launchd
 

@@ -16,8 +16,8 @@ homepage: https://github.com/ticket-auction-manager/tam-go
 license: MIT
 description: |
   Ticket Auction Manager client.
-  The web app for one laptop at an event, on its own or paired with a
-  tam-server. Runs as the tam-client service on port 3080; a laptop used by
+  The web app for one computer at an event, on its own or paired with a
+  tam-server. Runs as the tam-client service on port 3080; a computer used by
   one person may prefer the application-menu entry, which runs it by hand.
 contents:
   - src: build/linux-@ARCH@/tam-client

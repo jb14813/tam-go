@@ -22,7 +22,7 @@ if [ -d /run/systemd/system ]; then
       ;;
     tam-client)
       echo "tam-client is running on http://localhost:3080/ (data: /var/lib/tam-client)."
-      echo "On a laptop used by one person, 'systemctl disable --now tam-client' and the"
+      echo "On a computer used by one person, 'systemctl disable --now tam-client' and the"
       echo "Ticket Auction Manager entry in the application menu may suit better."
       ;;
   esac

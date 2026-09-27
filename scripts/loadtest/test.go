@@ -22,7 +22,7 @@ type test struct {
 	work     string
 	password string
 	server   *program
-	laptops  []*laptop
+	clients  []*client
 	ev       *event
 	admin    *adminPage
 	version  string // what the server reports as its version
@@ -31,11 +31,11 @@ type test struct {
 	outage   struct {
 		stoppedAt, backAt, caughtUpAt time.Time
 		restartErr                    error
-		peakBacklog                   int // saves queued on all laptops together, at most
-		crashed                       int // laptops that crashed while the server was down
+		peakBacklog                   int // saves queued on all clients together, at most
+		crashed                       int // clients that crashed while the server was down
 	}
 	wifi struct {
-		dropped    []int // the laptops whose Wi-Fi dropped
+		dropped    []int // the clients whose Wi-Fi dropped
 		at, backAt time.Time
 		caughtUpAt time.Time
 	}
@@ -74,10 +74,10 @@ func (t *test) current() *phase {
 	return t.cur
 }
 
-// each runs fn for every laptop at the same time and waits for all.
-func (t *test) each(fn func(l *laptop)) {
+// each runs fn for every client at the same time and waits for all.
+func (t *test) each(fn func(l *client)) {
 	var wg sync.WaitGroup
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -94,9 +94,9 @@ func (t *test) run() error {
 	if err := t.pair(); err != nil {
 		return err
 	}
-	// From here on every laptop's status bar polls, and so does an open
+	// From here on every client's status bar polls, and so does an open
 	// admin page.
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		t.pollers.Add(1)
 		go func() {
 			defer t.pollers.Done()
@@ -117,14 +117,14 @@ func (t *test) run() error {
 	t.correct()
 	t.refuseKey()
 	t.storm()
-	t.flatOut("Baskets", 0, (*laptop).enterBaskets, t.ev.basketSheets)
+	t.flatOut("Baskets", 0, (*client).enterBaskets, t.ev.basketSheets)
 	t.settle("after the baskets")
-	// The drawing sheets go to other laptops than the ones that entered the
+	// The drawing sheets go to other clients than the ones that entered the
 	// baskets.
-	t.flatOut("Drawing", 1, (*laptop).draw, t.ev.basketSheets)
+	t.flatOut("Drawing", 1, (*client).draw, t.ev.basketSheets)
 	t.settle("after the drawing")
 	ph := t.newPhase("Reports and searches")
-	t.each(func(l *laptop) { l.readReports(t, ph) })
+	t.each(func(l *client) { l.readReports(t, ph) })
 	ph.end = time.Now()
 
 	t.checkData("after the drawing")
@@ -138,13 +138,13 @@ func (t *test) run() error {
 		t.checkData("after the soak")
 		t.checkSoak()
 	}
-	t.checkLaptops()
+	t.checkClients()
 	t.checkPresence()
 	t.checkRequests()
 	return nil
 }
 
-// start builds or finds the programs, starts the server and the laptops'
+// start builds or finds the programs, starts the server and the clients'
 // clients.
 func (t *test) start() error {
 	var serverPath, clientPath string
@@ -161,7 +161,7 @@ func (t *test) start() error {
 	if err != nil {
 		return err
 	}
-	ports, err := freePorts(1 + t.o.laptops)
+	ports, err := freePorts(1 + t.o.clients)
 	if err != nil {
 		return err
 	}
@@ -196,9 +196,9 @@ func (t *test) start() error {
 	fmt.Printf("tam-server %s answering on %s\n", t.version, t.server.url)
 
 	began := time.Now()
-	t.laptops = make([]*laptop, t.o.laptops)
-	for i := range t.laptops {
-		name := fmt.Sprintf("laptop-%02d", i+1)
+	t.clients = make([]*client, t.o.clients)
+	for i := range t.clients {
+		name := fmt.Sprintf("client-%02d", i+1)
 		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[1+i], []string{"-open=false", "-tray=false"}, nil)
 		if err != nil {
 			return err
@@ -207,10 +207,10 @@ func (t *test) start() error {
 		if err != nil {
 			return err
 		}
-		t.laptops[i] = &laptop{n: i + 1, prog: p, relay: r, rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
+		t.clients[i] = &client{n: i + 1, prog: p, relay: r, rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
 	}
 	var failed atomic.Value
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		if err := l.prog.start(); err != nil {
 			failed.Store(err)
 		}
@@ -218,26 +218,26 @@ func (t *test) start() error {
 	if err, _ := failed.Load().(error); err != nil {
 		return err
 	}
-	fmt.Printf("%d tam-client programs answering after %s\n", len(t.laptops), secs(time.Since(began)))
+	fmt.Printf("%d tam-client programs answering after %s\n", len(t.clients), secs(time.Since(began)))
 	return nil
 }
 
 // tls reports whether the server speaks HTTPS.
 func (t *test) tls() bool { return strings.HasPrefix(t.server.url, "https:") }
 
-// pair pairs every laptop with the server through its Settings route, all
+// pair pairs every client with the server through its Settings route, all
 // at once, and waits until each shows Connected.
 func (t *test) pair() error {
 	ph := t.newPhase("Pairing")
 	defer func() { ph.end = time.Now() }()
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		l.call(ph, "pair with the server", http.MethodPost, "/api/pair", l.pairing(t), nil, 0)
 	})
 	if _, errs, _, _, first := ph.rec.totals(); errs > 0 {
-		return fmt.Errorf("%d laptops could not pair: %v", errs, first)
+		return fmt.Errorf("%d clients could not pair: %v", errs, first)
 	}
 	deadline := time.Now().Add(30 * time.Second)
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		for {
 			st, err := l.peek()
 			if err == nil && st.State == "connected" {
@@ -249,19 +249,19 @@ func (t *test) pair() error {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	t.record("every laptop paired and showed Connected", true, "%d laptops, in %s", len(t.laptops), secs(time.Since(ph.start)))
+	t.record("every client paired and showed Connected", true, "%d clients, in %s", len(t.clients), secs(time.Since(ph.start)))
 	return nil
 }
 
-// setup saves the prefixes from the first laptop; every laptop then opens a
+// setup saves the prefixes from the first client; every client then opens a
 // form, which lists them.
 func (t *test) setup() error {
 	ph := t.newPhase("Setup")
 	defer func() { ph.end = time.Now() }()
-	if _, err := t.laptops[0].call(ph, "save prefixes", http.MethodPost, "/api/prefixes", t.ev.prefixes, nil, len(t.ev.prefixes)); err != nil {
+	if _, err := t.clients[0].call(ph, "save prefixes", http.MethodPost, "/api/prefixes", t.ev.prefixes, nil, len(t.ev.prefixes)); err != nil {
 		return err
 	}
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		var ps []store.Prefix
 		if _, err := l.call(ph, "list prefixes", http.MethodGet, "/api/prefixes", nil, &ps, 0); err == nil && len(ps) != len(t.ev.prefixes) {
 			t.problems.add("report", 1, "%s listed %d prefixes, %d were saved", l.prog.name, len(ps), len(t.ev.prefixes))
@@ -280,7 +280,7 @@ func (t *test) outageOn() bool {
 // killed a quarter of the way in and started again after -outage.
 func (t *test) enterTickets() {
 	ph := t.newPhase("Ticket entry")
-	deals := deal(t.ev.ticketSheets, len(t.laptops), 0)
+	deals := deal(t.ev.ticketSheets, len(t.clients), 0)
 	most := 0
 	for _, d := range deals {
 		most = max(most, len(d))
@@ -302,7 +302,7 @@ func (t *test) enterTickets() {
 	}
 	wifiOver := make(chan struct{})
 	go t.dropWifi(&saved, len(t.ev.ticketSheets)*3/5, wifiOver)
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		var revisit sync.WaitGroup
 		if t.outageOn() {
 			revisit.Add(1)
@@ -318,19 +318,19 @@ func (t *test) enterTickets() {
 	<-caughtUp
 	<-wifiOver
 	ph.end = time.Now()
-	ph.note = fmt.Sprintf("%d sheets, one every %s on each laptop", len(t.ev.ticketSheets), ms(pace))
+	ph.note = fmt.Sprintf("%d sheets, one every %s on each client", len(t.ev.ticketSheets), ms(pace))
 	if t.outageOn() {
 		o := t.outage
 		ph.note += fmt.Sprintf("; server killed at %s, back at %s", secs(o.stoppedAt.Sub(ph.start)), secs(o.backAt.Sub(ph.start)))
 		if o.crashed > 0 {
-			ph.note += fmt.Sprintf(" (%d laptops crashed and restarted meanwhile)", o.crashed)
+			ph.note += fmt.Sprintf(" (%d clients crashed and restarted meanwhile)", o.crashed)
 		}
 		if !o.caughtUpAt.IsZero() {
 			ph.note += fmt.Sprintf("; all %d queued saves sent %s after that", o.peakBacklog, secs(o.caughtUpAt.Sub(o.backAt)))
 		}
 	}
 	if w := t.wifi; len(w.dropped) > 0 {
-		ph.note += fmt.Sprintf("; the Wi-Fi of %d laptops dropped at %s for %s (%d saves hung until queued)",
+		ph.note += fmt.Sprintf("; the Wi-Fi of %d clients dropped at %s for %s (%d saves hung until queued)",
 			len(w.dropped), secs(w.at.Sub(ph.start)), secs(w.backAt.Sub(w.at)), t.stalled.Load())
 		if !w.caughtUpAt.IsZero() {
 			ph.note += fmt.Sprintf(", all caught up %s after it was back", secs(w.caughtUpAt.Sub(w.backAt)))
@@ -338,7 +338,7 @@ func (t *test) enterTickets() {
 	}
 }
 
-// dropWifi takes the Wi-Fi of every so many laptops (-wifi) down silently
+// dropWifi takes the Wi-Fi of every so many clients (-wifi) down silently
 // once saved reaches after, for -wifi-drop, and waits until each of them has
 // sent what it queued meanwhile.
 func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
@@ -347,8 +347,8 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 		return
 	}
 	every := max(1, int(1/t.o.wifi+0.5))
-	var group []*laptop
-	for _, l := range t.laptops {
+	var group []*client
+	for _, l := range t.clients {
 		if l.n%every == 0 {
 			group = append(group, l)
 		}
@@ -360,7 +360,7 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.wifi.at = time.Now()
-	fmt.Printf("  Wi-Fi of %d laptops dropping for %s\n", len(group), t.o.wifiDrop)
+	fmt.Printf("  Wi-Fi of %d clients dropping for %s\n", len(group), t.o.wifiDrop)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, l := range group {
@@ -369,7 +369,7 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// It drops when the laptop is between opening a sheet and saving
+			// It drops when the client is between opening a sheet and saving
 			// it; one with no sheet left loses it where it is.
 			select {
 			case <-l.dropped:
@@ -399,8 +399,8 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 	fmt.Println("  Wi-Fi back everywhere, queues sent")
 }
 
-// untilCaughtUp waits until the laptop shows Connected with nothing queued.
-func (t *test) untilCaughtUp(l *laptop) bool {
+// untilCaughtUp waits until the client shows Connected with nothing queued.
+func (t *test) untilCaughtUp(l *client) bool {
 	deadline := time.Now().Add(t.o.settle)
 	for time.Now().Before(deadline) {
 		if st, err := l.peek(); err == nil && st.State == "connected" && st.Pending == 0 {
@@ -419,7 +419,7 @@ func (t *test) cutPower(saved *atomic.Int64, after int, back, over chan struct{}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.outage.stoppedAt = time.Now()
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		l.outage = l.openAway(t.outage.stoppedAt.Add(-5 * time.Second))
 	}
 	t.server.kill()
@@ -435,13 +435,13 @@ func (t *test) cutPower(saved *atomic.Int64, after int, back, over chan struct{}
 	close(back)
 }
 
-// crashSome crashes -crashes laptops, spread over the lot, while the server
+// crashSome crashes -crashes clients, spread over the lot, while the server
 // is down and they have saves queued, and starts them again after
 // -crash-down. Each must come back with its queue. The channel it returns
 // is closed once all are back.
 func (t *test) crashSome() <-chan struct{} {
 	done := make(chan struct{})
-	n := min(t.o.crashes, len(t.laptops))
+	n := min(t.o.crashes, len(t.clients))
 	if n <= 0 {
 		close(done)
 		return done
@@ -451,7 +451,7 @@ func (t *test) crashSome() <-chan struct{} {
 		time.Sleep(t.o.outage / 4)
 		var wg sync.WaitGroup
 		for i := 0; i < n; i++ {
-			l := t.laptops[(2*i+1)*len(t.laptops)/(2*n)]
+			l := t.clients[(2*i+1)*len(t.clients)/(2*n)]
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -466,12 +466,12 @@ func (t *test) crashSome() <-chan struct{} {
 		}
 		wg.Wait()
 		t.outage.crashed = n
-		fmt.Printf("  %d laptops crashed and started again\n", n)
+		fmt.Printf("  %d clients crashed and started again\n", n)
 	}()
 	return done
 }
 
-// watchCatchUp notes when each laptop first shows Connected with nothing
+// watchCatchUp notes when each client first shows Connected with nothing
 // queued after the restart, and when all of them have.
 func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 	defer close(done)
@@ -479,7 +479,7 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 	deadline := time.Now().Add(t.o.settle)
 	for time.Now().Before(deadline) {
 		all, waiting := true, 0
-		for _, l := range t.laptops {
+		for _, l := range t.clients {
 			st, err := l.peek()
 			if err != nil {
 				all = false
@@ -487,7 +487,7 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 			}
 			waiting += st.Pending
 			l.mu.Lock()
-			// The outage's window closes the first time the laptop shows
+			// The outage's window closes the first time the client shows
 			// Connected with nothing queued.
 			if w := &l.away[l.outage]; w.to.IsZero() && st.State == "connected" && st.Pending == 0 {
 				w.to = time.Now()
@@ -504,12 +504,12 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 	}
 }
 
-// settle waits until every laptop shows Connected with nothing queued.
+// settle waits until every client shows Connected with nothing queued.
 func (t *test) settle(when string) {
 	deadline := time.Now().Add(t.o.settle)
 	for {
 		away, waiting := 0, 0
-		for _, l := range t.laptops {
+		for _, l := range t.clients {
 			st, err := l.peek()
 			if err != nil || st.State != "connected" {
 				away++
@@ -522,7 +522,7 @@ func (t *test) settle(when string) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.problems.add("settle", 1, "%s: %s later %d laptops were not connected and %d saves were still queued", when, t.o.settle, away, waiting)
+			t.problems.add("settle", 1, "%s: %s later %d clients were not connected and %d saves were still queued", when, t.o.settle, away, waiting)
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -530,11 +530,11 @@ func (t *test) settle(when string) {
 }
 
 // correct is the information desk: every 40th ticket gets a new phone
-// number, saved from another laptop than the one that saved it last.
+// number, saved from another client than the one that saved it last.
 func (t *test) correct() {
 	ph := t.newPhase("Corrections")
 	rng := rand.New(rand.NewPCG(t.o.seed, 0))
-	jobs := make([][]store.Ticket, len(t.laptops))
+	jobs := make([][]store.Ticket, len(t.clients))
 	n := 0
 	for _, s := range t.ev.ticketSheets {
 		for id := s.from; id <= s.to; id++ {
@@ -545,25 +545,25 @@ func (t *test) correct() {
 			if !ok {
 				continue
 			}
-			desk := (writer - 1 + len(t.laptops)/2) % len(t.laptops)
-			if len(t.laptops) > 1 && desk == writer-1 {
-				desk = (desk + 1) % len(t.laptops)
+			desk := (writer - 1 + len(t.clients)/2) % len(t.clients)
+			if len(t.clients) > 1 && desk == writer-1 {
+				desk = (desk + 1) % len(t.clients)
 			}
 			jobs[desk] = append(jobs[desk], corrected(cur, rng))
 		}
 	}
-	t.each(func(l *laptop) { l.saveInBatches(t, ph, "save corrections", jobs[l.n-1]) })
+	t.each(func(l *client) { l.saveInBatches(t, ph, "save corrections", jobs[l.n-1]) })
 	ph.end = time.Now()
 	t.settle("after the corrections")
 }
 
-// refuseKey is an admin deleting a laptop's key by mistake in the middle of
-// the event: the laptop's saves are refused and queued, its bar says the
+// refuseKey is an admin deleting a client's key by mistake in the middle of
+// the event: the client's saves are refused and queued, its bar says the
 // key was refused, and the volunteer pairs again. Nothing may be lost.
 func (t *test) refuseKey() {
-	ph := t.newPhase("A laptop's key deleted")
+	ph := t.newPhase("A client's key deleted")
 	defer func() { ph.end = time.Now() }()
-	l := t.laptops[len(t.laptops)/2]
+	l := t.clients[len(t.clients)/2]
 	var settings struct {
 		RemoteKey string `json:"remote_key"`
 	}
@@ -587,7 +587,7 @@ func (t *test) refuseKey() {
 
 	// The volunteer goes on correcting its own tickets.
 	var fixes []store.Ticket
-	for _, s := range deal(t.ev.ticketSheets, len(t.laptops), 0)[l.n-1] {
+	for _, s := range deal(t.ev.ticketSheets, len(t.clients), 0)[l.n-1] {
 		for id := s.from; id <= s.to && len(fixes) < 2*t.o.page; id++ {
 			if cur, _, ok := t.ev.ticketNow(key{s.prefix, id}); ok {
 				fixes = append(fixes, l.fix(cur))
@@ -610,10 +610,10 @@ func (t *test) refuseKey() {
 	ph.note = fmt.Sprintf("%s's key deleted on the server; %d tickets corrected meanwhile, then paired again", l.prog.name, len(fixes))
 }
 
-// storm has every laptop save the same few tickets at once, over and over,
+// storm has every client save the same few tickets at once, over and over,
 // for -storm, each save naming who wrote it and when in every field. The
 // server must end with one whole save per ticket, never a mix of two, and
-// every laptop must then show just that.
+// every client must then show just that.
 func (t *test) storm() {
 	if t.o.storm <= 0 {
 		return
@@ -626,7 +626,7 @@ func (t *test) storm() {
 	var mu sync.Mutex
 	written := map[store.Ticket]bool{}
 	stop := time.Now().Add(t.o.storm)
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		for seq := 0; time.Now().Before(stop); seq++ {
 			k := keys[l.intN(len(keys))]
 			tk := store.Ticket{Prefix: k.prefix, TID: k.id, FirstName: fmt.Sprintf("L%03d", l.n), LastName: fmt.Sprintf("W%06d", seq),
@@ -644,45 +644,45 @@ func (t *test) storm() {
 	for _, k := range keys {
 		var final store.Ticket
 		path := fmt.Sprintf("/api/tickets/%s/%d", url.PathEscape(k.prefix), k.id)
-		if _, err := t.laptops[0].call(nil, "", http.MethodGet, path, nil, &final, 0); err != nil {
+		if _, err := t.clients[0].call(nil, "", http.MethodGet, path, nil, &final, 0); err != nil {
 			t.problems.add("storm", 1, "reading %s: %v", k, err)
 			continue
 		}
 		if !written[final] {
-			t.problems.add("storm", 1, "%s ended as %s, which no laptop saved whole", k, describe(final))
+			t.problems.add("storm", 1, "%s ended as %s, which no client saved whole", k, describe(final))
 		}
-		t.each(func(l *laptop) {
+		t.each(func(l *client) {
 			var shown store.Ticket
 			if _, err := l.call(ph, "open a ticket everyone saved", http.MethodGet, path, nil, &shown, 0); err == nil && shown != final {
 				t.problems.add("storm", 1, "%s shows %s for %s, the server has %s", l.prog.name, describe(shown), k, describe(final))
 			}
 		})
-		// From here on this is the ticket's value, and no single laptop's.
+		// From here on this is the ticket's value, and no single client's.
 		t.ev.mu.Lock()
 		t.ev.ticket[k], t.ev.tWriter[k] = final, 0
 		t.ev.mu.Unlock()
 	}
-	ph.note = fmt.Sprintf("%d laptops saving the same %d tickets for %s", len(t.laptops), len(keys), secs(t.o.storm))
+	ph.note = fmt.Sprintf("%d clients saving the same %d tickets for %s", len(t.clients), len(keys), secs(t.o.storm))
 }
 
-// flatOut deals sheets out and has every laptop work through its share as
+// flatOut deals sheets out and has every client work through its share as
 // fast as it can.
-func (t *test) flatOut(name string, offset int, work func(*laptop, *test, *phase, []sheet), sheets []sheet) {
+func (t *test) flatOut(name string, offset int, work func(*client, *test, *phase, []sheet), sheets []sheet) {
 	ph := t.newPhase(name)
-	deals := deal(sheets, len(t.laptops), offset)
-	t.each(func(l *laptop) { work(l, t, ph, deals[l.n-1]) })
+	deals := deal(sheets, len(t.clients), offset)
+	t.each(func(l *client) { work(l, t, ph, deals[l.n-1]) })
 	ph.end = time.Now()
 }
 
-// rush has every laptop save its ticket sheets again as fast as it can for
+// rush has every client save its ticket sheets again as fast as it can for
 // -rush, every row with a new phone number: the most the server takes.
 // The rows must change; SQLite does not write a row saved with the values
 // it already has, which would make the server look faster than it is.
 func (t *test) rush() {
 	ph := t.newPhase("Rush")
-	deals := deal(t.ev.ticketSheets, len(t.laptops), 0)
+	deals := deal(t.ev.ticketSheets, len(t.clients), 0)
 	stop := time.Now().Add(t.o.rush)
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		mine := deals[l.n-1]
 		for i := 0; len(mine) > 0 && time.Now().Before(stop); i++ {
 			rows := t.ev.saved(mine[i%len(mine)])
@@ -698,13 +698,13 @@ func (t *test) rush() {
 	ph.note = "every save changes every row of its sheet"
 }
 
-// stopAll stops the pollers, the laptops (the way their Shut Down button
+// stopAll stops the pollers, the clients (the way their Shut Down button
 // does) and the server.
 func (t *test) stopAll() {
 	t.stopOnce.Do(func() {
 		close(t.stopPollers)
 		t.pollers.Wait()
-		t.each(func(l *laptop) {
+		t.each(func(l *client) {
 			l.prog.shutDown()
 			l.relay.close()
 		})

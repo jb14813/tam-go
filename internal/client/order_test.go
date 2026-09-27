@@ -13,7 +13,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/server"
 )
 
-// TestSavesCarryTheirNumber: every save the laptop sends names the laptop
+// TestSavesCarryTheirNumber: every save the client sends names the client
 // and numbers the save, one after the other. A save the server could not
 // take keeps its number in the queue, so the copy the network may still
 // deliver and the replay are one and the same save to the server.
@@ -26,12 +26,12 @@ func TestSavesCarryTheirNumber(t *testing.T) {
 	}
 	inner := server.NewHandler(rst, server.FixedPassword("secret"))
 	var mu sync.Mutex
-	var sent []string // laptop#save of every ticket save the server saw
+	var sent []string // client#save of every ticket save the server saw
 	busy := false
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" {
 			mu.Lock()
-			sent = append(sent, r.Header.Get("X-TAM-Laptop")+"#"+r.Header.Get("X-TAM-Save"))
+			sent = append(sent, r.Header.Get("X-TAM-Client-Name")+"#"+r.Header.Get("X-TAM-Save"))
 			refuse := busy
 			mu.Unlock()
 			if refuse {
@@ -73,11 +73,11 @@ func TestSavesCarryTheirNumber(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("the server saw %v, want the first save, the refused try, its replay and the third save", got)
 	}
-	laptop, first := split(t, got[0])
+	client, first := split(t, got[0])
 	for i, want := range []int64{first, first + 1, first + 1, first + 2} {
 		name, n := split(t, got[i])
-		if name != laptop || n != want {
-			t.Fatalf("the server saw %v: save %d should be %s#%d", got, i+1, laptop, want)
+		if name != client || n != want {
+			t.Fatalf("the server saw %v: save %d should be %s#%d", got, i+1, client, want)
 		}
 	}
 	if rt, _ := rst.Ticket("A", 1); rt == nil || rt.FirstName != "Three" {
@@ -90,7 +90,7 @@ func split(t *testing.T, s string) (string, int64) {
 	name, number, ok := strings.Cut(s, "#")
 	n, err := strconv.ParseInt(number, 10, 64)
 	if !ok || name == "" || err != nil || n <= 0 {
-		t.Fatalf("a save sent as %q, want a laptop name and a save number", s)
+		t.Fatalf("a save sent as %q, want a client name and a save number", s)
 	}
 	return name, n
 }

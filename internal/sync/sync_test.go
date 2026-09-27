@@ -256,7 +256,7 @@ func TestUnreachableServer(t *testing.T) {
 }
 
 // TestHeartbeatCarriesTheQueuedSaves: the server's admin page shows how
-// many saves each laptop still has queued, so every heartbeat says so.
+// many saves each client still has queued, so every heartbeat says so.
 func TestHeartbeatCarriesTheQueuedSaves(t *testing.T) {
 	f := newFakeServer(t)
 	s, st := newSyncer(t, f.ts.URL)
@@ -304,7 +304,7 @@ func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
 	s, st := newSyncer(t, f.ts.URL)
 	s.pulling = func() {
 		s.pulling = nil
-		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Laptop", PhoneNumber: "2", Pref: "CALL"}}
+		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Client", PhoneNumber: "2", Pref: "CALL"}}
 		if err := st.UpsertTickets(row); err != nil {
 			t.Fatal(err)
 		}
@@ -314,8 +314,8 @@ func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
 		}
 	}
 	s.Tick()
-	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Laptop" {
-		t.Fatalf("the laptop's copy has %+v, want its queued save (Laptop)", tk)
+	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Client" {
+		t.Fatalf("the client's copy has %+v, want its queued save (Client)", tk)
 	}
 	for _, r := range f.seen() {
 		if r == "GET /api/backuprestore" {
@@ -336,8 +336,8 @@ func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
 }
 
 // TestHeartbeatRightAfterTheReplay: the server's admin page shows how many
-// saves each laptop still has queued, from its heartbeat. Once the replay
-// has sent them the laptop says so at once, not at the next heartbeat, so
+// saves each client still has queued, from its heartbeat. Once the replay
+// has sent them the client says so at once, not at the next heartbeat, so
 // the page never shows saves that are no longer waiting.
 func TestHeartbeatRightAfterTheReplay(t *testing.T) {
 	f := newFakeServer(t)

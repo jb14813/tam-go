@@ -39,7 +39,7 @@ const sweepEvery = 10 * time.Second
 // asking the standard ports on every address of the local /24 networks.
 // The sweep runs in the background and takes a few seconds; its result
 // shows up on the Settings page's next poll. A server seen at several
-// addresses is listed once, at the address this laptop shares a network
+// addresses is listed once, at the address this client shares a network
 // with.
 func (h *handler) servers(w http.ResponseWriter, r *http.Request) {
 	announced, err := discovery.Browse(r.Context(), browseWait)
@@ -83,9 +83,9 @@ type pairRequest struct {
 // a TAM server, creates an access key with the server password, and saves
 // the connection. Over TLS the server certificate is pinned from now on.
 //
-// Saves still queued stay queued when the laptop pairs with the server it
+// Saves still queued stay queued when the client pairs with the server it
 // was paired with (at the same address, or by the same name at a new one),
-// which is how a laptop whose key was refused gets going again. Pairing with
+// which is how a client whose key was refused gets going again. Pairing with
 // another server moves them to the failed list instead: they are not sent
 // anywhere by themselves, and Settings offers Retry and Discard.
 func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +221,7 @@ func wasWere(n int) string {
 }
 
 // unpair returns the client to standalone mode. With the server password
-// the laptop's key is also deleted on the server, when it can be reached.
+// the client's key is also deleted on the server, when it can be reached.
 func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
@@ -255,7 +255,7 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Saves that had not reached the server are kept in the failed list,
-	// where Settings offers Retry and Discard once the laptop is paired again.
+	// where Settings offers Retry and Discard once the client is paired again.
 	kept, err := h.st.FailAllOutbox("not sent before unpairing from " + serverLabel(s))
 	if err != nil {
 		log.Printf("outbox: %v", err)

@@ -149,13 +149,13 @@ func main() {
 		absDataDir = dataDir
 	}
 	st := store.New(sqldb)
-	// The API records what every laptop does; the admin page shows it.
-	laptops := presence.New(nil)
+	// The API records what every client does; the admin page shows it.
+	clients := presence.New(nil)
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now(), Presence: laptops})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: version.Version, Started: time.Now(), Presence: clients})
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
-	mux.Handle("/", server.NewHandler(st, password, server.WithPresence(laptops)))
+	mux.Handle("/", server.NewHandler(st, password, server.WithPresence(clients)))
 	srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -187,7 +187,7 @@ func main() {
 	}
 	fmt.Print(banner)
 	fmt.Printf("%s://%s/\n", scheme, browseAddr(*addr))
-	// The addresses a laptop on the network can be pointed at by hand when
+	// The addresses a client on the network can be pointed at by hand when
 	// the network drops the announcement.
 	for _, u := range reachable {
 		fmt.Println(u)

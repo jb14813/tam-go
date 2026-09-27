@@ -31,7 +31,7 @@ const (
 	Reconnecting State = "reconnecting"
 	// Offline: the server has not answered for a while.
 	Offline State = "offline"
-	// Unauthenticated: the server answers but refuses this laptop's key.
+	// Unauthenticated: the server answers but refuses this client's key.
 	Unauthenticated State = "unauthenticated"
 )
 
@@ -106,10 +106,10 @@ func (s *Syncer) Online() bool {
 }
 
 // InStep reports whether the pages should work through the server now: it
-// answers, and every save queued on this laptop has reached it. Until then
-// the pages keep working from the laptop's own copy and new saves queue
-// behind the old ones, so the server takes a laptop's saves in the order
-// they were made and a sheet opened meanwhile shows what the laptop saved,
+// answers, and every save queued on this client has reached it. Until then
+// the pages keep working from the client's own copy and new saves queue
+// behind the old ones, so the server takes a client's saves in the order
+// they were made and a sheet opened meanwhile shows what the client saved,
 // not the server's older copy.
 func (s *Syncer) InStep() bool {
 	if !s.Online() {
@@ -201,14 +201,14 @@ func (s *Syncer) NoteFailure(err error) {
 	}
 }
 
-// NoteUnauthorized records that the server refused this laptop's key.
+// NoteUnauthorized records that the server refused this client's key.
 func (s *Syncer) NoteUnauthorized() {
 	label := labelOf(s.cfg.Get())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
 	if s.state != Unauthenticated {
-		log.Printf("server %s: rejected this laptop's key", s.label)
+		log.Printf("server %s: rejected this client's key", s.label)
 		s.state = Unauthenticated
 	}
 }
@@ -238,7 +238,7 @@ func (s *Syncer) Enqueue(method, path string, body []byte) error {
 	return nil
 }
 
-// SaveQueued writes a save to the laptop's copy and queues its request
+// SaveQueued writes a save to the client's copy and queues its request
 // for the server in one transaction (see store.SaveQueued), under the name
 // and number it was first sent with, then wakes the worker.
 func (s *Syncer) SaveQueued(method, path string, body []byte, order store.Order, write func(*store.Store) error) error {
@@ -351,7 +351,7 @@ func (s *Syncer) Tick() {
 		return
 	}
 	if handled > 0 {
-		// The server's admin page shows what each laptop has queued, from
+		// The server's admin page shows what each client has queued, from
 		// the heartbeat: say at once that the queue is empty, not at the
 		// next heartbeat.
 		s.ping(rc, settings.RemoteKey != "")
@@ -531,7 +531,7 @@ func (s *Syncer) pull(rc *remote.Client) {
 		log.Printf("server %s: sent an invalid backup: %v", s.name(), err)
 		return
 	}
-	// Import only adds and updates: a laptop's own standalone rows are never
+	// Import only adds and updates: a client's own standalone rows are never
 	// deleted by a pull, so pairing (and unpairing) never loses local data.
 	s.saving.Lock()
 	s.mu.Lock()
@@ -555,7 +555,7 @@ func OrderHeaders(o store.Order) map[string]string {
 	if o.Save <= 0 {
 		return nil
 	}
-	return map[string]string{"X-TAM-Laptop": o.Laptop, "X-TAM-Save": strconv.FormatInt(o.Save, 10)}
+	return map[string]string{"X-TAM-Client-Name": o.Client, "X-TAM-Save": strconv.FormatInt(o.Save, 10)}
 }
 
 // without returns the backup minus the named rows.

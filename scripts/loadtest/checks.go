@@ -121,7 +121,7 @@ func (d serverDiff) summary() string {
 func (t *test) diffServer() (serverDiff, error) {
 	var d serverDiff
 	var bf store.BackupFile
-	if _, err := t.laptops[0].call(nil, "", http.MethodGet, "/api/backuprestore/remote", nil, &bf, 0); err != nil {
+	if _, err := t.clients[0].call(nil, "", http.MethodGet, "/api/backuprestore/remote", nil, &bf, 0); err != nil {
 		return d, err
 	}
 	t.ev.mu.Lock()
@@ -140,7 +140,7 @@ func (t *test) diffServer() (serverDiff, error) {
 			note(&d.tickets.first, "%s is missing", k)
 		case got != want:
 			d.tickets.differ++
-			note(&d.tickets.first, "%s is %s, laptop-%02d saved %s", k, describe(got), t.ev.tWriter[k], describe(want))
+			note(&d.tickets.first, "%s is %s, client-%02d saved %s", k, describe(got), t.ev.tWriter[k], describe(want))
 		}
 	}
 	for k := range tickets {
@@ -200,13 +200,13 @@ func (t *test) checkServer(when string) {
 	t.record("the server holds every prefix ("+when+")", d.prefixesSame, "%d saved, %d on the server", d.prefixes, d.onServer)
 }
 
-// checkMirrors compares every laptop's own copy with what that laptop saved
+// checkMirrors compares every client's own copy with what that client saved
 // last: its pages fall back on that copy whenever the server is away.
 func (t *test) checkMirrors() {
 	var mu sync.Mutex
 	var first []string
 	differ, affected := 0, 0
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		var bf store.BackupFile
 		if _, err := l.call(nil, "", http.MethodGet, "/api/backuprestore/local", nil, &bf, 0); err != nil {
 			mu.Lock()
@@ -257,15 +257,15 @@ func (t *test) checkMirrors() {
 			mu.Unlock()
 		}
 	})
-	t.record("every laptop's own copy shows what it saved", affected == 0,
-		"%d laptops; %d rows differ on %d of them%s", len(t.laptops), differ, affected, examples(first))
+	t.record("every client's own copy shows what it saved", affected == 0,
+		"%d clients; %d rows differ on %d of them%s", len(t.clients), differ, affected, examples(first))
 }
 
-// checkLaptops reads every laptop's status bar at the end.
-func (t *test) checkLaptops() {
+// checkClients reads every client's status bar at the end.
+func (t *test) checkClients() {
 	var mu sync.Mutex
 	away, waiting, failed := 0, 0, 0
-	t.each(func(l *laptop) {
+	t.each(func(l *client) {
 		st, err := l.peek()
 		mu.Lock()
 		defer mu.Unlock()
@@ -275,20 +275,20 @@ func (t *test) checkLaptops() {
 		waiting += st.Pending
 		failed += st.Failed
 	})
-	t.record("every laptop ends connected with nothing waiting or refused", away+waiting+failed == 0,
-		"%d laptops: %d not connected, %d saves waiting, %d refused by the server", len(t.laptops), away, waiting, failed)
+	t.record("every client ends connected with nothing waiting or refused", away+waiting+failed == 0,
+		"%d clients: %d not connected, %d saves waiting, %d refused by the server", len(t.clients), away, waiting, failed)
 }
 
 // checkPresence reads the Clients table of the server's admin page.
 func (t *test) checkPresence() {
 	st, _, err := t.admin.status()
 	if errors.Is(err, errNoTable) {
-		t.skip("the admin page's Clients table lists every laptop as connected and caught up", "%v", err)
+		t.skip("the admin page's Clients table lists every client as connected and caught up", "%v", err)
 		t.skip("the admin page counts every prefix, ticket and basket", "%v", err)
 		return
 	}
 	if err != nil {
-		t.record("the admin page's Clients table lists every laptop as connected and caught up", false, "%v", err)
+		t.record("the admin page's Clients table lists every client as connected and caught up", false, "%v", err)
 		return
 	}
 	connected, updated, caughtUp := 0, 0, 0
@@ -303,10 +303,10 @@ func (t *test) checkPresence() {
 			caughtUp++
 		}
 	}
-	n := len(t.laptops)
-	t.record("the admin page's Clients table lists every laptop as connected and caught up",
+	n := len(t.clients)
+	t.record("the admin page's Clients table lists every client as connected and caught up",
 		len(st.Clients) == n && connected == n && updated == n && caughtUp == n,
-		"%d rows for %d laptops: %d connected, %d with a last update, %d with nothing queued", len(st.Clients), n, connected, updated, caughtUp)
+		"%d rows for %d clients: %d connected, %d with a last update, %d with nothing queued", len(st.Clients), n, connected, updated, caughtUp)
 	t.ev.mu.Lock()
 	tickets, baskets := len(t.ev.ticket), len(t.ev.basket)
 	t.ev.mu.Unlock()
@@ -333,12 +333,12 @@ func (t *test) checkRequests() {
 		t.record("the server started again after being killed", o.restartErr == nil, "%v", o.restartErr)
 	}
 	// A save is queued while the server is away and, after that, while the
-	// laptop still has saves from then to send: from the moment the server
+	// client still has saves from then to send: from the moment the server
 	// was killed (a save already on its way may be cut off too, hence the
-	// client's five-second write timeout of slack) until the laptop shows
+	// client's five-second write timeout of slack) until the client shows
 	// nothing queued. Any other queued save means the server was too slow.
 	total, unexpected := 0, 0
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		l.mu.Lock()
 		for _, at := range l.queuedAt {
 			total++
@@ -349,10 +349,10 @@ func (t *test) checkRequests() {
 		l.mu.Unlock()
 	}
 	t.record("saves were queued only while the server was out of reach", unexpected == 0,
-		"%d saves queued, %d of them while the laptop could reach the server", total, unexpected)
+		"%d saves queued, %d of them while the client could reach the server", total, unexpected)
 
 	// A page waits for the server five seconds at most, then works from the
-	// laptop's own copy; a second more covers the rest of the work.
+	// client's own copy; a second more covers the rest of the work.
 	const patience = 6 * time.Second
 	var slowOp, slowPhase string
 	var slow time.Duration
@@ -364,32 +364,32 @@ func (t *test) checkRequests() {
 	t.record("no page action waited more than 6 s", slow <= patience, "the slowest: %s in %s, %s", slowOp, slowPhase, ms(slow))
 	if t.outageOn() {
 		inside := 0
-		for _, l := range t.laptops {
+		for _, l := range t.clients {
 			l.mu.Lock()
 			if l.backlog > 0 {
 				inside++
 			}
 			l.mu.Unlock()
 		}
-		// Not a verdict: how many laptops went back to their offline sheets
+		// Not a verdict: how many clients went back to their offline sheets
 		// while they still had saves to send, the case the ordering matters in.
-		t.record("every laptop saw the server again after the restart", t.problemFree("reconnect"),
-			"%d of %d laptops went back to their offline sheets while saves were still queued%s", inside, len(t.laptops), t.problemText("reconnect"))
+		t.record("every client saw the server again after the restart", t.problemFree("reconnect"),
+			"%d of %d clients went back to their offline sheets while saves were still queued%s", inside, len(t.clients), t.problemText("reconnect"))
 	}
 
 	t.record("every sheet showed all its rows", t.problemFree("sheet size"), "%s", t.problemText("sheet size"))
 	t.record("a sheet opened again showed what was saved", t.problemFree("stale sheet"), "%s", t.problemText("stale sheet"))
 	t.record("reports, searches and winner lookups match the data", t.problemFree("report"), "%s", t.problemText("report"))
-	t.record("the laptops sent everything they queued", t.problemFree("settle"), "%s", t.problemText("settle"))
+	t.record("the clients sent everything they queued", t.problemFree("settle"), "%s", t.problemText("settle"))
 	if t.outageOn() && t.o.crashes > 0 {
-		t.record("every crashed laptop came back with its queue", t.problemFree("crash"), "%d crashed%s", t.outage.crashed, t.problemText("crash"))
+		t.record("every crashed client came back with its queue", t.problemFree("crash"), "%d crashed%s", t.outage.crashed, t.problemText("crash"))
 	}
 	if len(t.wifi.dropped) > 0 {
-		t.record("every laptop whose Wi-Fi dropped sent what it queued", t.problemFree("reconnect"), "laptops %v%s", t.wifi.dropped, t.problemText("reconnect"))
+		t.record("every client whose Wi-Fi dropped sent what it queued", t.problemFree("reconnect"), "clients %v%s", t.wifi.dropped, t.problemText("reconnect"))
 	}
-	t.record("a laptop whose key was deleted said so, and pairing again sent its queue", t.problemFree("key"), "%s", t.problemText("key"))
+	t.record("a client whose key was deleted said so, and pairing again sent its queue", t.problemFree("key"), "%s", t.problemText("key"))
 	if t.o.storm > 0 {
-		t.record("tickets everyone saved at once end whole, and every laptop shows them", t.problemFree("storm"), "%s", t.problemText("storm"))
+		t.record("tickets everyone saved at once end whole, and every client shows them", t.problemFree("storm"), "%s", t.problemText("storm"))
 	}
 }
 
@@ -406,17 +406,17 @@ func (t *test) problemText(kind string) string {
 	return fmt.Sprintf("%d times%s", n, examples(first))
 }
 
-// checkShutdown looks at how the laptops stopped at the end.
+// checkShutdown looks at how the clients stopped at the end.
 func (t *test) checkShutdown() {
 	clean := 0
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		l.prog.mu.Lock()
 		if l.prog.stopped {
 			clean++
 		}
 		l.prog.mu.Unlock()
 	}
-	t.record("every laptop shut down cleanly when asked", clean == len(t.laptops), "%d of %d", clean, len(t.laptops))
+	t.record("every client shut down cleanly when asked", clean == len(t.clients), "%d of %d", clean, len(t.clients))
 }
 
 // logTrouble are the log lines that mean something went wrong inside a
@@ -432,7 +432,7 @@ func (t *test) checkLogs() {
 	if !t.server.external {
 		files = append(files, filepath.Join(t.server.dir, "console.log"))
 	}
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		files = append(files, filepath.Join(l.prog.dir, "console.log"))
 	}
 	lines, bad := 0, 0
@@ -614,16 +614,16 @@ func (t *test) report(runErr error, took time.Duration) {
 		}
 		fmt.Fprintf(&b, "  tam-server %s: CPU %s over %d runs, peak memory %s, database %s\n", t.version, secs(cpu), runs, peakText(peak), megabytes(uint64(size)))
 	}
-	if len(t.laptops) > 0 {
+	if len(t.clients) > 0 {
 		var cpu time.Duration
 		var peak uint64
-		for _, l := range t.laptops {
+		for _, l := range t.clients {
 			c, p, _ := l.prog.usage()
 			cpu += c
 			peak = max(peak, p)
 		}
 		fmt.Fprintf(&b, "  tam-client x%d: CPU %s in all (%s each on average), peak memory %s for the largest\n",
-			len(t.laptops), secs(cpu), secs(cpu/time.Duration(len(t.laptops))), peakText(peak))
+			len(t.clients), secs(cpu), secs(cpu/time.Duration(len(t.clients))), peakText(peak))
 	}
 	fmt.Fprintf(&b, "  this machine: %s/%s, %d CPUs; the test ran %s\n", runtime.GOOS, runtime.GOARCH, runtime.NumCPU(), secs(took))
 

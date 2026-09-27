@@ -32,9 +32,9 @@
           };
         in
         {
-          default = app "tam-client" "The web app of a laptop, on http://localhost:3080/";
-          tam-client = app "tam-client" "The web app of a laptop, on http://localhost:3080/";
-          tam-server = app "tam-server" "The shared database of an event's laptops";
+          default = app "tam-client" "The client: the web app on http://localhost:3080/";
+          tam-client = app "tam-client" "The client: the web app on http://localhost:3080/";
+          tam-server = app "tam-server" "The shared database of an event's clients";
         }
       );
 

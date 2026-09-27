@@ -1,4 +1,4 @@
-# Application-menu entry for running tam-client by hand on a laptop: it
+# Application-menu entry for running tam-client by hand on a computer: it
 # opens the browser itself, keeps its data under ~/.local/share/tam-client,
 # and stops from Alt+A, Shut Down TAM in the app. install.sh puts this file
 # under /usr/local/share/applications and the icon under

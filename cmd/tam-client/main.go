@@ -1,5 +1,5 @@
 // Command tam-client serves the Ticket Auction Manager web app and its API
-// on a venue laptop, against a local database or a remote tam-server.
+// on a computer at the venue, against a local database or a remote tam-server.
 //
 //go:generate go-winres make --in winres/winres.json --arch amd64,arm64 --out rsrc
 package main

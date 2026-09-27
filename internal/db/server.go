@@ -16,11 +16,11 @@ var serverColumns = []string{"last_seen", "last_update"}
 // It is safe to run on every start, and adds only what is missing, so a
 // database from an earlier tam-server gains the newer columns.
 func MigrateServer(sqldb *sql.DB) error {
-	// laptop_saves holds, per laptop, the number of the last save applied
+	// client_saves holds, per client, the number of the last save applied
 	// from it, so a copy of an older save the network delivers late is
 	// skipped (see store.InOrder).
-	if _, err := sqldb.Exec(`CREATE TABLE IF NOT EXISTS laptop_saves (
-		laptop TEXT PRIMARY KEY,
+	if _, err := sqldb.Exec(`CREATE TABLE IF NOT EXISTS client_saves (
+		client TEXT PRIMARY KEY,
 		last_save INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("apply server schema: %w", err)
 	}

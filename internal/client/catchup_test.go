@@ -19,10 +19,10 @@ func oneTicket(id int, first string) []store.Ticket {
 	return []store.Ticket{{Prefix: "A", TID: id, FirstName: first, Pref: "CALL"}}
 }
 
-// TestSavesAfterAnOutageKeepTheirOrder: a laptop that sees its server again
+// TestSavesAfterAnOutageKeepTheirOrder: a client that sees its server again
 // while saves are still queued must not let a new save overtake them, or
 // the older queued save lands last and wins; and a sheet opened meanwhile
-// must show what the laptop saved, not the server's older copy.
+// must show what the client saved, not the server's older copy.
 func TestSavesAfterAnOutageKeepTheirOrder(t *testing.T) {
 	f := newFixture(t)
 	rst, _ := remoteFixture(t, f)
@@ -30,7 +30,7 @@ func TestSavesAfterAnOutageKeepTheirOrder(t *testing.T) {
 		t.Fatalf("save = %d %s", code, body)
 	}
 
-	// The server refuses the laptop for a while, so the next save is queued.
+	// The server refuses the client for a while, so the next save is queued.
 	s, _ := config.Load(f.settings)
 	goodKey := s.RemoteKey
 	s.RemoteKey = "WRONG"
@@ -49,7 +49,7 @@ func TestSavesAfterAnOutageKeepTheirOrder(t *testing.T) {
 
 	_, body := f.do("GET", "/api/tickets/A/1/1", nil, nil)
 	if rows := decode[[]store.Ticket](t, body); len(rows) != 1 || rows[0].FirstName != "Second" {
-		t.Errorf("the sheet opened while saves are queued shows %+v, want the laptop's own save (Second)", rows)
+		t.Errorf("the sheet opened while saves are queued shows %+v, want the client's own save (Second)", rows)
 	}
 	if code, body := f.do("POST", "/api/tickets", oneTicket(1, "Third"), nil); code != 200 {
 		t.Fatalf("save while saves are queued = %d %s", code, body)
@@ -63,11 +63,11 @@ func TestSavesAfterAnOutageKeepTheirOrder(t *testing.T) {
 		t.Fatalf("server has %+v, want the last save (Third)", rt)
 	}
 	if lt, _ := f.st.Ticket("A", 1); lt == nil || lt.FirstName != "Third" {
-		t.Fatalf("the laptop's copy has %+v, want the last save (Third)", lt)
+		t.Fatalf("the client's copy has %+v, want the last save (Third)", lt)
 	}
 }
 
-// TestPullKeepsSavesMadeWhileItDownloads: after a reconnect the laptop
+// TestPullKeepsSavesMadeWhileItDownloads: after a reconnect the client
 // downloads the server's data into its own copy. A save made while that
 // download was on its way is newer than the download, so the download must
 // not overwrite it.
@@ -141,14 +141,14 @@ func TestPullKeepsSavesMadeWhileItDownloads(t *testing.T) {
 		t.Fatalf("server has %+v, want New", rt)
 	}
 	if lt, _ := f.st.Ticket("A", 2); lt == nil || lt.FirstName != "New" {
-		t.Fatalf("the laptop's copy has %+v after the download, want the newer save (New)", lt)
+		t.Fatalf("the client's copy has %+v after the download, want the newer save (New)", lt)
 	}
 }
 
 // TestPullTakesLegacyPrefixNames: a server whose database came from the
 // original app can hold prefix names the pages would not let anyone type
-// now, such as A/B. A laptop copying the server's data must take them as
-// they are; refusing one refused the whole copy, and the laptop kept none of
+// now, such as A/B. A client copying the server's data must take them as
+// they are; refusing one refused the whole copy, and the client kept none of
 // the server's tickets.
 func TestPullTakesLegacyPrefixNames(t *testing.T) {
 	f := newFixture(t)
@@ -161,9 +161,9 @@ func TestPullTakesLegacyPrefixNames(t *testing.T) {
 	}
 	f.h.sync.Tick() // connects and copies the server's data
 	if ps, _ := f.st.ListPrefixes(); len(ps) != 2 {
-		t.Fatalf("the laptop's prefixes after the copy = %+v, want A/B and C", ps)
+		t.Fatalf("the client's prefixes after the copy = %+v, want A/B and C", ps)
 	}
 	if ts, _ := f.st.AllTickets(); len(ts) != 2 {
-		t.Fatalf("the laptop's tickets after the copy = %+v, want both", ts)
+		t.Fatalf("the client's tickets after the copy = %+v, want both", ts)
 	}
 }

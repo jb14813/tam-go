@@ -134,7 +134,7 @@ if [ -z "$addr" ]; then
 fi
 echo
 case "$what" in server | all)
-  echo "tam-server: http://$addr:8000/  (the laptops pair with this address)"
+  echo "tam-server: http://$addr:8000/  (the clients pair with this address)"
   echo "  admin page: http://$addr:8000/admin - it asks you to set the server password on the"
   echo "  first visit, unless TAM_PWD is set in /etc/systemd/system/tam-server.service."
   echo "  data: /var/lib/tam-server   log: journalctl -u tam-server"
@@ -143,7 +143,7 @@ esac
 case "$what" in client | all)
   echo "tam-client: http://localhost:3080/  (http://$addr:3080/ from other machines)"
   echo "  data: /var/lib/tam-client   log: journalctl -u tam-client"
-  echo "  On a laptop used by one person you may prefer not to run the client as a service:"
+  echo "  On a computer used by one person you may prefer not to run the client as a service:"
   echo "  'sudo systemctl disable --now tam-client' turns it off, and ./tam-client (or the"
   echo "  Ticket Auction Manager entry in the application menu) runs it by hand: it opens"
   echo "  the browser itself and stops from Alt+A, Shut Down TAM."

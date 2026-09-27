@@ -14,7 +14,7 @@ func TestSweepFindsServersWithoutMulticast(t *testing.T) {
 	goServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"whoami":"TAM Server","authenticated":false,"healthy":true,"name":"main-laptop","version":"0.0.1"}`))
+			w.Write([]byte(`{"whoami":"TAM Server","authenticated":false,"healthy":true,"name":"front-desk","version":"0.0.1"}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -43,7 +43,7 @@ func TestSweepFindsServersWithoutMulticast(t *testing.T) {
 	if got[0].Name != "127.0.0.1" || got[0].Port != port(t, original.URL) || got[0].Version != "" {
 		t.Fatalf("original = %+v", got[0])
 	}
-	if got[1].Name != "main-laptop" || got[1].Host != "127.0.0.1" || got[1].Port != port(t, goServer.URL) || got[1].TLS || got[1].Version != "0.0.1" {
+	if got[1].Name != "front-desk" || got[1].Host != "127.0.0.1" || got[1].Port != port(t, goServer.URL) || got[1].TLS || got[1].Version != "0.0.1" {
 		t.Fatalf("go server = %+v", got[1])
 	}
 }
@@ -68,19 +68,19 @@ func TestSweepTargetsAreTheLocal24(t *testing.T) {
 
 func TestDedupeCollapsesOneServerOnSeveralNetworks(t *testing.T) {
 	got := dedupe([]Server{
-		{Name: "main-laptop", Host: "192.168.1.10", Port: "8000"},
-		{Name: "main-laptop", Host: "10.0.0.10", Port: "8000"},
-		{Name: "main-laptop", Host: "192.168.1.10", Port: "8443", TLS: true},
+		{Name: "front-desk", Host: "192.168.1.10", Port: "8000"},
+		{Name: "front-desk", Host: "10.0.0.10", Port: "8000"},
+		{Name: "front-desk", Host: "192.168.1.10", Port: "8443", TLS: true},
 		{Name: "10.0.0.20", Host: "10.0.0.20", Port: "8000"},
 		{Name: "10.0.0.21", Host: "10.0.0.21", Port: "8000"},
 	})
 	if len(got) != 4 {
 		t.Fatalf("got %+v, want the named server twice (plain and TLS) and both unnamed ones", got)
 	}
-	if got[2].Name != "main-laptop" || got[2].Host != "10.0.0.10" || got[2].TLS {
+	if got[2].Name != "front-desk" || got[2].Host != "10.0.0.10" || got[2].TLS {
 		t.Fatalf("the plain entry keeps the lowest address: %+v", got[2])
 	}
-	if got[3].Name != "main-laptop" || !got[3].TLS {
+	if got[3].Name != "front-desk" || !got[3].TLS {
 		t.Fatalf("the TLS entry stays separate: %+v", got[3])
 	}
 }
@@ -113,7 +113,7 @@ func port(t *testing.T, raw string) string {
 }
 
 // A Docker or VM host has a bridge per container network; none of them
-// reaches a laptop, so they are neither listed as reachable nor swept.
+// reaches a client, so they are neither listed as reachable nor swept.
 func TestSkipInterfaceLeavesOutContainerAndVMBridges(t *testing.T) {
 	for _, name := range []string{"docker0", "br-53de69a58e2a", "virbr0", "veth1a2b3c", "lxcbr0", "cni0", "flannel.1", "podman1", "vEthernet (WSL (Hyper-V firewall))", "vEthernet (Default Switch)"} {
 		if !skipInterface(name) {
@@ -131,12 +131,12 @@ func TestSkipInterfaceLeavesOutContainerAndVMBridges(t *testing.T) {
 // client shares a network with; without such an address the lowest wins.
 func TestCollapsePrefersAnAddressOnTheClientsNetwork(t *testing.T) {
 	both := []Server{
-		{Name: "main-laptop", Host: "192.168.100.10", Port: "8000"},
-		{Name: "main-laptop", Host: "10.212.62.112", Port: "8000"},
+		{Name: "main-client", Host: "192.168.100.10", Port: "8000"},
+		{Name: "main-client", Host: "10.212.62.112", Port: "8000"},
 		{Name: "10.212.62.119", Host: "10.212.62.119", Port: "8000"},
 	}
 	got := Collapse(both, []*net.IPNet{addrNet("10.212.62.50", 24)})
-	if len(got) != 2 || got[1].Name != "main-laptop" || got[1].Host != "10.212.62.112" {
+	if len(got) != 2 || got[1].Name != "main-client" || got[1].Host != "10.212.62.112" {
 		t.Fatalf("with the client on 10.212.62.0/24: %+v", got)
 	}
 	got = Collapse(both, nil)

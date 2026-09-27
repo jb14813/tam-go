@@ -1,7 +1,7 @@
 # NixOS services for Ticket Auction Manager.
 #
 #   services.tam-server.enable = true;  # the machine that holds an event's data
-#   services.tam-client.enable = true;  # a laptop: the web app on http://localhost:3080/
+#   services.tam-client.enable = true;  # a client computer: the web app on http://localhost:3080/
 #
 # Both run as their own unprivileged users, keep their data in
 # /var/lib/tam-server and /var/lib/tam-client, and log to the journal.
@@ -95,7 +95,7 @@ let
 in
 {
   options.services.tam-server = {
-    enable = mkEnableOption "tam-server, the shared database of an event's laptops";
+    enable = mkEnableOption "tam-server, the shared database of an event's clients";
     package = packageOption;
 
     address = mkOption {
@@ -117,7 +117,7 @@ in
       default = false;
       description = ''
         Serve HTTPS. Without certFile and keyFile, the server creates a
-        self-signed certificate in its data directory, which a laptop pins
+        self-signed certificate in its data directory, which a client pins
         when it pairs.
       '';
     };
@@ -137,7 +137,7 @@ in
     announce = mkOption {
       type = types.bool;
       default = true;
-      description = "Announce the server on the local network (mDNS), so laptops list it in their Settings.";
+      description = "Announce the server on the local network (mDNS), so clients list it in their Settings.";
     };
 
     passwordFile = mkOption {
@@ -145,7 +145,7 @@ in
       default = null;
       example = "/run/secrets/tam-password";
       description = ''
-        A file holding the password that pairs a laptop and opens the admin
+        A file holding the password that pairs a client and opens the admin
         page (it becomes TAM_PWD). Without it, the password is set on the first
         visit of /admin. Once the password is changed on the admin page, the
         one kept in the data directory wins over this file.
@@ -160,7 +160,7 @@ in
   };
 
   options.services.tam-client = {
-    enable = mkEnableOption "tam-client, the web app of a laptop, with its own copy of the data";
+    enable = mkEnableOption "tam-client, the web app with its own copy of the data";
     package = packageOption;
 
     port = mkOption {
@@ -174,7 +174,7 @@ in
       default = false;
       description = ''
         Open the web app in the default browser when someone logs into the
-        desktop. With automatic login this makes the laptop a kiosk.
+        desktop. With automatic login this makes the computer a kiosk.
       '';
     };
 

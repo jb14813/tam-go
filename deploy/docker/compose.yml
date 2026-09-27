@@ -17,7 +17,7 @@
 # original" in README.md.
 #
 # The announcement on the local network (mDNS) does not leave a bridged
-# container, so it is off here and the laptops type the address. To announce,
+# container, so it is off here and the clients type the address. To announce,
 # replace `ports` by `network_mode: host` and drop -announce=false.
 
 services:

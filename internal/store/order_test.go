@@ -28,15 +28,15 @@ func phoneOf(t *testing.T, s *Store, id int) string {
 	return tk.PhoneNumber
 }
 
-// TestInOrder: the server applies a laptop's save only when it is newer
-// than the last one it applied from that laptop. A copy the network
+// TestInOrder: the server applies a client's save only when it is newer
+// than the last one it applied from that client. A copy the network
 // delivered late, or one sent twice, is skipped: applying it again could
 // only undo newer saves.
 func TestInOrder(t *testing.T) {
 	s := newOrderStore(t)
-	save := func(laptop string, n int64, phone string) bool {
+	save := func(client string, n int64, phone string) bool {
 		t.Helper()
-		applied, err := s.InOrder(laptop, n, func(st *Store) error {
+		applied, err := s.InOrder(client, n, func(st *Store) error {
 			return st.UpsertTickets([]Ticket{{Prefix: "A", TID: 1, PhoneNumber: phone}})
 		})
 		if err != nil {
@@ -45,7 +45,7 @@ func TestInOrder(t *testing.T) {
 		return applied
 	}
 	if !save("L1", 2, "second") {
-		t.Fatal("the first save of a laptop must apply")
+		t.Fatal("the first save of a client must apply")
 	}
 	if save("L1", 1, "first, late") || phoneOf(t, s, 1) != "second" {
 		t.Fatalf("an older save applied: the ticket reads %q", phoneOf(t, s, 1))
@@ -53,8 +53,8 @@ func TestInOrder(t *testing.T) {
 	if save("L1", 2, "second, again") || phoneOf(t, s, 1) != "second" {
 		t.Fatalf("a save sent twice applied twice: the ticket reads %q", phoneOf(t, s, 1))
 	}
-	if !save("L2", 1, "other laptop") || phoneOf(t, s, 1) != "other laptop" {
-		t.Fatal("each laptop has numbers of its own")
+	if !save("L2", 1, "other client") || phoneOf(t, s, 1) != "other client" {
+		t.Fatal("each client has numbers of its own")
 	}
 	if !save("L1", 3, "third") || phoneOf(t, s, 1) != "third" {
 		t.Fatal("a newer save must apply")
@@ -71,9 +71,9 @@ func TestInOrder(t *testing.T) {
 	}
 }
 
-// TestNextSave: a laptop numbers its saves, under a name made on first
+// TestNextSave: a client numbers its saves, under a name made on first
 // use. The numbers only grow. A data folder copied to another machine
-// (another host name) gets a name of its own, so two laptops never share
+// (another host name) gets a name of its own, so two clients never share
 // one, and its numbers go on growing.
 func TestNextSave(t *testing.T) {
 	s := newOrderStore(t)
@@ -82,17 +82,17 @@ func TestNextSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := s.NextSave("desk-1")
-	if a.Laptop == "" || b.Laptop != a.Laptop || b.Save != a.Save+1 {
+	if a.Client == "" || b.Client != a.Client || b.Save != a.Save+1 {
 		t.Fatalf("NextSave = %+v then %+v, want one name and numbers one apart", a, b)
 	}
 	c, _ := s.NextSave("desk-2")
-	if c.Laptop == a.Laptop || c.Save <= b.Save {
+	if c.Client == a.Client || c.Save <= b.Save {
 		t.Fatalf("after a move to another machine NextSave = %+v, want a new name and a higher number than %d", c, b.Save)
 	}
 }
 
 // TestRetriedSavesGetNewNumbers: a save set aside in the failed list and
-// retried later is sent again now, after the laptop's newer saves, so it
+// retried later is sent again now, after the client's newer saves, so it
 // needs a new number; with its old one the server would skip it as stale.
 func TestRetriedSavesGetNewNumbers(t *testing.T) {
 	s := newOrderStore(t)
@@ -111,7 +111,7 @@ func TestRetriedSavesGetNewNumbers(t *testing.T) {
 	if err != nil || o == nil {
 		t.Fatalf("NextOutbox = %+v, %v", o, err)
 	}
-	if o.Order.Laptop != first.Laptop || o.Order.Save <= later.Save {
-		t.Fatalf("the retried save carries %+v, want the laptop's name and a number above %d", o.Order, later.Save)
+	if o.Order.Client != first.Client || o.Order.Save <= later.Save {
+		t.Fatalf("the retried save carries %+v, want the client's name and a number above %d", o.Order, later.Save)
 	}
 }

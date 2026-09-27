@@ -2,7 +2,7 @@
 
 **Goal.** tam-go runs natively on Windows, Linux and macOS (amd64 and
 arm64), carries the original's data unchanged, ships as one archive per
-system with install helpers, and its server shows every laptop's
+system with install helpers, and its server shows every client's
 connection state, last update and queue, so an admin can see when all
 clients have synced. Branch `all-systems`, on top of `parity`.
 
@@ -22,7 +22,7 @@ original repo is not changed further from here; the Go version replaces it.
   today (throttled); `last_update` is persisted the same way in a new
   `auth_keys.last_update` column added by `db.MigrateServer`, so restarts
   keep history. The in-memory values are exact and win when present.
-- Admin Status page, table "Laptops": Laptop, Client, State, Last seen,
+- Admin Status page, table "Clients": Client, Program, State, Last seen,
   Last update, Queued. State is "connected" when seen within 15 s, "away"
   (with how long) otherwise, "never" when unseen. The page reloads itself
   every 5 s. A client that sends no heartbeat (the original) shows what its
@@ -55,7 +55,7 @@ server reports it on `GET /api` and the admin page.
   units, `-tray=false -open=false`, data under `/var/lib/tam-<name>`, a
   `tam` system user), `install.sh` (copies the binaries to
   `/usr/local/bin`, creates the user and data folders, installs and enables
-  the chosen unit), `tam-client.desktop` for a laptop's application menu.
+  the chosen unit), `tam-client.desktop` for a client's application menu.
 - `deploy/macos/`: `launchd` plists for both programs and notes on the
   quarantine flag of unsigned downloads.
 - `deploy/docker/`: multi-stage `Dockerfile` (build from source, run from a

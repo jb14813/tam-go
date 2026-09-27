@@ -175,7 +175,7 @@ func TestKeyManagementIs503WhilePasswordUnset(t *testing.T) {
 	for _, method := range []string{"GET", "POST", "DELETE"} {
 		var body any
 		if method == "POST" {
-			body = map[string]string{"description": "laptop"}
+			body = map[string]string{"description": "client"}
 		}
 		code, res := a.do(method, "/api/auth?key_to_del=X", body, map[string]string{"TAM-PW": ""})
 		if code != 503 || strings.TrimSpace(string(res)) != `{"detail":"server password not set"}` {
@@ -221,9 +221,9 @@ func TestRootReportsNameAndVersion(t *testing.T) {
 		t.Fatalf("root has %d fields, want whoami, authenticated, healthy, name and version: %v", len(root), root)
 	}
 
-	named := newAPI(t, WithInfo(Info{Name: "main-laptop", Version: "9.9.9"}))
+	named := newAPI(t, WithInfo(Info{Name: "front-desk", Version: "9.9.9"}))
 	_, body = named.do("GET", "/api/", nil, nil)
-	if root = decode[map[string]any](t, body); root["name"] != "main-laptop" || root["version"] != "9.9.9" {
+	if root = decode[map[string]any](t, body); root["name"] != "front-desk" || root["version"] != "9.9.9" {
 		t.Fatalf("root with WithInfo = %v", root)
 	}
 }
@@ -285,12 +285,12 @@ func TestKeyRoutesTouchLastSeenOncePerInterval(t *testing.T) {
 
 func TestKeyLifecycle(t *testing.T) {
 	a := newAPI(t)
-	code, body := a.pw("POST", "/api/auth", map[string]string{"description": "laptop"})
+	code, body := a.pw("POST", "/api/auth", map[string]string{"description": "client"})
 	if code != 200 {
 		t.Fatalf("create key: %d %s", code, body)
 	}
 	k := decode[store.AuthKey](t, body)
-	if len(k.AuthKey) != 32 || k.Description != "laptop" {
+	if len(k.AuthKey) != 32 || k.Description != "client" {
 		t.Fatalf("created key = %+v", k)
 	}
 
@@ -310,7 +310,7 @@ func TestKeyLifecycle(t *testing.T) {
 	}
 
 	code, body = a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil)
-	if code != 200 || decode[store.AuthKey](t, body).Description != "laptop" {
+	if code != 200 || decode[store.AuthKey](t, body).Description != "client" {
 		t.Fatalf("delete key should echo the deleted row: %d %s", code, body)
 	}
 	if code, _ = a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil); code != 404 {
@@ -577,7 +577,7 @@ func TestRootReportsTheBuildVersion(t *testing.T) {
 }
 
 // TestPresenceFollowsKeyedRequests: every request with a valid key is a
-// sighting of that laptop, named by X-TAM-Client or else by its
+// sighting of that client, named by X-TAM-Client or else by its
 // User-Agent; an accepted POST or DELETE is also an update.
 func TestPresenceFollowsKeyedRequests(t *testing.T) {
 	now := time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)
@@ -652,7 +652,7 @@ func TestPresenceFollowsKeyedRequests(t *testing.T) {
 }
 
 // TestHeartbeatRecordsTheQueuedSaves: GET /api with the key is the
-// heartbeat, and X-TAM-Pending on it is how many saves wait on the laptop.
+// heartbeat, and X-TAM-Pending on it is how many saves wait on the client.
 func TestHeartbeatRecordsTheQueuedSaves(t *testing.T) {
 	now := time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)
 	reg := presence.New(func() time.Time { return now })
@@ -700,7 +700,7 @@ func TestHeartbeatRecordsTheQueuedSaves(t *testing.T) {
 func TestDeletingAKeyForgetsItsPresence(t *testing.T) {
 	reg := presence.New(nil)
 	a := newAPI(t, WithPresence(reg))
-	_, body := a.pw("POST", "/api/auth", map[string]string{"description": "laptop"})
+	_, body := a.pw("POST", "/api/auth", map[string]string{"description": "client"})
 	k := decode[store.AuthKey](t, body)
 	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": k.AuthKey, "X-TAM-Pending": "1"})
 	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Pending": "1"})

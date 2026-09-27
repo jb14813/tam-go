@@ -12,8 +12,8 @@ import (
 
 // brokenQueueFixture is a client with its server gone, so saves are
 // queued, over a database whose outbox table is dropped: queueing fails
-// after the save to the laptop's own copy could already have been written.
-// That is the moment a laptop stopping (a flat battery) would hit.
+// after the save to the client's own copy could already have been written.
+// That is the moment a client stopping (a flat battery) would hit.
 func brokenQueueFixture(t *testing.T) *fixture {
 	t.Helper()
 	sqldb, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
@@ -45,7 +45,7 @@ func brokenQueueFixture(t *testing.T) *fixture {
 }
 
 // TestQueuedSaveIsAllOrNothing: a save that cannot be queued must not stay
-// in the laptop's own copy either. Otherwise the laptop shows a save that
+// in the client's own copy either. Otherwise the client shows a save that
 // never reaches the server, and nobody types it again.
 func TestQueuedSaveIsAllOrNothing(t *testing.T) {
 	f := brokenQueueFixture(t)
@@ -53,7 +53,7 @@ func TestQueuedSaveIsAllOrNothing(t *testing.T) {
 		t.Fatalf("a save that could not be queued = %d, want 500", code)
 	}
 	if lt, _ := f.st.Ticket("A", 3); lt != nil {
-		t.Fatalf("the laptop's copy holds a save that is not queued: %+v", lt)
+		t.Fatalf("the client's copy holds a save that is not queued: %+v", lt)
 	}
 }
 
@@ -64,6 +64,6 @@ func TestQueuedDeleteIsAllOrNothing(t *testing.T) {
 		t.Fatalf("a delete that could not be queued = %d, want 500", code)
 	}
 	if ps, _ := f.st.ListPrefixes(); len(ps) != 1 {
-		t.Fatalf("the laptop's copy dropped a prefix whose delete is not queued: %+v", ps)
+		t.Fatalf("the client's copy dropped a prefix whose delete is not queued: %+v", ps)
 	}
 }

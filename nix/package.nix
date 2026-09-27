@@ -111,7 +111,7 @@ buildGo127Module {
   passthru = { inherit web; };
 
   meta = {
-    description = "Ticket Auction Manager: tam-server holds an event's data, tam-client serves the web app on each laptop";
+    description = "Ticket Auction Manager: tam-server holds an event's data, tam-client serves the web app on each client computer";
     homepage = "https://github.com/ticket-auction-manager/tam-go";
     license = lib.licenses.mit;
     mainProgram = "tam-client";

@@ -15,7 +15,7 @@ import (
 
 // TestReadsDoNotWaitForASilentServer: when the Wi-Fi drops without a word,
 // the server neither answers nor refuses. A page reading from it must give
-// up after readTimeout and show the laptop's own copy, not hang for as long
+// up after readTimeout and show the client's own copy, not hang for as long
 // as the connection's own limits allow.
 func TestReadsDoNotWaitForASilentServer(t *testing.T) {
 	was := readTimeout
@@ -59,11 +59,11 @@ func TestReadsDoNotWaitForASilentServer(t *testing.T) {
 			t.Fatalf("%s with the server silent = %d %s", path, code, body)
 		}
 		if took > 2*time.Second {
-			t.Fatalf("%s with the server silent took %s; it must give up after about %s and read the laptop's copy", path, took, readTimeout)
+			t.Fatalf("%s with the server silent took %s; it must give up after about %s and read the client's copy", path, took, readTimeout)
 		}
 	}
 	_, body := f.do("GET", "/api/tickets/A/4/4", nil, nil)
 	if rows := decode[[]store.Ticket](t, body); len(rows) != 1 || rows[0].FirstName != "Mirror" {
-		t.Fatalf("the sheet from the laptop's copy = %+v, want the saved row", rows)
+		t.Fatalf("the sheet from the client's copy = %+v, want the saved row", rows)
 	}
 }

@@ -85,7 +85,7 @@ func TestUnreachableServerIsAnError(t *testing.T) {
 }
 
 // TestEveryRequestNamesTheClient: the server's admin page shows which
-// program each laptop runs, so every request carries the program and its
+// program each client runs, so every request carries the program and its
 // build version.
 func TestEveryRequestNamesTheClient(t *testing.T) {
 	old := version.Version

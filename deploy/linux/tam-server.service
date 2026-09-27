@@ -1,4 +1,4 @@
-# tam-server as a system service: the shared database for the laptops of
+# tam-server as a system service: the shared database for the clients of
 # an event, on port 8000 for the whole network, with its data in
 # /var/lib/tam-server. install.sh next to this file installs it.
 #

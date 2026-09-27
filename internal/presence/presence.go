@@ -1,5 +1,5 @@
 // Package presence keeps, per access key, what tam-server last saw of the
-// laptop holding it: when it was seen, when it last wrote, what its
+// client holding it: when it was seen, when it last wrote, what its
 // heartbeat reported as queued, and which program it is. It lives in
 // memory only and is exact; the store keeps the coarse, throttled
 // last_seen and last_update times that survive a restart.
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Record is what is known about one key's laptop.
+// Record is what is known about one key's client.
 type Record struct {
 	Seen       time.Time // the last keyed request
 	Updated    time.Time // the last accepted write; zero when none

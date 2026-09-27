@@ -20,14 +20,14 @@ type soakSample struct {
 	at            time.Duration // since the soak began
 	serverMem     uint64        // working set (resident memory)
 	serverHandles int           // open handles (file descriptors)
-	laptopMem     uint64        // the largest working set of a laptop
-	laptopHandles int           // the laptops' open handles together
+	clientMem     uint64        // the largest working set of a client
+	clientHandles int           // the clients' open handles together
 	db, wal       int64         // the server's database and its write-ahead log
 }
 
 // soak keeps the event going for -soak after the main run, in rounds of
-// about half a minute: every laptop corrects a few of its tickets, reads
-// the counts, a report and a search, and a quarter of the laptops, in turn,
+// about half a minute: every client corrects a few of its tickets, reads
+// the counts, a report and a search, and a quarter of the clients, in turn,
 // lose their Wi-Fi for a while. After each round the server's data is
 // compared with what was saved, and the memory and open handles of every
 // program and the size of the database are noted; a leak shows as growth
@@ -35,12 +35,12 @@ type soakSample struct {
 // soak without a restart, so its numbers add up.
 func (t *test) soak() {
 	ph := t.newPhase("Soak")
-	deals := deal(t.ev.ticketSheets, len(t.laptops), 0)
+	deals := deal(t.ev.ticketSheets, len(t.clients), 0)
 	began := time.Now()
 	stop := began.Add(t.o.soak)
 	for round := 1; time.Now().Before(stop); round++ {
-		var group []*laptop
-		for _, l := range t.laptops {
+		var group []*client
+		for _, l := range t.clients {
 			if l.n%4 == round%4 {
 				group = append(group, l)
 			}
@@ -70,7 +70,7 @@ func (t *test) soak() {
 			}
 			back.Wait()
 		}()
-		t.each(func(l *laptop) { l.soakRound(t, ph, deals[l.n-1]) })
+		t.each(func(l *client) { l.soakRound(t, ph, deals[l.n-1]) })
 		wifi.Wait()
 		t.settle(fmt.Sprintf("after soak round %d", round))
 
@@ -81,17 +81,17 @@ func (t *test) soak() {
 		}
 		t.sample(round, time.Since(began))
 		s := t.soakSamples[len(t.soakSamples)-1]
-		fmt.Printf("  round %d at %s: server %s and %d handles, largest laptop %s, database %s + %s log\n",
-			round, secs(s.at), megabytes(s.serverMem), s.serverHandles, megabytes(s.laptopMem), megabytes(uint64(s.db)), megabytes(uint64(s.wal)))
+		fmt.Printf("  round %d at %s: server %s and %d handles, largest client %s, database %s + %s log\n",
+			round, secs(s.at), megabytes(s.serverMem), s.serverHandles, megabytes(s.clientMem), megabytes(uint64(s.db)), megabytes(uint64(s.wal)))
 	}
 	ph.end = time.Now()
-	ph.note = fmt.Sprintf("%d rounds; each laptop corrected three tickets, read reports and searched per round, a quarter of them lost their Wi-Fi for 8 s", len(t.soakSamples))
+	ph.note = fmt.Sprintf("%d rounds; each client corrected three tickets, read reports and searched per round, a quarter of them lost their Wi-Fi for 8 s", len(t.soakSamples))
 }
 
-// soakRound is a laptop's share of a soak round: three of its sheets opened
+// soakRound is a client's share of a soak round: three of its sheets opened
 // and a row of each corrected, a few seconds apart, then the counts, a
 // report and a search.
-func (l *laptop) soakRound(t *test, ph *phase, sheets []sheet) {
+func (l *client) soakRound(t *test, ph *phase, sheets []sheet) {
 	for i := 0; i < 3 && len(sheets) > 0; i++ {
 		s := sheets[l.intN(len(sheets))]
 		l.lookOwn(t, ph, s)
@@ -114,10 +114,10 @@ func (l *laptop) soakRound(t *test, ph *phase, sheets []sheet) {
 	l.call(ph, "search by last name", http.MethodGet, "/api/search/tickets?"+q.Encode(), nil, &found, 0)
 }
 
-// lookOwn opens a sheet and notes every row this laptop saved last that
-// does not show what it saved. Rows other laptops changed may rightly be
-// older on a laptop that lost its Wi-Fi.
-func (l *laptop) lookOwn(t *test, ph *phase, s sheet) {
+// lookOwn opens a sheet and notes every row this client saved last that
+// does not show what it saved. Rows other clients changed may rightly be
+// older on a client that lost its Wi-Fi.
+func (l *client) lookOwn(t *test, ph *phase, s sheet) {
 	var shown []store.Ticket
 	if _, err := l.call(ph, "open ticket sheet", http.MethodGet, s.path("tickets"), nil, &shown, 0); err != nil {
 		return
@@ -140,11 +140,11 @@ func (t *test) sample(round int, at time.Duration) {
 			}
 		}
 	}
-	for _, l := range t.laptops {
+	for _, l := range t.clients {
 		if cmd, _ := l.prog.current(); cmd != nil {
 			mem, handles, _ := usageNow(cmd.Process.Pid)
-			s.laptopMem = max(s.laptopMem, mem)
-			s.laptopHandles += handles
+			s.clientMem = max(s.clientMem, mem)
+			s.clientHandles += handles
 		}
 	}
 	t.mu.Lock()
@@ -186,8 +186,8 @@ func (t *test) checkSoak() {
 		}
 		t.record("the server's write-ahead log stayed bounded", wal <= 64<<20, "at most %s", megabytes(uint64(wal)))
 	}
-	level("the laptops' memory stayed level over the soak", func(s soakSample) float64 { return mb(s.laptopMem) }, 32, " MB")
-	level("the laptops' open handles stayed level over the soak", func(s soakSample) float64 { return float64(s.laptopHandles) }, 64*float64(len(t.laptops)), "")
+	level("the clients' memory stayed level over the soak", func(s soakSample) float64 { return mb(s.clientMem) }, 32, " MB")
+	level("the clients' open handles stayed level over the soak", func(s soakSample) float64 { return float64(s.clientHandles) }, 64*float64(len(t.clients)), "")
 }
 
 // soakTable writes the samples of the soak for the report.
@@ -195,9 +195,9 @@ func (t *test) soakTable(b *strings.Builder) {
 	if len(t.soakSamples) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\nSoak\n    %5s %8s %10s %8s %10s %9s %9s %9s\n", "round", "at", "server", "handles", "laptop", "handles", "database", "log")
+	fmt.Fprintf(b, "\nSoak\n    %5s %8s %10s %8s %10s %9s %9s %9s\n", "round", "at", "server", "handles", "client", "handles", "database", "log")
 	for _, s := range t.soakSamples {
 		fmt.Fprintf(b, "    %5d %8s %10s %8d %10s %9d %9s %9s\n", s.round, secs(s.at), megabytes(s.serverMem), s.serverHandles,
-			megabytes(s.laptopMem), s.laptopHandles, megabytes(uint64(s.db)), megabytes(uint64(s.wal)))
+			megabytes(s.clientMem), s.clientHandles, megabytes(uint64(s.db)), megabytes(uint64(s.wal)))
 	}
 }

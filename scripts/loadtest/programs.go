@@ -22,7 +22,7 @@ import (
 
 // web is how the simulated browsers and the checks reach the programs: many
 // connections kept open, never through a proxy.
-// A server run with -tls has a self-signed certificate; the laptops pin it,
+// A server run with -tls has a self-signed certificate; the clients pin it,
 // and the test itself only needs to reach it.
 var web = &http.Client{
 	Timeout: time.Minute,

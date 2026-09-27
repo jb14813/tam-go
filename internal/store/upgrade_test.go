@@ -7,8 +7,8 @@ import (
 	"ticket-auction-manager/tam-go/internal/db"
 )
 
-// TestQueueFromAnEarlierVersion: a laptop updated while saves were queued
-// kept them in the outbox of the earlier version, which had no laptop name
+// TestQueueFromAnEarlierVersion: a client updated while saves were queued
+// kept them in the outbox of the earlier version, which had no client name
 // or save number. After the update they are still there, in order, and go
 // out without a number, as they would have before.
 func TestQueueFromAnEarlierVersion(t *testing.T) {
