@@ -187,7 +187,7 @@ package_distro() {
   if [ "$program" = tam-client ]; then
     sed 's#/usr/local/bin/#/usr/bin/#g' deploy/linux/tam-client.desktop > "$dir/tam-client.desktop"
   fi
-  for f in preinstall postinstall preremove postremove; do
+  for f in preinstall postinstall preremove postremove posttrans; do
     sed "s#@PROGRAM@#$program#g" "deploy/linux/nfpm/$f.sh" > "$dir/$f.sh"
   done
   sed -e "s#@ARCH@#$arch#g" -e "s#@VERSION@#$pkg_version#g" -e "s#@PRERELEASE@#$pkg_prerelease#g" \

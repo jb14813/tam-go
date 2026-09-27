@@ -1,7 +1,7 @@
 # The .deb and .rpm of tam-server, built by nfpm (https://nfpm.goreleaser.com)
 # from build.sh, which fills in @ARCH@, @VERSION@, @PRERELEASE@ and
 # @RELEASE@ and puts the unit and the scripts for this program under
-# build/pkg/tam-server.
+# build/pkg/tam-server. posttrans runs on rpm only.
 name: tam-server
 arch: @ARCH@
 platform: linux
@@ -45,3 +45,6 @@ scripts:
   postinstall: build/pkg/tam-server/postinstall.sh
   preremove: build/pkg/tam-server/preremove.sh
   postremove: build/pkg/tam-server/postremove.sh
+rpm:
+  scripts:
+    posttrans: build/pkg/tam-server/posttrans.sh

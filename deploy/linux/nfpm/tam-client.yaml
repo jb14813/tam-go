@@ -1,7 +1,7 @@
 # The .deb and .rpm of tam-client, built by nfpm (https://nfpm.goreleaser.com)
 # from build.sh, which fills in @ARCH@, @VERSION@, @PRERELEASE@ and
 # @RELEASE@ and puts the unit, the desktop entry and the scripts for this
-# program under build/pkg/tam-client.
+# program under build/pkg/tam-client. posttrans runs on rpm only.
 name: tam-client
 arch: @ARCH@
 platform: linux
@@ -49,3 +49,6 @@ scripts:
   postinstall: build/pkg/tam-client/postinstall.sh
   preremove: build/pkg/tam-client/preremove.sh
   postremove: build/pkg/tam-client/postremove.sh
+rpm:
+  scripts:
+    posttrans: build/pkg/tam-client/posttrans.sh
