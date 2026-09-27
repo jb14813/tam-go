@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,6 +81,16 @@ func SameSite(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// RemoteIP is the address part of r.RemoteAddr: the address a request came
+// from, which the logs name and the password limit counts by.
+func RemoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // IntParam reads an integer path parameter.

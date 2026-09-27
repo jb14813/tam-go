@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
 )
@@ -68,14 +69,27 @@ func WithInfo(info Info) Option {
 	}
 }
 
+// WithGuesses sets the limit on wrong passwords, per address, that TAM-PW
+// counts against. Give the admin pages the same one (admin.WithGuesses), so
+// guesses cannot be split between the two; without the option the API
+// keeps a limit of its own.
+func WithGuesses(l *guard.Limiter) Option {
+	return func(h *handler) {
+		if l != nil {
+			h.guesses = l
+		}
+	}
+}
+
 // touchEvery is how often at most a key's last_seen is written. It is a
 // variable so tests can lower it.
 var touchEvery = time.Minute
 
 type handler struct {
-	st   *store.Store
-	pw   Password
-	info Info
+	st      *store.Store
+	pw      Password
+	info    Info
+	guesses *guard.Limiter
 
 	mu      sync.Mutex
 	touched map[string]time.Time // key -> last time last_seen was written
@@ -83,11 +97,13 @@ type handler struct {
 
 // NewHandler returns the server API. Data routes require a TAM-KEY header
 // that matches a stored access key; key management requires a TAM-PW header
-// that pw accepts, and answers 503 while no password is set. Unknown paths
-// and wrong methods under /api answer {"detail": ...} like the original.
+// that pw accepts, and answers 503 while no password is set. Wrong passwords
+// count against the address they come from: after guard.MaxFailures of them
+// it has to wait (429). Unknown paths and wrong methods under /api answer
+// {"detail": ...} like the original.
 func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 	hostname, _ := os.Hostname()
-	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: Version}, touched: map[string]time.Time{}}
+	h := &handler{st: st, pw: pw, info: Info{Name: hostname, Version: Version}, guesses: guard.New(), touched: map[string]time.Time{}}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -187,13 +203,29 @@ func (h *handler) forget(key string) {
 	h.mu.Unlock()
 }
 
+// requirePassword lets a request through when its TAM-PW is the password.
+// A wrong one is logged with the address it came from, never the password,
+// and counted against that address with the admin login's (see
+// WithGuesses); a request without one guesses nothing and is not counted.
 func (h *handler) requirePassword(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.pw.IsSet() {
 			httpx.WriteError(w, http.StatusServiceUnavailable, "server password not set")
 			return
 		}
-		if !h.pw.Check(r.Header.Get("TAM-PW")) {
+		plain := r.Header.Get("TAM-PW")
+		if plain == "" {
+			httpx.WriteError(w, http.StatusUnauthorized, "Invalid Password")
+			return
+		}
+		right, wait := h.guesses.Check(httpx.RemoteIP(r), "api", func() bool { return h.pw.Check(plain) })
+		switch {
+		case wait > 0:
+			secs := guard.Seconds(wait)
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			httpx.WriteError(w, http.StatusTooManyRequests, fmt.Sprintf("Too many wrong passwords. Wait %d seconds and try again.", secs))
+			return
+		case !right:
 			httpx.WriteError(w, http.StatusUnauthorized, "Invalid Password")
 			return
 		}

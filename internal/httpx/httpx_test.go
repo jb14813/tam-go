@@ -112,3 +112,13 @@ func TestJSONErrors(t *testing.T) {
 		t.Fatalf("path cleaning redirects pass through: %d %q", w.Code, w.Header().Get("Location"))
 	}
 }
+
+func TestRemoteIP(t *testing.T) {
+	for remote, want := range map[string]string{"192.0.2.7:51234": "192.0.2.7", "[2001:db8::1]:8000": "2001:db8::1", "@": "@"} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		if got := RemoteIP(r); got != want {
+			t.Errorf("RemoteIP(%q) = %q, want %q", remote, got, want)
+		}
+	}
+}
