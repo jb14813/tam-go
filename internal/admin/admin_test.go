@@ -785,3 +785,49 @@ func TestStatusWithoutARegistry(t *testing.T) {
 		t.Fatalf("status without a registry shows what the database has:\n%s", body)
 	}
 }
+
+// TestLogoAndIcon: every page shows the TAM logo and names the TAM icon, its
+// policy lets them load, and they are the web app's own files.
+func TestLogoAndIcon(t *testing.T) {
+	s := newSite(t, "secret")
+	for _, c := range []struct{ path, contentType, file string }{
+		{"/admin/logo.svg", "image/svg+xml", "logo.svg"},
+		{"/admin/favicon.ico", "image/x-icon", "favicon.ico"},
+		{"/favicon.ico", "image/x-icon", "favicon.ico"}, // asked for by pages that name no icon
+	} {
+		want, err := os.ReadFile(filepath.Join("static", c.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, body := s.get(c.path)
+		if res.StatusCode != 200 || res.Header.Get("Content-Type") != c.contentType || body != string(want) {
+			t.Fatalf("%s = %d %q, %d bytes; want the %d bytes of static/%s", c.path, res.StatusCode, res.Header.Get("Content-Type"), len(body), len(want), c.file)
+		}
+		if cc := res.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age") {
+			t.Fatalf("%s: Cache-Control %q, want it cached unlike the pages", c.path, cc)
+		}
+	}
+	res, page := s.get("/admin/")
+	if !strings.Contains(page, `<link rel="icon" href="/admin/favicon.ico">`) || !strings.Contains(page, `src="/admin/logo.svg"`) {
+		t.Fatalf("the login page must name the icon and show the logo:\n%s", page)
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self'") {
+		t.Fatalf("Content-Security-Policy %q blocks the logo", csp)
+	}
+	s.login("secret")
+	if page, _ := s.page("/admin/status"); !strings.Contains(page, `src="/admin/logo.svg"`) {
+		t.Fatalf("the status page must show the logo:\n%s", page)
+	}
+
+	// The server keeps copies of the web app's logo and icon; they must not drift.
+	for file, original := range map[string]string{
+		"static/logo.svg":    "../../frontend/src/lib/assets/logo.svg",
+		"static/favicon.ico": "../../frontend/static/favicon.ico",
+	} {
+		a, errA := os.ReadFile(file)
+		b, errB := os.ReadFile(original)
+		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+			t.Fatalf("%s must be a copy of %s (%v, %v)", file, original, errA, errB)
+		}
+	}
+}
