@@ -87,6 +87,12 @@ type pairRequest struct {
 // pair connects this client to a server: it checks the address answers as
 // a TAM server, creates an access key with the server password, and saves
 // the connection. Over TLS the server certificate is pinned from now on.
+//
+// Saves still queued stay queued when the laptop pairs with the server it
+// was paired with (at the same address, or by the same name at a new one),
+// which is how a laptop whose key was refused gets going again. Pairing with
+// another server moves them to the failed list instead: they are not sent
+// anywhere by themselves, and Settings offers Retry and Discard.
 func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	var req pairRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -175,6 +181,9 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	prev := h.settings()
+	same := prev.RemoteURL() != "" &&
+		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
 	if _, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
 		cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
 		cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = key.AuthKey, name, fingerprint
@@ -183,15 +192,41 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
-	if dropped, err := h.st.ClearOutbox(); err != nil {
-		log.Printf("outbox: %v", err)
-	} else if dropped > 0 {
-		log.Printf("paired with %s: dropped %s queued for the previous server", name, plural(dropped, "save"))
+	msg := "Paired with " + name
+	if !same {
+		from := "before this pairing"
+		if prev.RemoteURL() != "" {
+			from = "for " + serverLabel(prev)
+		}
+		moved, err := h.st.FailAllOutbox("queued " + from + "; retry to send it to " + name)
+		switch {
+		case err != nil:
+			log.Printf("outbox: %v", err)
+		case moved > 0:
+			log.Printf("paired with %s: %s queued %s set aside in the failed list", name, plural(moved, "save"), from)
+			msg += fmt.Sprintf(". %s queued %s %s set aside: Settings lists them under could not be sent, to retry here or discard.",
+				plural(moved, "save"), from, wasWere(moved))
+		}
 	}
 	h.sync.Reset()
 	h.sync.Kick()
 	log.Printf("paired with %s (%s)", name, hostPort)
-	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Paired with " + name, "server": hostPort})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": msg, "server": hostPort})
+}
+
+// serverLabel names the server of the settings as the pages do.
+func serverLabel(s config.Settings) string {
+	if s.RemoteName != "" {
+		return s.RemoteName
+	}
+	return net.JoinHostPort(s.RemoteServer, s.RemotePort)
+}
+
+func wasWere(n int) string {
+	if n == 1 {
+		return "was"
+	}
+	return "were"
 }
 
 // unpair returns the client to standalone mode. With the server password
@@ -228,14 +263,17 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
-	dropped, err := h.st.ClearOutbox()
+	// Saves that had not reached the server are kept in the failed list,
+	// where Settings offers Retry and Discard once the laptop is paired again.
+	kept, err := h.st.FailAllOutbox("not sent before unpairing from " + serverLabel(s))
 	if err != nil {
 		log.Printf("outbox: %v", err)
 	}
 	h.sync.Reset()
 	msg := "Standalone again."
-	if dropped > 0 {
-		msg += fmt.Sprintf(" %s that had not reached the server were dropped; they are still on this laptop.", plural(dropped, "save"))
+	if kept > 0 {
+		msg += fmt.Sprintf(" %s that had not reached the server %s kept: after pairing again, Settings lists them under could not be sent, to retry or discard.",
+			plural(kept, "save"), wasWere(kept))
 	}
 	log.Print("unpaired: standalone again")
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": msg})

@@ -97,6 +97,25 @@ func (s *Store) FailOutbox(id int64, errText string) error {
 	})
 }
 
+// FailAllOutbox moves every waiting request to the failed list, in order,
+// with errText as the reason, and returns how many it moved.
+func (s *Store) FailAllOutbox(errText string) (int, error) {
+	var n int
+	err := s.tx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at)
+			SELECT id, created_at, method, path, body, attempts, ?, ? FROM outbox ORDER BY id`,
+			errText, time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return err
+		}
+		moved, _ := res.RowsAffected()
+		n = int(moved)
+		_, err = tx.Exec(`DELETE FROM outbox`)
+		return err
+	})
+	return n, err
+}
+
 // OutboxCounts returns how many requests are waiting and how many failed.
 func (s *Store) OutboxCounts() (pending, failed int, err error) {
 	if err = s.db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&pending); err != nil {
@@ -141,21 +160,4 @@ func (s *Store) DiscardFailed() (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
-}
-
-// ClearOutbox drops every waiting and failed request, for when the client
-// is unpaired, and returns how many were waiting.
-func (s *Store) ClearOutbox() (int, error) {
-	var n int
-	err := s.tx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM outbox`)
-		if err != nil {
-			return err
-		}
-		dropped, _ := res.RowsAffected()
-		n = int(dropped)
-		_, err = tx.Exec(`DELETE FROM outbox_failed`)
-		return err
-	})
-	return n, err
 }
