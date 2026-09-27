@@ -1,0 +1,11 @@
+go test fuzz v1
+string("0")
+int64(14)
+string("0")
+string("0")
+string("\"")
+string("'081")
+byte('\x00')
+byte('\x00')
+bool(false)
+byte('\x00')
