@@ -471,3 +471,61 @@ func TestChangedCertificateIsItsOwnState(t *testing.T) {
 	}
 	serverHas(t, rst, 1, "Queued")
 }
+
+// TestSaveDoesNotWaitForAStuckReplay: while the replay is held up sending a
+// queued save over a link that went dead, a page's save goes behind it in
+// the queue at once; it does not wait for the replay's request to time out.
+func TestSaveDoesNotWaitForAStuckReplay(t *testing.T) {
+	f := newFixture(t)
+	rst := newServerStore(t)
+	k, err := rst.CreateKey("client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := server.NewHandler(rst, server.FixedPassword("secret"))
+	var mu sync.Mutex
+	hang := false
+	release := make(chan struct{})
+	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		h := hang && r.Method == http.MethodPost
+		mu.Unlock()
+		if h {
+			<-release // the link went dead with this request on it
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() { close(release); rs.Close() })
+	u, _ := url.Parse(rs.URL)
+	s := config.Defaults()
+	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), k.AuthKey
+	if err := config.Save(f.settings, s); err != nil {
+		t.Fatal(err)
+	}
+	f.h.sync.Tick()
+
+	// A save queued while the server was busy, then the replay starts to
+	// send it and hangs.
+	body, _ := json.Marshal(oneTicket(1, "Queued"))
+	order, err := f.st.NextSave(f.h.host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.SaveQueued(http.MethodPost, "/api/tickets", body, order, func(*store.Store) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	hang = true
+	mu.Unlock()
+	go f.h.sync.Tick()
+	time.Sleep(300 * time.Millisecond)
+
+	began := time.Now()
+	code, _ := f.do("POST", "/api/tickets", oneTicket(2, "Page"), nil)
+	if took := time.Since(began); code != 200 || took > time.Second {
+		t.Fatalf("a save while the replay hangs = %d after %s, want 200 at once (queued)", code, took)
+	}
+	if p, _ := pending(t, f.st); p != 2 {
+		t.Fatalf("pending = %d, want the page's save queued behind the hung one", p)
+	}
+}

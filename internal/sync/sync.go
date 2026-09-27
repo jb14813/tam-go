@@ -92,12 +92,15 @@ type Syncer struct {
 	pulling    func()          // tests: runs as a pull starts
 	pullAt     time.Time       // no mirror pull before this, after a download that could not be used
 
-	// sending is held while a save is numbered and then sent or queued, and
-	// while the replay sends one, so a client's saves reach the server one
-	// at a time in the order of their numbers, which the server's check of
-	// the numbers relies on (see store.InOrder), and the queue is always in
-	// that order too.
-	sending sync.Mutex
+	// numbering is held while a save is numbered and then sent or queued,
+	// so saves are numbered, queued and sent directly in one order (see
+	// Numbering). sending is held for each numbered request on its way to
+	// the server, by the replay and by a page sending a save directly, so
+	// the server sees a client's saves one at a time, in the order of their
+	// numbers, which its check of the numbers relies on (see store.InOrder).
+	// Lock numbering before sending, never the other way.
+	numbering sync.Mutex
+	sending   sync.Mutex
 
 	// saving is held for reading by every page save (BeginSave) and for
 	// writing by the mirror pull while it starts noting saved rows and while
@@ -143,8 +146,20 @@ func Row(table, prefix string, id int) string {
 	return table + "\x00" + prefix + "\x00" + strconv.Itoa(id)
 }
 
-// Sending holds this client's saves in line while the caller numbers one
-// and sends or queues it (see the sending field). done lets the next go.
+// Numbering holds this client's saves in line while the caller numbers one
+// and then queues it, or sends it (taking Sending as well). While it is
+// held no other save is numbered or queued, so a caller that finds the
+// queue empty (InStep) can count on it staying empty. done lets the next go.
+func (s *Syncer) Numbering() (done func()) {
+	s.numbering.Lock()
+	return s.numbering.Unlock
+}
+
+// Sending takes the way to the server for one numbered request: the replay
+// holds it for each queued save it sends, and a page for a save it sends
+// directly. A page whose save goes to the queue does not wait for it, so a
+// replay held up by a dead link does not hold up the pages. done lets the
+// next go.
 func (s *Syncer) Sending() (done func()) {
 	s.sending.Lock()
 	return s.sending.Unlock
@@ -428,8 +443,8 @@ func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
 	}
 }
 
-// replayOne sends the oldest queued request, holding this client's saves in
-// line meanwhile (see Sending). took reports that it left the queue (sent,
+// replayOne sends the oldest queued request, holding the way to the server
+// meanwhile (see Sending). took reports that it left the queue (sent,
 // or set aside in the failed list); ok is false when the server stopped
 // taking requests or the queue could not be read.
 func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {

@@ -210,7 +210,8 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 // client (its data folder was put back from a copy, see store.InOrder), the
 // save is numbered past the server's count and sent again; order follows,
 // so a save that ends up queued keeps its latest number. The caller holds
-// the client's saves in line (Syncer.Sending).
+// the client's saves in line and the way to the server (Syncer.Numbering,
+// Syncer.Sending).
 func (h *handler) sendNumbered(rc *remote.Client, method, path string, order *store.Order, body any) (*remote.Response, error) {
 	for attempt := 1; ; attempt++ {
 		res, err := rc.WithTimeout(writeTimeout).Do(method, path, tamsync.OrderHeaders(*order), body)
@@ -276,14 +277,16 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 	// same save to the server (see store.InOrder). Until it is answered or
 	// queued, this client's other saves wait, so they reach the server, and
 	// the queue, in the order of their numbers.
-	defer h.sync.Sending()()
+	defer h.sync.Numbering()()
 	order, err := h.st.NextSave(h.host)
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
 	if h.inStep() {
+		done := h.sync.Sending()
 		res, err := h.sendNumbered(rc, http.MethodPost, remotePath, &order, json.RawMessage(body))
+		done()
 		if h.observe(err, res) {
 			if !res.OK() {
 				forward(w, res)
@@ -434,7 +437,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	var order store.Order
 	if rc != nil {
 		defer h.sync.BeginSave([]string{prefixRow(store.Prefix{Prefix: name})})()
-		defer h.sync.Sending()() // numbered and sent or queued in line, as a save
+		defer h.sync.Numbering()() // numbered and sent or queued in line, as a save
 		var err error
 		if order, err = h.st.NextSave(h.host); err != nil {
 			httpx.WriteInternal(w, err)
@@ -442,7 +445,9 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		}
 		queue = true
 		if h.inStep() {
+			done := h.sync.Sending()
 			res, err := h.sendNumbered(rc, http.MethodDelete, remotePath, &order, nil)
+			done()
 			if h.observe(err, res) {
 				queue = false
 				if res.OK() {
