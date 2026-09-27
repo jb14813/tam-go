@@ -223,7 +223,8 @@ func TestSPA(t *testing.T) {
 	if code, _ := f.do("GET", "/", nil, nil); code != 302 {
 		t.Fatalf("/ = %d, want 302", code)
 	}
-	for _, p := range []string{"/web/", "/web/tickets/CALL/", "/web/settings/prefixes/"} {
+	// A prefix may be named 5.00: a page's address can look like a file's.
+	for _, p := range []string{"/web/", "/web/tickets/CALL/", "/web/settings/prefixes/", "/web/tickets/5.00", "/web/drawing/5.00/"} {
 		code, body := f.do("GET", p, nil, nil)
 		if code != 200 || !strings.Contains(string(body), "<div id=app>") {
 			t.Fatalf("%s = %d %q, want the app shell", p, code, body)
