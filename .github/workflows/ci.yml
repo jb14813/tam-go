@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
 # Every step runs in bash with -o pipefail: a test piped into tee fails the
 # step when the test fails (GitHub's default bash runs without pipefail).
 defaults:
