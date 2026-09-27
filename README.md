@@ -148,6 +148,38 @@ pnpm dev
 
 Or build the pages once (`./build.sh client`) and run `build/tam-client`, which serves them itself and opens the browser.
 
+## Running the tests
+
+The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push.
+
+Unit and integration tests; the client tests drive the real server handler as their server:
+
+```
+go test ./...
+```
+
+The compatibility run against the original tam, its FastAPI server at a pinned commit and its SvelteKit client next to the Go programs (needs Python 3, Node with pnpm, git and curl):
+
+```
+bash scripts/compat/run.sh
+```
+
+The load test runs a whole event through one real `tam-server` and many real `tam-client` programs on the machine, each laptop with its own data folder and paired through its Settings route. Ticket entry is paced over 40 seconds, fixing a typo now and then and opening sheets again; a quarter of the way in the server is killed and started again 8 seconds later while the laptops keep saving, and each laptop goes back to correct the sheets it saved meanwhile as soon as it sees the server again. Then another laptop corrects every 40th ticket, the baskets are entered and drawn (each winner looked up as the page does), every report and a few searches are read, and for 10 seconds every laptop saves as fast as it can. It then checks every ticket, basket and winner on the server and in each laptop's own copy, the admin page's Laptops table, and everything the programs wrote, and prints the time of every page action:
+
+```
+go run ./scripts/loadtest
+go run ./scripts/loadtest -laptops 50 -tickets 9000 -baskets 1000
+go run ./scripts/loadtest -h
+```
+
+It exits with status 1 when a check fails and then keeps the data folders and logs for a look. `-bin <folder>` tests programs built elsewhere, such as a release or a build with `-race`.
+
+To test over a real network, start `tam-server` on another machine with an empty data folder and a password, and point the laptops at it; `-kill` and `-restart` take the commands that kill that server and start it again (through ssh, for example) for the outage, and without them the run has no outage:
+
+```
+go run ./scripts/loadtest -server http://<that machine>:8000 -password <its password> -laptops 100
+```
+
 ## Configuration
 
 | Setting | Where | Default |
@@ -189,8 +221,8 @@ Remote mode is for events with several laptops: one `tam-server` holds the data 
 
 What happens with the connection:
 
-- **Reads** come from the server while it answers and are copied into the laptop's own database on the way. When the server does not answer, the pages read that copy instead, so the forms, reports and search keep working. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything.
-- **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), the rows are stored on the laptop and queued in an outbox; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again drains it.
+- **Reads** come from the server while it answers and nothing saved on this laptop is still waiting to reach it, and are copied into the laptop's own database on the way. Otherwise the pages read that copy, so the forms, reports and search keep working, and a sheet saved while the server was away shows what was saved until the server has it too. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a laptop that goes offline later has everything; rows the laptop saves while that download is on its way keep what was saved.
+- **Saves** go to the server first, with a five-second limit. When the server does not answer (or answers 5xx), or this laptop still has saves waiting for it, the rows are stored on the laptop and queued in an outbox behind the ones already there, so the server takes a laptop's saves in the order they were made; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again drains it.
 - **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A laptop replaying an old edit after another laptop changed the same ticket wins with the older edit.
 - **Refused saves** (the server answered 4xx during a replay) are kept in a failed list, counted in the bar, and can be retried or discarded from Settings.
 
@@ -300,6 +332,7 @@ internal/presence                what the server last saw of each laptop, for th
 internal/admin                   the server's login-protected admin pages and password file
 internal/version                 the version both programs report, stamped at build time
 scripts/compat                   the compatibility run against the original tam
+scripts/loadtest                 the load test: a whole event through one server and many laptops
 deploy/linux, deploy/macos, deploy/docker   systemd units, installer and .deb/.rpm definitions (nfpm/), launchd agents, Dockerfile and compose
 frontend/                        SvelteKit single-page app (built into cmd/tam-client/dist)
 ```
@@ -322,3 +355,5 @@ A second, adversarial pass then reviewed the package against the original with t
 Remote mode v2 (2026-09-26, Windows 11): `scripts/compat/run.sh` passed locally, the Go client against the original FastAPI server (commit `19eab77`) and the original SvelteKit client together with the Go client against `tam-server`, 25 cross-checks in `drive.py`. Live, with the built executables: the server's first start in setup mode and its password set from the admin page; the client finding the server by name on the network, pairing with the password, and the bar reading Connected; the server closed from its window, the bar turning Reconnecting within five seconds and Offline after thirty, a ticket saved meanwhile answered with `X-TAM-Queued` and shown on the tickets page from the laptop's copy; the server started again, the bar back to Connected within five seconds and the queued ticket present on the server. Size checked at 9,000 tickets and 400 baskets: every call about 0.2 s, the localhost floor on Windows.
 
 All systems (2026-09-26, branch `all-systems`): `./build.sh release` built the six targets and their archives on Windows. The Linux archive then ran on two real machines. On an Unraid NAS (a Docker host, Linux 6.6, no systemd) `tam-server` started from the tarball, listed only the LAN address, announced itself, and a Windows client on the same network found it by itself, paired, and synced a ticket; its admin page showed that client as connected with nothing queued, then its last update after a save, then "away for 20 s" once the client had stopped. On an Ubuntu 24.04 server `sudo ./install.sh all` created the `tam` user and both systemd services, the server's password was set on the first visit of its admin page, the Linux client on that machine and a Windows client both appeared on the Laptops table as connected with their version, a save from Windows showed as its last update and the Linux client read it back through the same server; `systemd-analyze verify` accepted both units. The Docker image built and answered on the Ubuntu server (`docker compose build` and `docker build`), on the Unraid host (`docker build`; its Compose wants a newer buildx plugin, as noted above) and on Docker Desktop; in WSL (Ubuntu 24.04) the installer, the units and both programs were exercised as well. Everything was removed from both machines afterwards. The unit suite and the compatibility run (24 checks) passed on the final commit. The macOS and arm64 builds were cross-compiled and packaged but not run. The archives were then split per program (`tam-server-...` and `tam-client-...`): on the Ubuntu server the server package and then the client package each installed itself as its service with `sudo ./install.sh` and no argument, with its icon and, for the client, the menu entry, and both Windows packages started here. The `.deb` pair then installed with `apt` on the Ubuntu server, both services active, and `apt remove` took them out leaving the data folders; the `.rpm` pair installed and removed with `dnf` in a Fedora 42 container.
+
+Load test (2026-09-27, `scripts/loadtest`): its first runs found four problems, each now fixed and pinned by a test. A laptop that saw its server again while saves were still queued sent new saves straight to the server, so an older queued save of the same ticket could land after a newer one and win, and a sheet opened meanwhile showed the server's older rows; now a laptop works from its own copy and queues new saves behind the old ones until its queue is empty. The refresh after a reconnect could copy the server's older rows over saves made while it downloaded; now it leaves those rows alone, and waits until the queue has been sent. On a Linux server whose disk is slow to flush, 50 laptops pairing at once made SQLite give up on a write (`database is locked`), because its busy wait is not first come, first served; now the writes of each program take turns, which also raised the rush with 50 laptops on Windows from 4,184 to 6,451 saves a second and cut the slowest save from 1.8 s to 40 ms. And the admin page could show a laptop's queue for up to a heartbeat after it had emptied; now the laptop sends a heartbeat as soon as its queue is sent. With the fixes every run passed all 21 checks. On Windows 11 (Ryzen 9 7900X3D, 24 threads), with 1,000 baskets: 20 laptops and 6,000 tickets, the saves queued during the outage sent 3.1 s after the restart, the rush at 5,857 saves (146,000 rows) a second; 50 laptops and 9,000 tickets, 4.9 s and 6,451 saves (161,000 rows) a second, the server peaking at 97 MB and each client at 67 MB at most; 100 laptops, 6,833 saves a second and 167 MB. Natively on the Ubuntu 24.04 server (8 threads, a SATA SSD, also running other services) with 50 laptops beside the server: 12.7 s and 2,750 saves a second. And with 100 laptops on the Windows machine using a `tam-server` on the Ubuntu server over the LAN, killed and started again there through ssh: all 180 queued saves sent 8.7 s after the restart, the rush at 4,065 saves (102,000 rows) a second with a median save of 24 ms, the server peaking at 161 MB. No request failed in any run. The Ubuntu-only run and the 100-laptop Windows run came before the last, admin-page fix; the others ran on the final code.
