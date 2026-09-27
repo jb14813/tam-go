@@ -131,20 +131,20 @@ func TestSkipInterfaceLeavesOutContainerAndVMBridges(t *testing.T) {
 // client shares a network with; without such an address the lowest wins.
 func TestCollapsePrefersAnAddressOnTheClientsNetwork(t *testing.T) {
 	both := []Server{
-		{Name: "main-client", Host: "192.168.100.10", Port: "8000"},
-		{Name: "main-client", Host: "10.212.62.112", Port: "8000"},
-		{Name: "10.212.62.119", Host: "10.212.62.119", Port: "8000"},
+		{Name: "front-desk", Host: "192.168.50.10", Port: "8000"},
+		{Name: "front-desk", Host: "10.1.2.112", Port: "8000"},
+		{Name: "10.1.2.119", Host: "10.1.2.119", Port: "8000"},
 	}
-	got := Collapse(both, []*net.IPNet{addrNet("10.212.62.50", 24)})
-	if len(got) != 2 || got[1].Name != "main-client" || got[1].Host != "10.212.62.112" {
-		t.Fatalf("with the client on 10.212.62.0/24: %+v", got)
+	got := Collapse(both, []*net.IPNet{addrNet("10.1.2.50", 24)})
+	if len(got) != 2 || got[1].Name != "front-desk" || got[1].Host != "10.1.2.112" {
+		t.Fatalf("with the client on 10.1.2.0/24: %+v", got)
 	}
 	got = Collapse(both, nil)
-	if len(got) != 2 || got[1].Host != "10.212.62.112" {
+	if len(got) != 2 || got[1].Host != "10.1.2.112" {
 		t.Fatalf("without a shared network the lowest address wins: %+v", got)
 	}
-	got = Collapse(both, []*net.IPNet{addrNet("192.168.100.7", 24)})
-	if len(got) != 2 || got[1].Host != "192.168.100.10" {
-		t.Fatalf("with the client on 192.168.100.0/24: %+v", got)
+	got = Collapse(both, []*net.IPNet{addrNet("192.168.50.7", 24)})
+	if len(got) != 2 || got[1].Host != "192.168.50.10" {
+		t.Fatalf("with the client on 192.168.50.0/24: %+v", got)
 	}
 }
