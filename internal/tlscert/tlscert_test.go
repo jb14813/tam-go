@@ -4,10 +4,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +74,77 @@ func TestEnsurePairRefusesHalfAPair(t *testing.T) {
 	os.WriteFile(cert, []byte("stale"), 0o644)
 	if _, err := EnsurePair(cert, key, []string{"localhost"}); err == nil {
 		t.Fatal("a certificate without its key must be reported, not silently replaced")
+	}
+}
+
+// TestFilesMakesAPairOnlyInTheDataDirectory: without -cert and -key the
+// pair is server.crt and server.key in the data directory, made on the
+// first start and kept after.
+func TestFilesMakesAPairOnlyInTheDataDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cert, key, created, err := Files(dir, "", "", []string{"localhost"})
+	if err != nil || !created || cert != filepath.Join(dir, "server.crt") || key != filepath.Join(dir, "server.key") {
+		t.Fatalf("first start = %q %q created=%v err=%v", cert, key, created, err)
+	}
+	if _, _, created, err = Files(dir, "", "", []string{"localhost"}); err != nil || created {
+		t.Fatalf("second start: created=%v err=%v", created, err)
+	}
+}
+
+// TestFilesNamedMustExist: -cert and -key name the user's own certificate.
+// When those files are missing, a new self-signed pair there would be
+// served in its place without a word; the start fails instead and names
+// the file, and nothing is written anywhere.
+func TestFilesNamedMustExist(t *testing.T) {
+	dir, mine := t.TempDir(), t.TempDir()
+	cert, key := filepath.Join(mine, "tam.example.crt"), filepath.Join(mine, "tam.example.key")
+	_, _, _, err := Files(dir, cert, key, []string{"localhost"})
+	if err == nil || !strings.Contains(err.Error(), "-cert") || !strings.Contains(err.Error(), cert) {
+		t.Fatalf("missing -cert file: err = %v, want one naming -cert and %s", err, cert)
+	}
+	for _, path := range []string{cert, key, filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")} {
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s was written: %v", path, err)
+		}
+	}
+
+	// A real pair at those paths is served as it is.
+	if _, err := EnsurePair(cert, key, []string{"tam.example"}); err != nil {
+		t.Fatal(err)
+	}
+	before := mustRead(t, cert)
+	got, gotKey, created, err := Files(dir, cert, key, []string{"localhost"})
+	if err != nil || created || got != cert || gotKey != key || string(mustRead(t, cert)) != string(before) {
+		t.Fatalf("named pair = %q %q created=%v err=%v", got, gotKey, created, err)
+	}
+
+	// A missing key is named too, and one flag alone is refused.
+	os.Remove(key)
+	if _, _, _, err := Files(dir, cert, key, nil); err == nil || !strings.Contains(err.Error(), "-key") || !strings.Contains(err.Error(), key) {
+		t.Fatalf("missing -key file: err = %v", err)
+	}
+	if _, _, _, err := Files(dir, cert, "", nil); err == nil || !strings.Contains(err.Error(), "-key") {
+		t.Fatalf("-cert without -key: err = %v", err)
+	}
+	if _, _, _, err := Files(dir, "", key, nil); err == nil || !strings.Contains(err.Error(), "-cert") {
+		t.Fatalf("-key without -cert: err = %v", err)
+	}
+}
+
+// TestFilesThatAreNoPairAreAnError: files that do not load as a pair stop
+// the start with the reason, instead of every client failing to connect.
+func TestFilesThatAreNoPairAreAnError(t *testing.T) {
+	dir := t.TempDir()
+	cert, key := filepath.Join(dir, "a.crt"), filepath.Join(dir, "a.key")
+	os.WriteFile(cert, []byte("not a certificate"), 0o644)
+	os.WriteFile(key, []byte("not a key"), 0o600)
+	if _, _, _, err := Files(dir, cert, key, nil); err == nil {
+		t.Fatal("files that are no certificate and key must be refused")
+	}
+	os.WriteFile(filepath.Join(dir, "server.crt"), []byte("stale"), 0o644)
+	os.WriteFile(filepath.Join(dir, "server.key"), []byte("stale"), 0o600)
+	if _, _, _, err := Files(dir, "", "", nil); err == nil {
+		t.Fatal("a broken pair in the data directory must be refused")
 	}
 }
 
