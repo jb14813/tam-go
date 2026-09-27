@@ -25,6 +25,29 @@
 		}
 	};
 
+	// Shows the winner of the number in a row's Winning Ticket box. Every
+	// keystroke asks, and answers can come back out of order (a slow link to
+	// the server): an answer for a number no longer in the box is dropped, so
+	// the lookup of 1 cannot replace the winner of 123. An empty box, or one
+	// that holds no ticket number, has no winner and is not looked up.
+	async function showWinner(item) {
+		const wanted = item.winning_ticket;
+		let ticket = null;
+		if (Number.isInteger(wanted) && wanted >= 0) {
+			try {
+				ticket = await getJSON(`/api/tickets/${encodeURIComponent(prefix.prefix)}/${wanted}`);
+			} catch {
+				// No winner shown when the lookup fails.
+			}
+			if (item.winning_ticket !== wanted) return;
+		}
+		[item.last_name, item.first_name, item.phone_number] = [
+			ticket?.last_name || '',
+			ticket?.first_name || '',
+			ticket?.phone_number || ''
+		];
+	}
+
 	let pager = $state({ idFrom: 0, idTo: 0 });
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
@@ -199,22 +222,9 @@
 						type="number"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
-						oninput={async () => {
+						oninput={() => {
 							item.changed = true;
-							const res = await fetch(
-								`/api/tickets/${encodeURIComponent(prefix.prefix)}/${item.winning_ticket}`
-							);
-							if (res.ok) {
-								const ticket = await res.json();
-								[item.last_name, item.first_name, item.phone_number] = [
-									ticket.last_name || '',
-									ticket.first_name || '',
-									ticket.phone_number || ''
-								];
-							} else {
-								// A cleared or invalid ticket number has no winner.
-								[item.last_name, item.first_name, item.phone_number] = ['', '', ''];
-							}
+							showWinner(item);
 						}}
 						bind:value={item.winning_ticket}
 					/></td
