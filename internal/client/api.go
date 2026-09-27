@@ -25,6 +25,13 @@ const rangeLimit = 300
 // connection to time out.
 const writeTimeout = 5 * time.Second
 
+// readTimeout bounds a page's read from the server. A read that takes
+// longer is answered from the laptop's own copy: when the Wi-Fi drops
+// without a word the server neither answers nor refuses, and a page would
+// otherwise wait out the connection's own, longer, limits. It is a variable
+// so tests can shorten it.
+var readTimeout = 4 * time.Second
+
 // forward relays a remote error response to the browser.
 func forward(w http.ResponseWriter, res *remote.Response) {
 	var doc map[string]any
@@ -80,7 +87,7 @@ func (h *handler) observe(err error, res *remote.Response) bool {
 // is the only store.
 func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, mirror func([]T) error, local func() ([]T, error)) {
 	if rc != nil && h.inStep() {
-		res, err := rc.Get(remotePath)
+		res, err := rc.WithTimeout(readTimeout).Get(remotePath)
 		if h.observe(err, res) && res.OK() {
 			out := []T{}
 			if res.JSON(&out) == nil {
@@ -108,7 +115,7 @@ func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remoteP
 // singleOr answers with one row, or a placeholder when it does not exist.
 func singleOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, placeholder T, mirror func([]T) error, local func() (*T, error)) {
 	if rc != nil && h.inStep() {
-		res, err := rc.Get(remotePath)
+		res, err := rc.WithTimeout(readTimeout).Get(remotePath)
 		if h.observe(err, res) && res.OK() {
 			var rows []T
 			if res.JSON(&rows) == nil {
@@ -161,7 +168,7 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	var rows []T
 	fromServer := false
 	if rc != nil && h.inStep() {
-		res, err := rc.Get(remotePath(from, to))
+		res, err := rc.WithTimeout(readTimeout).Get(remotePath(from, to))
 		if h.observe(err, res) && res.OK() && res.JSON(&rows) == nil {
 			fromServer = true
 			if mirror != nil && len(rows) > 0 {
