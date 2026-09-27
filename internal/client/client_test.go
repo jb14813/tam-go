@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -90,9 +91,32 @@ func newFixture(t *testing.T) *fixture {
 	st := newStore(t, "local.db")
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	h := newHandler(st, settings, testDist, WithTimings(testTimings))
-	ts := httptest.NewServer(h.routes(testDist))
-	t.Cleanup(ts.Close)
+	ts := newTestServer(t, h.routes(testDist))
 	return &fixture{t: t, url: ts.URL, st: st, settings: settings, h: h}
+}
+
+// newTestServer serves h on a local port until the test ends. Its
+// connections close with a reset rather than lingering in TIME_WAIT: the
+// fuzz targets start two servers per input, and on Windows the lingering
+// sockets use up the local ports within a minute, failing the next dial.
+func newTestServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(h)
+	ts.Listener = resetOnClose{ts.Listener}
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// resetOnClose sets SO_LINGER to zero on the connections it accepts.
+type resetOnClose struct{ net.Listener }
+
+func (l resetOnClose) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetLinger(0)
+	}
+	return c, err
 }
 
 func (f *fixture) do(method, path string, body any, headers map[string]string) (int, []byte) {
@@ -141,8 +165,7 @@ func decode[T any](t *testing.T, data []byte) T {
 func remoteFixture(t *testing.T, f *fixture) (*store.Store, *httptest.Server) {
 	t.Helper()
 	rst := newServerStore(t)
-	rs := httptest.NewServer(server.NewHandler(rst, server.FixedPassword("secret")))
-	t.Cleanup(rs.Close)
+	rs := newTestServer(t, server.NewHandler(rst, server.FixedPassword("secret")))
 	k, err := rst.CreateKey("client")
 	if err != nil {
 		t.Fatal(err)
