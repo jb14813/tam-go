@@ -34,8 +34,10 @@
 	let pair = $state(untrack(() => pairFields(data.settings)));
 	let busy = $state(false);
 	let serverMsg = $state({ message: '', color: 'green' });
-	// Saves the server rejected, from GET /api/status (0 in standalone mode).
+	// Saves the server rejected, and saves still waiting to reach it, from
+	// GET /api/status (0 in standalone mode).
 	let failed = $state(0);
+	let pending = $state(0);
 	// The connection state, from GET /api/status ('' in standalone mode).
 	let connState = $state('');
 	// A refused key and a changed certificate are both fixed by pairing again.
@@ -108,9 +110,12 @@
 
 	async function doUnpair() {
 		if (busy) return;
+		// After pairing, the client's own copy is the server's data; what the
+		// client had not sent yet goes to the failed list (see the client's unpair).
+		const now = pending > 0 ? ` (${pending} now)` : '';
 		if (
 			!confirm(
-				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps its local data.`
+				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps the copy of the server's data it has now. Saves still waiting to reach the server${now} are set aside in the failed list.`
 			)
 		)
 			return;
@@ -149,6 +154,7 @@
 		const { status: code, data: s } = await pollJSON('/api/status');
 		const remote = code === 200 && s && s.mode === 'remote';
 		failed = remote ? Number(s.failed) || 0 : 0;
+		pending = remote ? Number(s.pending) || 0 : 0;
 		connState = remote ? String(s.state || '') : '';
 		return code;
 	}
