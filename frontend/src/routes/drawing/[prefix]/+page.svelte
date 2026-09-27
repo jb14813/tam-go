@@ -64,6 +64,9 @@
 			if (pager.idTo - pager.idFrom > 300) {
 				pager.idTo = pager.idFrom + 300;
 			}
+			// Numbers start at 0: a row below it could not be saved.
+			if (pager.idFrom < 0) pager.idFrom = 0;
+			if (pager.idTo < 0) pager.idTo = 0;
 			let resData;
 			try {
 				resData = await getJSON(
@@ -102,7 +105,9 @@
 			pager.idTo = pager.idFrom + (itemsLength - 1);
 		},
 		prevPage() {
-			this.getPage([pager.idFrom - itemsLength, pager.idTo - itemsLength]);
+			// Stops at 0, keeping the page's size: 1-10 goes to 0-9.
+			const from = Math.max(0, pager.idFrom - itemsLength);
+			this.getPage([from, from + (pager.idTo - pager.idFrom)]);
 		},
 		nextPage() {
 			this.getPage([pager.idFrom + itemsLength, pager.idTo + itemsLength]);
