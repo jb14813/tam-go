@@ -211,6 +211,23 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+// TestDotPrefixNamesAreRefused: a path segment . or .. is resolved away by
+// the browser and by Go's ServeMux before any handler sees it, so a prefix
+// with that name could never be opened, whatever the escaping. Such a name
+// is refused like one with a slash; dots within a name are fine.
+func TestDotPrefixNamesAreRefused(t *testing.T) {
+	for _, name := range []string{".", "..", " .. "} {
+		if _, err := ValidatePrefixName(name); err == nil {
+			t.Errorf("ValidatePrefixName(%q) should fail", name)
+		}
+	}
+	for _, name := range []string{"...", ".A", "A.", "A.B"} {
+		if got, err := ValidatePrefixName(name); err != nil || got != name {
+			t.Errorf("ValidatePrefixName(%q) = %q, %v; want it accepted", name, got, err)
+		}
+	}
+}
+
 func TestBasketsAndDrawing(t *testing.T) {
 	s := newTestStore(t)
 	must(t, s.UpsertTickets([]Ticket{{"A", 5, "Winnie", "Won", "555-0005", "CALL"}}))
