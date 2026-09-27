@@ -22,6 +22,7 @@ import (
 type Store struct {
 	db  *sql.DB
 	wmu sync.Mutex
+	in  *sql.Tx // set on the Store SaveQueued hands out: its writes go into this transaction
 }
 
 // New returns a Store over an opened, migrated database.
@@ -45,6 +46,9 @@ func nint(v sql.NullInt64) int {
 
 // exec runs one statement that writes, in its turn.
 func (s *Store) exec(query string, args ...any) (sql.Result, error) {
+	if s.in != nil {
+		return s.in.Exec(query, args...)
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	return s.db.Exec(query, args...)
@@ -53,6 +57,9 @@ func (s *Store) exec(query string, args ...any) (sql.Result, error) {
 // execReturning runs one statement that writes and returns a row (DELETE
 // ... RETURNING), in its turn, and scans the row into dest.
 func (s *Store) execReturning(query string, args []any, dest ...any) error {
+	if s.in != nil {
+		return s.in.QueryRow(query, args...).Scan(dest...)
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	return s.db.QueryRow(query, args...).Scan(dest...)
@@ -61,6 +68,9 @@ func (s *Store) execReturning(query string, args []any, dest ...any) error {
 // tx runs fn inside a transaction, in its turn among the writes, and
 // commits it when fn returns nil.
 func (s *Store) tx(fn func(*sql.Tx) error) error {
+	if s.in != nil {
+		return fn(s.in)
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	tx, err := s.db.Begin()

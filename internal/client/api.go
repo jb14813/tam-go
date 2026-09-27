@@ -201,11 +201,12 @@ func basketRow(b store.Basket) string { return tamsync.Row("baskets", b.Prefix, 
 // writeThrough decodes and validates a list and saves it. In remote mode
 // the server is asked first while it answers and nothing saved here waits
 // for it; otherwise the rows are kept in the mirror and queued behind the
-// saves already waiting, and the answer carries X-TAM-Queued so a page can
-// tell. A server that rejects the data answers with its error and nothing
-// is written anywhere. row names each item for the syncer (see BeginSave).
+// saves already waiting, in one transaction, and the answer carries
+// X-TAM-Queued so a page can tell. A server that rejects the data answers
+// with its error and nothing is written anywhere. row names each item for
+// the syncer (see BeginSave); save writes the items to a store.
 func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remote.Client, remotePath string,
-	validate func([]T) error, row func(T) string, local func([]T) error) {
+	validate func([]T) error, row func(T) string, save func(*store.Store, []T) error) {
 	var items []T
 	if err := httpx.DecodeJSON(w, r, &items); err != nil {
 		httpx.WriteDecodeError(w, err)
@@ -219,7 +220,7 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 		return
 	}
 	if rc == nil {
-		if err := local(items); err != nil {
+		if err := save(h.st, items); err != nil {
 			httpx.WriteInternal(w, err)
 			return
 		}
@@ -243,7 +244,7 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 				forward(w, res)
 				return
 			}
-			if err := local(items); err != nil {
+			if err := save(h.st, items); err != nil {
 				httpx.WriteInternal(w, err)
 				return
 			}
@@ -251,11 +252,7 @@ func writeThrough[T any](h *handler, w http.ResponseWriter, r *http.Request, rc 
 			return
 		}
 	}
-	if err := local(items); err != nil {
-		httpx.WriteInternal(w, err)
-		return
-	}
-	if err := h.sync.Enqueue(http.MethodPost, remotePath, body); err != nil {
+	if err := h.sync.SaveQueued(http.MethodPost, remotePath, body, func(st *store.Store) error { return save(st, items) }); err != nil {
 		httpx.WriteInternal(w, err)
 		return
 	}
@@ -373,7 +370,7 @@ func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/prefixes", store.ValidatePrefixes, prefixRow, h.st.UpsertPrefixes)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/prefixes", store.ValidatePrefixes, prefixRow, (*store.Store).UpsertPrefixes)
 }
 
 // deletePrefix removes a prefix on the server (in remote mode) and in the
@@ -405,27 +402,42 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	gone, err := h.st.DeletePrefix(name)
-	if err != nil {
+	// Offline, the delete here and its place in the queue are one
+	// transaction; a prefix neither side has is a 404 and queues nothing.
+	var gone *store.Prefix
+	remove := func(st *store.Store) error {
+		var err error
+		gone, err = st.DeletePrefix(name)
+		if err == nil && gone == nil && !remoteHadIt {
+			err = errNoPrefix
+		}
+		return err
+	}
+	var err error
+	if queue {
+		err = h.sync.SaveQueued(http.MethodDelete, remotePath, nil, remove)
+	} else {
+		err = remove(h.st)
+	}
+	switch {
+	case errors.Is(err, errNoPrefix):
+		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
+		return
+	case err != nil:
 		httpx.WriteInternal(w, err)
 		return
 	}
 	if gone == nil {
-		if !remoteHadIt {
-			httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
-			return
-		}
 		gone = &store.Prefix{Prefix: name}
 	}
 	if queue {
-		if err := h.sync.Enqueue(http.MethodDelete, remotePath, nil); err != nil {
-			httpx.WriteInternal(w, err)
-			return
-		}
 		w.Header().Set("X-TAM-Queued", "1")
 	}
 	httpx.WriteJSON(w, http.StatusOK, gone)
 }
+
+// errNoPrefix is a delete of a prefix neither the server nor the laptop has.
+var errNoPrefix = errors.New("prefix not found")
 
 // --- tickets ---
 
@@ -470,7 +482,7 @@ func (h *handler) ticketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/tickets", store.ValidateTickets, ticketRow, h.st.UpsertTickets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/tickets", store.ValidateTickets, ticketRow, (*store.Store).UpsertTickets)
 }
 
 func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +497,7 @@ func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postSearch(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/search/tickets", store.ValidateTickets, ticketRow, h.st.UpsertTickets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/search/tickets", store.ValidateTickets, ticketRow, (*store.Store).UpsertTickets)
 }
 
 // --- baskets ---
@@ -529,7 +541,7 @@ func (h *handler) basketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/baskets", store.ValidateBaskets, basketRow, h.st.UpsertBaskets)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/baskets", store.ValidateBaskets, basketRow, (*store.Store).UpsertBaskets)
 }
 
 // --- drawing ---
@@ -584,7 +596,7 @@ func (h *handler) drawingRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
-	writeThrough(h, w, r, h.remote(h.settings()), "/api/drawing", store.ValidateBaskets, basketRow, h.st.UpsertWinning)
+	writeThrough(h, w, r, h.remote(h.settings()), "/api/drawing", store.ValidateBaskets, basketRow, (*store.Store).UpsertWinning)
 }
 
 // --- reports ---
