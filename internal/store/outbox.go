@@ -108,6 +108,13 @@ func (s *Store) OutboxCounts() (pending, failed int, err error) {
 	return pending, failed, nil
 }
 
+// OutboxWaiting reports whether any request is waiting in the outbox.
+func (s *Store) OutboxWaiting() (bool, error) {
+	var waiting bool
+	err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM outbox)`).Scan(&waiting)
+	return waiting, err
+}
+
 // RetryFailed moves every failed request back to the outbox, in its
 // original order, and returns how many it moved.
 func (s *Store) RetryFailed() (int, error) {

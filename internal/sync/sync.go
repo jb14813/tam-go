@@ -81,6 +81,13 @@ type Syncer struct {
 	retryAt    time.Time
 	nextPing   time.Time
 	kick       chan struct{}
+	touched    map[string]bool // rows saved since the running pull began; nil when none runs
+	pulling    func()          // tests: runs as a pull starts
+
+	// saving is held for reading by every page save (BeginSave) and for
+	// writing by the mirror pull while it starts noting saved rows and while
+	// it imports, so the pull knows which rows a page saved meanwhile.
+	saving sync.RWMutex
 }
 
 // New returns a syncer over the client's store and settings. client builds
@@ -96,6 +103,44 @@ func (s *Syncer) Online() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state == "" || s.state == Connected
+}
+
+// InStep reports whether the pages should work through the server now: it
+// answers, and every save queued on this laptop has reached it. Until then
+// the pages keep working from the laptop's own copy and new saves queue
+// behind the old ones, so the server takes a laptop's saves in the order
+// they were made and a sheet opened meanwhile shows what the laptop saved,
+// not the server's older copy.
+func (s *Syncer) InStep() bool {
+	if !s.Online() {
+		return false
+	}
+	waiting, err := s.st.OutboxWaiting()
+	if err != nil {
+		log.Printf("outbox: %v", err)
+		return false
+	}
+	return !waiting
+}
+
+// Row names a row for BeginSave: its table, prefix and id (0 for a prefix).
+func Row(table, prefix string, id int) string {
+	return table + "\x00" + prefix + "\x00" + strconv.Itoa(id)
+}
+
+// BeginSave tells the syncer that a page is saving the named rows and
+// returns the function that ends the save. A mirror pull under way leaves
+// those rows as the page saved them: what it downloaded may be older.
+func (s *Syncer) BeginSave(rows []string) (end func()) {
+	s.saving.RLock()
+	s.mu.Lock()
+	if s.touched != nil {
+		for _, r := range rows {
+			s.touched[r] = true
+		}
+	}
+	s.mu.Unlock()
+	return s.saving.RUnlock
 }
 
 // State returns the current state ("" before the first contact).
@@ -290,8 +335,22 @@ func (s *Syncer) Tick() {
 	if !ready {
 		return
 	}
-	if !s.drain(rc) {
+	handled, ok := s.drain(rc)
+	if !ok {
 		return
+	}
+	if handled > 0 {
+		// The server's admin page shows what each laptop has queued, from
+		// the heartbeat: say at once that the queue is empty, not at the
+		// next heartbeat.
+		s.ping(rc, settings.RemoteKey != "")
+		s.mu.Lock()
+		s.nextPing = time.Now().Add(s.t.Heartbeat)
+		connected := s.state == Connected
+		s.mu.Unlock()
+		if !connected {
+			return
+		}
 	}
 	s.mu.Lock()
 	pull := s.pullNeeded
@@ -331,17 +390,19 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 	}
 }
 
-// drain sends queued requests in order. It returns false when the server
-// stopped taking them, so the caller does not pull a mirror it cannot trust.
-func (s *Syncer) drain(rc *remote.Client) bool {
-	for {
+// drain sends queued requests in order and returns how many it took off
+// the queue (sent, or refused by the server and kept in the failed list).
+// ok is false when the server stopped taking them, so the caller does not
+// pull a mirror it cannot trust.
+func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
+	for ; ; handled++ {
 		o, err := s.st.NextOutbox()
 		if err != nil {
 			log.Printf("outbox: %v", err)
-			return false
+			return handled, false
 		}
 		if o == nil {
-			return true
+			return handled, true
 		}
 		var body any
 		if len(o.Body) > 0 {
@@ -353,28 +414,28 @@ func (s *Syncer) drain(rc *remote.Client) bool {
 			s.noteAttempt(o.ID, err.Error())
 			s.NoteFailure(err)
 			s.backOff()
-			return false
+			return handled, false
 		case res.OK():
 			if err := s.st.DeleteOutbox(o.ID); err != nil {
 				log.Printf("outbox: %v", err)
-				return false
+				return handled, false
 			}
 			s.NoteSuccess()
 			log.Printf("server %s: took a queued %s %s", s.name(), o.Method, o.Path)
 		case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
 			s.noteAttempt(o.ID, detail(res))
 			s.NoteUnauthorized()
-			return false
+			return handled, false
 		case res.Retryable():
 			s.noteAttempt(o.ID, detail(res))
 			s.NoteFailure(fmt.Errorf("server answered %d", res.Status))
 			s.backOff()
-			return false
+			return handled, false
 		default:
 			reason := detail(res)
 			if err := s.st.FailOutbox(o.ID, reason); err != nil {
 				log.Printf("outbox: %v", err)
-				return false
+				return handled, false
 			}
 			log.Printf("server %s: refused a queued %s %s (%s); kept in the failed list", s.name(), o.Method, o.Path, reason)
 		}
@@ -408,8 +469,35 @@ func (s *Syncer) name() string {
 }
 
 // pull copies the server's data into the mirror, so the pages have it when
-// the server goes away again.
+// the server goes away again. Rows a page saves while the download is on
+// its way keep what the page saved: the download may be older.
 func (s *Syncer) pull(rc *remote.Client) {
+	if s.pulling != nil {
+		s.pulling()
+	}
+	// Saves already under way finish first, so the download includes them.
+	// A save queued after the replay found nothing left to send is not on
+	// the server yet: the next tick sends it, then pulls. From here on the
+	// rows of every save are noted until the import.
+	s.saving.Lock()
+	waiting, err := s.st.OutboxWaiting()
+	if err != nil || waiting {
+		s.saving.Unlock()
+		if err != nil {
+			log.Printf("outbox: %v", err)
+		}
+		return
+	}
+	s.mu.Lock()
+	s.touched = map[string]bool{}
+	s.mu.Unlock()
+	s.saving.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.touched = nil
+		s.mu.Unlock()
+	}()
+
 	res, err := rc.Get("/api/backuprestore")
 	if err != nil {
 		s.NoteFailure(err)
@@ -434,7 +522,13 @@ func (s *Syncer) pull(rc *remote.Client) {
 	}
 	// Import only adds and updates: a laptop's own standalone rows are never
 	// deleted by a pull, so pairing (and unpairing) never loses local data.
-	if err := s.st.Import(bf); err != nil {
+	s.saving.Lock()
+	s.mu.Lock()
+	saved := s.touched
+	s.mu.Unlock()
+	err = s.st.Import(without(bf, saved))
+	s.saving.Unlock()
+	if err != nil {
 		log.Printf("mirror: %v", err)
 		return
 	}
@@ -442,6 +536,30 @@ func (s *Syncer) pull(rc *remote.Client) {
 	s.pullNeeded = false
 	s.mu.Unlock()
 	log.Printf("mirror refreshed from %s: %d prefixes, %d tickets, %d baskets", s.name(), len(bf.Prefixes), len(bf.Tickets), len(bf.Baskets))
+}
+
+// without returns the backup minus the named rows.
+func without(bf store.BackupFile, rows map[string]bool) store.BackupFile {
+	if len(rows) == 0 {
+		return bf
+	}
+	out := store.NewBackupFile()
+	for _, p := range bf.Prefixes {
+		if !rows[Row("prefixes", p.Prefix, 0)] {
+			out.Prefixes = append(out.Prefixes, p)
+		}
+	}
+	for _, b := range bf.Baskets {
+		if !rows[Row("baskets", b.Prefix, b.BID)] {
+			out.Baskets = append(out.Baskets, b)
+		}
+	}
+	for _, t := range bf.Tickets {
+		if !rows[Row("tickets", t.Prefix, t.TID)] {
+			out.Tickets = append(out.Tickets, t)
+		}
+	}
+	return out
 }
 
 // detail returns the server's {"detail": ...} message, or the status text.

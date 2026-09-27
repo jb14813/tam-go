@@ -150,7 +150,8 @@ func TestDrainOrderFailedListAndPull(t *testing.T) {
 		t.Fatalf("after a tick with the server up: pending %d failed %d, want 0 and 1", p, fl)
 	}
 	seen := f.seen()
-	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api/backuprestore"}
+	// The replay is followed at once by a heartbeat saying nothing waits.
+	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api", "GET /api/backuprestore"}
 	if len(seen) != len(want) {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
@@ -217,9 +218,9 @@ func TestServerGoesAwayAndComesBack(t *testing.T) {
 		t.Fatalf("outbox after reconnect: pending %d failed %d", p, fl)
 	}
 	seen := f.seen()
-	last := seen[len(seen)-2:]
-	if last[0] != "POST /api/tickets" || last[1] != "GET /api/backuprestore" {
-		t.Fatalf("after reconnect the queue drains, then the mirror is pulled; tail = %v", last)
+	last := seen[len(seen)-3:]
+	if last[0] != "POST /api/tickets" || last[1] != "GET /api" || last[2] != "GET /api/backuprestore" {
+		t.Fatalf("after reconnect the queue drains, a heartbeat says so, then the mirror is pulled; tail = %v", last)
 	}
 }
 
@@ -291,5 +292,81 @@ func TestHeartbeatCarriesTheQueuedSaves(t *testing.T) {
 	s.Tick()
 	if got := f.lastHeartbeat().Get("X-TAM-Pending"); got != "0" {
 		t.Fatalf("heartbeat after the drain said X-TAM-Pending %q, want 0", got)
+	}
+}
+
+// TestPullWaitsForSavesQueuedAfterTheReplay: a page save can be queued in
+// the moment between the replay finding nothing left to send and the pull
+// starting. The server does not have that save yet, so the pull must wait
+// until it has been sent instead of copying the server's older row over it.
+func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
+	f := newFakeServer(t)
+	s, st := newSyncer(t, f.ts.URL)
+	s.pulling = func() {
+		s.pulling = nil
+		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Laptop", PhoneNumber: "2", Pref: "CALL"}}
+		if err := st.UpsertTickets(row); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(row)
+		if err := s.Enqueue("POST", "/api/tickets", body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tick()
+	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Laptop" {
+		t.Fatalf("the laptop's copy has %+v, want its queued save (Laptop)", tk)
+	}
+	for _, r := range f.seen() {
+		if r == "GET /api/backuprestore" {
+			t.Fatalf("the pull downloaded while a save was still queued: %v", f.seen())
+		}
+	}
+
+	// The next tick sends the save first (and says the queue is empty),
+	// then pulls.
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 0 {
+		t.Fatalf("pending after the second tick = %d, want 0", p)
+	}
+	seen := f.seen()
+	if n := len(seen); n < 3 || seen[n-3] != "POST /api/tickets" || seen[n-2] != "GET /api" || seen[n-1] != "GET /api/backuprestore" {
+		t.Fatalf("requests = %v, want the queued save sent before the download", seen)
+	}
+}
+
+// TestHeartbeatRightAfterTheReplay: the server's admin page shows how many
+// saves each laptop still has queued, from its heartbeat. Once the replay
+// has sent them the laptop says so at once, not at the next heartbeat, so
+// the page never shows saves that are no longer waiting.
+func TestHeartbeatRightAfterTheReplay(t *testing.T) {
+	f := newFakeServer(t)
+	s, st := newSyncer(t, f.ts.URL)
+	s.t.Heartbeat = time.Hour // only the first tick pings on its own
+	for _, path := range []string{"/api/tickets", "/api/baskets"} {
+		if err := s.Enqueue("POST", path, []byte(`[]`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 0 {
+		t.Fatalf("pending = %d after the replay, want 0", p)
+	}
+	queued := func() []string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var out []string
+		for _, h := range f.heartbeats {
+			out = append(out, h.Get("X-TAM-Pending"))
+		}
+		return out
+	}
+	if got := queued(); len(got) != 2 || got[0] != "2" || got[1] != "0" {
+		t.Fatalf("heartbeats said %v queued, want [2 0]: the queue, then nothing left", got)
+	}
+	// With nothing sent, a tick does not ping before the heartbeat is due.
+	s.Tick()
+	if got := queued(); len(got) != 2 {
+		t.Fatalf("heartbeats said %v queued, want no heartbeat from a tick that sent nothing", got)
 	}
 }
