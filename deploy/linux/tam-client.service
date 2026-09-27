@@ -1,13 +1,22 @@
-# tam-client as a system service: the web app on port 3080, against a local
-# database in /var/lib/tam-client or, once paired from its Settings page, a
-# tam-server. install.sh next to this file installs it.
+# tam-client as a system service: the web app on http://localhost:3080/,
+# against a local database in /var/lib/tam-client or, once paired from its
+# Settings page, a tam-server. The .deb and .rpm packages install it, and so
+# does install.sh next to this file.
+#
+# It listens on this computer only: the web app has no login, and its
+# settings hold the access key the client uses with the server. To let other
+# machines open it too (as the container of the original did), give it every
+# address in a drop-in, which upgrades and another run of install.sh leave
+# alone: `sudo systemctl edit tam-client`, then
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/local/bin/tam-client -addr :3080 -open=false -tray=false
 #
 # This is for a machine that should serve the web app all the time. On a
-# computer used by one person, running ./tam-client by hand (or from the
-# application-menu entry) is simpler: it opens the browser itself and stops
-# from Alt+A, Shut Down TAM. With -addr :3080 the app is reachable from
-# other machines too, as the container of the original was; use
-# -addr localhost:3080 to keep it to this machine.
+# computer used by one person, the Ticket Auction Manager entry in the
+# application menu is simpler: with the service off, it runs tam-client for
+# whoever clicks it, which opens the browser itself and stops from Alt+A,
+# Shut Down TAM.
 
 [Unit]
 Description=Ticket Auction Manager client
@@ -19,7 +28,7 @@ Type=exec
 User=tam
 Group=tam
 Environment=TAM_DATA_DIR=/var/lib/tam-client
-ExecStart=/usr/local/bin/tam-client -addr :3080 -open=false -tray=false
+ExecStart=/usr/local/bin/tam-client -addr localhost:3080 -open=false -tray=false
 Restart=on-failure
 RestartSec=3
 # SIGTERM stops the program the same way Ctrl+C does.
@@ -27,8 +36,11 @@ KillSignal=SIGTERM
 TimeoutStopSec=15
 
 # The program needs its data directory and nothing else: the rest of the
-# system is read-only or hidden from it.
+# system is read-only or hidden from it. What it writes there (names, phone
+# numbers, the server's access key) is for the tam user only.
 StateDirectory=tam-client
+StateDirectoryMode=0750
+UMask=0077
 ReadWritePaths=/var/lib/tam-client
 NoNewPrivileges=yes
 PrivateTmp=yes

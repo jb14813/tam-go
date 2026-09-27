@@ -1,12 +1,23 @@
 # tam-server as a system service: the shared database for the clients of
 # an event, on port 8000 for the whole network, with its data in
-# /var/lib/tam-server. install.sh next to this file installs it.
+# /var/lib/tam-server. The .deb and .rpm packages install it, and so does
+# install.sh next to this file.
 #
-# The server password is set on the admin page (http://<this machine>:8000/admin)
-# on the first visit, or here: uncomment the TAM_PWD line, then run
-# `systemctl daemon-reload` and `systemctl restart tam-server`. To keep the
-# data elsewhere (for example the data folder of the original), change
-# TAM_DATA_DIR and ReadWritePaths together.
+# Local settings go outside this file, where upgrades and another run of
+# install.sh leave them:
+#
+# - The server password, if it should not be set on the admin page
+#   (http://<this machine>:8000/admin) on the first visit: a line
+#   TAM_PWD=<password> in /etc/default/tam-server, readable by root only.
+#     sudo install -m 600 /dev/null /etc/default/tam-server
+#     sudoedit /etc/default/tam-server
+#     sudo systemctl restart tam-server
+#   A password set on the admin page wins over it.
+# - Anything else in a drop-in, from `sudo systemctl edit tam-server`. To
+#   keep the data elsewhere, for example the data folder of the original:
+#     [Service]
+#     Environment=TAM_DATA_DIR=/srv/tam-data
+#     ReadWritePaths=/srv/tam-data
 
 [Unit]
 Description=Ticket Auction Manager server
@@ -18,7 +29,7 @@ Type=exec
 User=tam
 Group=tam
 Environment=TAM_DATA_DIR=/var/lib/tam-server
-#Environment=TAM_PWD=change-me
+EnvironmentFile=-/etc/default/tam-server
 ExecStart=/usr/local/bin/tam-server -addr :8000 -tray=false
 Restart=on-failure
 RestartSec=3
@@ -27,8 +38,11 @@ KillSignal=SIGTERM
 TimeoutStopSec=15
 
 # The program needs its data directory and nothing else: the rest of the
-# system is read-only or hidden from it.
+# system is read-only or hidden from it. What it writes there (names, phone
+# numbers, access keys) is for the tam user only.
 StateDirectory=tam-server
+StateDirectoryMode=0750
+UMask=0077
 ReadWritePaths=/var/lib/tam-server
 NoNewPrivileges=yes
 PrivateTmp=yes
