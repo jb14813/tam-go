@@ -29,12 +29,17 @@
 	let pairedName = $derived(data.settings.remote_name || data.settings.remote_server);
 	let servers = $state([]);
 	let pairingUnsupported = $state(false);
-	// Fields for pairing by hand; a discovered server's Use button fills them.
+	// Fields for pairing; a discovered server's Use button fills them, and
+	// while paired they hold the current server, for pairing again.
 	let pair = $state(untrack(() => pairFields(data.settings)));
 	let busy = $state(false);
 	let serverMsg = $state({ message: '', color: 'green' });
 	// Saves the server rejected, from GET /api/status (0 in standalone mode).
 	let failed = $state(0);
+	// The connection state, from GET /api/status ('' in standalone mode).
+	let connState = $state('');
+	// A refused key and a changed certificate are both fixed by pairing again.
+	let mustPairAgain = $derived(connState === 'unauthenticated' || connState === 'certificate');
 
 	function pairFields(s) {
 		return {
@@ -88,12 +93,16 @@
 		if (!host) return say('Enter the server host or pick one from the list', 'red');
 		if (!port) return say('Enter the server port', 'red');
 		busy = true;
+		// Pairing again with the server this client is paired with keeps the
+		// saves still waiting for it; the client sends them once paired.
 		const r = await post('/api/pair', { host, port, tls: !!pair.tls, password: pair.password });
 		busy = false;
+		// The whole answer: it may also say what became of this client's own data.
 		say(r.message, r.ok ? 'green' : 'red');
 		if (r.ok) {
 			pair.password = '';
 			await reloadSettings();
+			await pollStatus();
 		}
 	}
 
@@ -138,11 +147,13 @@
 
 	async function pollStatus() {
 		const { status: code, data: s } = await pollJSON('/api/status');
-		failed = code === 200 && s && s.mode === 'remote' ? Number(s.failed) || 0 : 0;
+		const remote = code === 200 && s && s.mode === 'remote';
+		failed = remote ? Number(s.failed) || 0 : 0;
+		connState = remote ? String(s.state || '') : '';
 		return code;
 	}
 
-	// The connection state, for the "could not be sent" line, while the page is open.
+	// The connection state, for Pair again and the "could not be sent" line, while the page is open.
 	$effect(() => {
 		let stopped = false;
 		let timer;
@@ -187,6 +198,48 @@
 	<title>{pageTitle}</title>
 </svelte:head>
 
+<!-- The pairing form: for a first pairing, and while paired for pairing again. -->
+{#snippet pairForm(label)}
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_host">Host:</label>
+		<input type="text" id="pair_host" class={iS.normal} bind:value={pair.host} />
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_port">Port:</label>
+		<input type="text" id="pair_port" class={iS.normal} bind:value={pair.port} />
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<div>TLS:</div>
+		<button
+			class={bS.gray}
+			onclick={() => {
+				pair.tls = !pair.tls;
+				pair.port = pair.tls ? '8443' : '8000';
+			}}>{pair.tls ? 'Yes' : 'No'}</button
+		>
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_password">Server password:</label>
+		<input
+			type="password"
+			id="pair_password"
+			autocomplete="off"
+			class={iS.normal}
+			onkeydown={(e) => {
+				if (e.key == 'Enter') doPair();
+			}}
+			bind:value={pair.password}
+		/>
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<button
+			class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
+			disabled={busy}
+			onclick={doPair}>{label}</button
+		>
+	</div>
+{/snippet}
+
 <div id="app_container" class="p-1">
 	<HeaderBar>
 		<div>Settings Sections:</div>
@@ -211,6 +264,31 @@
 					onclick={doUnpair}>Unpair</button
 				>
 			</div>
+			<div
+				id="pair_again"
+				class="flex flex-col gap-1 self-start max-w-3xl {mustPairAgain
+					? 'p-2 border-2 border-red-600 rounded bg-red-50'
+					: ''}"
+			>
+				{#if connState === 'certificate'}
+					<p class="{tS.red} font-bold">
+						The server's certificate changed since this client paired with it. If the server was
+						set up again or given a new certificate, pair again with the server password to trust
+						the new one; the saves waiting stay queued and are sent once paired.
+					</p>
+				{:else if connState === 'unauthenticated'}
+					<p class="{tS.red} font-bold">
+						The server refused this client's key. Pair again with the server password: the saves
+						waiting stay queued and are sent once paired.
+					</p>
+				{:else}
+					<div>
+						Pair again with the server password when the server refuses this client's key, its
+						certificate changed, or it moved to another address:
+					</div>
+				{/if}
+				{@render pairForm('Pair again')}
+			</div>
 		{:else if pairingUnsupported}
 			<div>{NOT_SUPPORTED}</div>
 		{:else}
@@ -226,44 +304,7 @@
 			{:else}
 				<div class="italic">Looking for servers on this network...</div>
 			{/each}
-			<div class="flex flex-row gap-1 items-center">
-				<div>Host:</div>
-				<input type="text" id="pair_host" class={iS.normal} bind:value={pair.host} />
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>Port:</div>
-				<input type="text" id="pair_port" class={iS.normal} bind:value={pair.port} />
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>TLS:</div>
-				<button
-					class={bS.gray}
-					onclick={() => {
-						pair.tls = !pair.tls;
-						pair.port = pair.tls ? '8443' : '8000';
-					}}>{pair.tls ? 'Yes' : 'No'}</button
-				>
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>Server password:</div>
-				<input
-					type="password"
-					id="pair_password"
-					autocomplete="off"
-					class={iS.normal}
-					onkeydown={(e) => {
-						if (e.key == 'Enter') doPair();
-					}}
-					bind:value={pair.password}
-				/>
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<button
-					class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
-					disabled={busy}
-					onclick={doPair}>Pair</button
-				>
-			</div>
+			{@render pairForm('Pair')}
 		{/if}
 		{#if failed > 0}
 			<div class="flex flex-row gap-1 items-center">
@@ -281,7 +322,7 @@
 			</div>
 		{/if}
 		{#if serverMsg.message}
-			<p class={tS[serverMsg.color]}>{serverMsg.message}</p>
+			<p class="{tS[serverMsg.color]} break-words">{serverMsg.message}</p>
 		{/if}
 	</div>
 	<div class="flex flex-col gap-1 w-full py-1">
