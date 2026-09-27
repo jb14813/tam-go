@@ -1,13 +1,13 @@
 # The .deb and .rpm of tam-client, built by nfpm (https://nfpm.goreleaser.com)
-# from build.sh, which fills in @ARCH@, @VERSION@ and @PRERELEASE@ and puts
-# the unit, the desktop entry and the scripts for this program under
-# build/pkg/tam-client.
+# from build.sh, which fills in @ARCH@, @VERSION@, @PRERELEASE@ and
+# @RELEASE@ and puts the unit, the desktop entry and the scripts for this
+# program under build/pkg/tam-client.
 name: tam-client
 arch: @ARCH@
 platform: linux
 version: @VERSION@
 prerelease: "@PRERELEASE@"
-release: "1"
+release: "@RELEASE@"
 section: net
 priority: optional
 maintainer: Ticket Auction Manager <https://github.com/ticket-auction-manager/tam-go>

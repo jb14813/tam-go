@@ -24,7 +24,7 @@ if [ -z "$PY" ]; then
   if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
 fi
 pnpm_cmd="pnpm"
-command -v pnpm >/dev/null 2>&1 || pnpm_cmd="npx --yes pnpm@latest"
+command -v pnpm >/dev/null 2>&1 || pnpm_cmd="npx --yes pnpm@12"
 PASSWORD=compat-secret
 # Every run starts from empty data folders; a client left paired by an
 # earlier run would otherwise answer as its server.
