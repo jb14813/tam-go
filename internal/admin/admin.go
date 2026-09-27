@@ -666,7 +666,10 @@ func (h *handler) changePassword(w http.ResponseWriter, r *http.Request, s *sess
 		h.render(w, http.StatusInternalServerError, "password", v)
 		return
 	}
-	log.Printf("admin: password changed from %s", addr)
-	h.ss.setFlash(s.id, "Password changed.")
+	// Whoever logged in with the old password, perhaps the one it was
+	// changed to keep out, is logged out; this browser stays in.
+	h.ss.deleteOthers(s.id)
+	log.Printf("admin: password changed from %s; every other session is logged out", addr)
+	h.ss.setFlash(s.id, "Password changed. Every other browser logged in here is logged out.")
 	http.Redirect(w, r, "/admin/password", http.StatusSeeOther)
 }

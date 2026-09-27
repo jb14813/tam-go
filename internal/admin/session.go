@@ -150,6 +150,17 @@ func (ss *sessions) delete(id string) {
 	ss.mu.Unlock()
 }
 
+// deleteOthers ends every session but keep.
+func (ss *sessions) deleteOthers(keep string) {
+	ss.mu.Lock()
+	for id := range ss.byID {
+		if id != keep {
+			delete(ss.byID, id)
+		}
+	}
+	ss.mu.Unlock()
+}
+
 // setFlash stores a message the next page of the session shows once.
 func (ss *sessions) setFlash(id, msg string) {
 	ss.mu.Lock()
