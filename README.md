@@ -100,7 +100,7 @@ nix flake check -L
 | Setting | Where | Default |
 |---|---|---|
 | `TAM_DATA_DIR` | environment, both daemons | `./data` |
-| `TAM_PWD` | environment, tam-server | `changeme` (a warning is logged; set it before exposing the server) |
+| `TAM_PWD` | environment, tam-server | none: without it, and without a password in `server.json`, the server starts in setup mode and the password is set on the first visit of `/admin`. A password set or changed there is kept, hashed, in `server.json` in the data directory, and wins over `TAM_PWD` |
 | `-addr` | flag, both daemons | `localhost:3080` for the client, `:8000` for the server (`:8443` with `-tls`) |
 | `-open` | flag, tam-client | `true`: open the web app in the default browser on start |
 | `-tray` | flag, both daemons | `true` on Windows: a TAM icon in the notification area with Open (client) and Shut Down entries; use `-tray=false` for services and scripts. Other systems have no icon and stop on Ctrl+C or SIGTERM |
