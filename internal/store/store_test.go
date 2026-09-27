@@ -137,6 +137,34 @@ func TestTickets(t *testing.T) {
 	}
 }
 
+// TestSearchComparesWholeFields: SQLite's LIKE stops reading a field or a
+// pattern at a NUL character. A ticket whose name held one was missed by a
+// search for the text after it, and a fragment holding one matched every
+// ticket.
+func TestSearchComparesWholeFields(t *testing.T) {
+	s := newTestStore(t)
+	must(t, s.UpsertTickets([]Ticket{{"A", 1, "Ann\x00e", "Lee", "5", "CALL"}, {"A", 2, "Bob", "Lee", "5", "CALL"}}))
+	for _, fragment := range []string{"e", "\x00", "N\x00E"} {
+		found, err := s.SearchTickets(fragment, "", "")
+		if err != nil || len(found) != 1 || found[0].TID != 1 {
+			t.Errorf("search for %q = %v, %v; want ticket A/1 alone", fragment, found, err)
+		}
+	}
+}
+
+// TestSearchWithALongFragment: SQLite refuses LIKE patterns over 50,000
+// bytes, which turned a long search into an internal error. A long fragment
+// is text like any other.
+func TestSearchWithALongFragment(t *testing.T) {
+	s := newTestStore(t)
+	long := strings.Repeat("x", 60000)
+	must(t, s.UpsertTickets([]Ticket{{"A", 1, long, "", "", "CALL"}, {"A", 2, "x", "", "", "CALL"}}))
+	found, err := s.SearchTickets(long, "", "")
+	if err != nil || len(found) != 1 || found[0].TID != 1 {
+		t.Fatalf("search for 60,000 bytes = %d rows, %v; want ticket A/1 alone", len(found), err)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	long := strings.Repeat("L", 101)
 	for _, bad := range []Prefix{
@@ -180,6 +208,37 @@ func TestValidation(t *testing.T) {
 	}
 	if err := ValidateBackup(&BackupFile{Prefixes: []Prefix{{"", "red", 1}}}); err == nil {
 		t.Error("a backup with an empty prefix name should fail")
+	}
+}
+
+// TestDotPrefixNamesAreRefused: a path segment . or .. is resolved away by
+// the browser and by Go's ServeMux before any handler sees it, so a prefix
+// with that name could never be opened, whatever the escaping. Such a name
+// is refused like one with a slash; dots within a name are fine.
+func TestDotPrefixNamesAreRefused(t *testing.T) {
+	for _, name := range []string{".", "..", " .. "} {
+		if _, err := ValidatePrefixName(name); err == nil {
+			t.Errorf("ValidatePrefixName(%q) should fail", name)
+		}
+	}
+	for _, name := range []string{"...", ".A", "A.", "A.B"} {
+		if got, err := ValidatePrefixName(name); err != nil || got != name {
+			t.Errorf("ValidatePrefixName(%q) = %q, %v; want it accepted", name, got, err)
+		}
+	}
+}
+
+// TestPrefixNameLengthCountsCharacters: the limit is 100 characters, as the
+// error and the README say, not 100 bytes, which refused names in scripts
+// that take two to four bytes a character well before the limit.
+func TestPrefixNameLengthCountsCharacters(t *testing.T) {
+	for _, name := range []string{strings.Repeat("é", 100), strings.Repeat("€", 100), strings.Repeat("🎟", 100)} {
+		if got, err := ValidatePrefixName(name); err != nil || got != name {
+			t.Errorf("a name of 100 %q = %v; want it accepted", []rune(name)[0], err)
+		}
+		if _, err := ValidatePrefixName(name + "x"); err == nil {
+			t.Errorf("a name of 101 characters (100 %q and x) should fail", []rune(name)[0])
+		}
 	}
 }
 

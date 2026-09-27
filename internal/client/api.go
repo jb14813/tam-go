@@ -162,7 +162,9 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	if from > to {
 		from, to = to, from
 	}
-	if to-from > rangeLimit {
+	// A range wider than half of the ints makes to-from wrap below zero;
+	// it is too wide as well.
+	if to-from > rangeLimit || to-from < 0 {
 		to = from + rangeLimit
 	}
 	var rows []T
@@ -189,8 +191,11 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 	for _, row := range rows {
 		byID[idOf(row)] = row
 	}
+	// Counting the ids rather than comparing each with to ends the loop when
+	// to is the largest int, where id++ would wrap around.
 	out := make([]T, 0, to-from+1)
-	for id := from; id <= to; id++ {
+	for n := 0; n <= to-from; n++ {
+		id := from + n
 		if row, ok := byID[id]; ok {
 			out = append(out, row)
 		} else {

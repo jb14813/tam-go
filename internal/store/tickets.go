@@ -1,9 +1,6 @@
 package store
 
-import (
-	"database/sql"
-	"strings"
-)
+import "database/sql"
 
 const ticketCols = `prefix, t_id, first_name, last_name, phone_number, pref`
 
@@ -66,18 +63,15 @@ func (s *Store) UpsertTickets(ts []Ticket) error {
 	})
 }
 
-// likePattern turns a fragment into a contains-pattern where %, _ and \ in
-// the fragment match themselves.
-func likePattern(fragment string) string {
-	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(fragment)
-	return "%" + escaped + "%"
-}
-
-// SearchTickets finds tickets whose fields contain the given fragments. Empty
-// fragments match everything.
+// SearchTickets finds tickets whose fields contain the given fragments,
+// ignoring the case of ASCII letters. Empty fragments match everything, and
+// %, _ and \ are ordinary characters. instr compares the whole field and
+// fragment, where LIKE stops at a NUL character and refuses patterns over
+// 50,000 bytes; lower changes ASCII letters only, as LIKE compares them.
 func (s *Store) SearchTickets(first, last, phone string) ([]Ticket, error) {
 	return s.queryTickets(`SELECT `+ticketCols+` FROM tickets
-		WHERE first_name LIKE ? ESCAPE '\' AND last_name LIKE ? ESCAPE '\' AND phone_number LIKE ? ESCAPE '\'
+		WHERE instr(lower(first_name), lower(?)) > 0 AND instr(lower(last_name), lower(?)) > 0
+		AND instr(lower(phone_number), lower(?)) > 0
 		ORDER BY prefix, t_id`,
-		likePattern(first), likePattern(last), likePattern(phone))
+		first, last, phone)
 }

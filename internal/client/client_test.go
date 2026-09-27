@@ -3,7 +3,10 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -88,9 +91,32 @@ func newFixture(t *testing.T) *fixture {
 	st := newStore(t, "local.db")
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	h := newHandler(st, settings, testDist, WithTimings(testTimings))
-	ts := httptest.NewServer(h.routes(testDist))
-	t.Cleanup(ts.Close)
+	ts := newTestServer(t, h.routes(testDist))
 	return &fixture{t: t, url: ts.URL, st: st, settings: settings, h: h}
+}
+
+// newTestServer serves h on a local port until the test ends. Its
+// connections close with a reset rather than lingering in TIME_WAIT: the
+// fuzz targets start two servers per input, and on Windows the lingering
+// sockets use up the local ports within a minute, failing the next dial.
+func newTestServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(h)
+	ts.Listener = resetOnClose{ts.Listener}
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// resetOnClose sets SO_LINGER to zero on the connections it accepts.
+type resetOnClose struct{ net.Listener }
+
+func (l resetOnClose) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetLinger(0)
+	}
+	return c, err
 }
 
 func (f *fixture) do(method, path string, body any, headers map[string]string) (int, []byte) {
@@ -139,8 +165,7 @@ func decode[T any](t *testing.T, data []byte) T {
 func remoteFixture(t *testing.T, f *fixture) (*store.Store, *httptest.Server) {
 	t.Helper()
 	rst := newServerStore(t)
-	rs := httptest.NewServer(server.NewHandler(rst, server.FixedPassword("secret")))
-	t.Cleanup(rs.Close)
+	rs := newTestServer(t, server.NewHandler(rst, server.FixedPassword("secret")))
 	k, err := rst.CreateKey("client")
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +274,41 @@ func TestStandalonePrefixesAndTickets(t *testing.T) {
 	_, body = f.do("GET", "/api/search/tickets?first_name=am", nil, nil)
 	if s := decode[[]store.Ticket](t, body); len(s) != 1 {
 		t.Fatalf("search = %+v", s)
+	}
+}
+
+// TestRangeSpanningEveryIDIsCut: a range wider than half of the ints makes
+// to-from overflow. It must still be cut to the page size, starting at its
+// lower end, like any other range that is too wide.
+func TestRangeSpanningEveryIDIsCut(t *testing.T) {
+	f := newFixture(t)
+	for _, from := range []int{-1, math.MinInt} {
+		code, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", from, math.MaxInt), nil, nil)
+		if code != 200 {
+			t.Fatalf("range from %d to the largest id = %d %s", from, code, body)
+		}
+		rng := decode[[]store.Ticket](t, body)
+		if len(rng) != rangeLimit+1 {
+			t.Fatalf("range from %d to the largest id has %d rows, want %d", from, len(rng), rangeLimit+1)
+		}
+		if rng[0].TID != from || rng[rangeLimit].TID != from+rangeLimit {
+			t.Fatalf("range from %d to the largest id runs from %d to %d, want %d to %d", from, rng[0].TID, rng[rangeLimit].TID, from, from+rangeLimit)
+		}
+	}
+}
+
+// TestRangeEndingAtTheLargestID: a ticket may have the largest id there is,
+// and the range that ends there must list it and stop instead of counting
+// on past the end of the ints.
+func TestRangeEndingAtTheLargestID(t *testing.T) {
+	f := newFixture(t)
+	if code, body := f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: math.MaxInt, FirstName: "Last", Pref: "CALL"}}, nil); code != 200 {
+		t.Fatalf("save = %d %s", code, body)
+	}
+	_, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", math.MaxInt-2, math.MaxInt), nil, nil)
+	rng := decode[[]store.Ticket](t, body)
+	if len(rng) != 3 || rng[0].TID != math.MaxInt-2 || rng[2].TID != math.MaxInt || rng[2].FirstName != "Last" {
+		t.Fatalf("range up to the largest id = %+v, want two placeholders and the saved ticket", rng)
 	}
 }
 

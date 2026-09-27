@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,9 +52,32 @@ func newAPIWithPassword(t *testing.T, pw Password, opts ...Option) *api {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(NewHandler(st, pw, opts...))
-	t.Cleanup(ts.Close)
+	ts := newTestServer(t, NewHandler(st, pw, opts...))
 	return &api{t: t, url: ts.URL, st: st, sqldb: sqldb, key: k.AuthKey}
+}
+
+// newTestServer serves h on a local port until the test ends. Its
+// connections close with a reset rather than lingering in TIME_WAIT: the
+// fuzz target starts a server per input, and on Windows the lingering
+// sockets use up the local ports within a minute, failing the next dial.
+func newTestServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(h)
+	ts.Listener = resetOnClose{ts.Listener}
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// resetOnClose sets SO_LINGER to zero on the connections it accepts.
+type resetOnClose struct{ net.Listener }
+
+func (l resetOnClose) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetLinger(0)
+	}
+	return c, err
 }
 
 // do sends a request. body may be nil, a string (sent verbatim as JSON) or
