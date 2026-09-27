@@ -72,8 +72,14 @@ var Views = []View{
 
 // Open opens (and creates when missing) the SQLite database at path with a
 // busy timeout and WAL journaling, and verifies the connection.
+//
+// Transactions begin IMMEDIATE, taking the write lock at the start: SQLite
+// does not apply the busy timeout to a transaction that has read and then
+// asks to write, but fails it at once with "database is locked" when the
+// lock is held for a moment, as a reader under load repairing the WAL index
+// does. Every transaction here writes, so none loses anything by it.
 func Open(path string) (*sql.DB, error) {
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
