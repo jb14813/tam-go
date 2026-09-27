@@ -23,9 +23,11 @@ func validColor(c string) bool {
 }
 
 // ValidatePrefixName trims a new prefix name and rejects names that cannot
-// be used in a URL path segment or a sheet header. It applies when prefixes
-// are created; tickets and baskets only need a non-empty prefix, so data
-// from an original database with an unusual prefix stays writable.
+// be used in a URL path segment or a sheet header. The names . and .. are
+// path segments that browsers and Go's ServeMux resolve away before any
+// handler sees them. It applies when prefixes are created; tickets and
+// baskets only need a non-empty prefix, so data from an original database
+// with an unusual prefix stays writable.
 func ValidatePrefixName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -36,6 +38,9 @@ func ValidatePrefixName(name string) (string, error) {
 	}
 	if strings.ContainsAny(name, `/\`) {
 		return "", errors.New(`prefix name must not contain / or \`)
+	}
+	if name == "." || name == ".." {
+		return "", errors.New("prefix name must not be . or ..")
 	}
 	for _, r := range name {
 		if unicode.IsControl(r) {

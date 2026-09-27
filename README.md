@@ -296,7 +296,7 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - Restore overwrites existing rows on both daemons (the original overwrote locally but skipped existing tickets, and never updated winning tickets on the server).
 - The remote backup download sends the correct `TAM-KEY` header, the single-basket lookup calls the baskets endpoint, and the by-basket report is titled by basket.
 - Access keys are generated with a cryptographic random source; the server never accepts an empty key.
-- The number input for prefix weight only accepts non-negative integers; prefix names are trimmed, at most 100 characters, and may not contain `/` or `\` (they appear in URLs).
+- The number input for prefix weight only accepts non-negative integers; prefix names are trimmed, at most 100 characters, may not contain `/` or `\` and may not be `.` or `..` (they appear in URLs).
 - Ticket search treats `%` and `_` typed by the user as literal characters instead of SQL wildcards.
 - A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white); the contact preference stays free text as in the original.
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
