@@ -1,0 +1,27 @@
+#!/bin/bash
+# tam-client-open: what the Ticket Auction Manager entry in the application
+# menu runs. When a client already answers on http://localhost:3080/ (the
+# tam-client service, or a client started by hand) it opens that in the
+# browser. Otherwise it starts the tam-client next to this script for whoever
+# runs it, with the data under ~/.local/share/tam-client; that client opens
+# the browser itself and stops from Alt+A, Shut Down TAM.
+url=http://localhost:3080/
+
+# answers: a web server on port 3080 of this computer serves the web app.
+answers() {
+  (
+    exec 3<>/dev/tcp/127.0.0.1/3080 || exit 1
+    printf 'GET /web/ HTTP/1.0\r\nHost: localhost:3080\r\n\r\n' >&3
+    IFS= read -r -t 5 status <&3 || exit 1
+    case "$status" in
+      "HTTP/1."?" 200"*) exit 0 ;;
+    esac
+    exit 1
+  ) 2>/dev/null
+}
+
+if answers; then
+  exec xdg-open "$url"
+fi
+export TAM_DATA_DIR="$HOME/.local/share/tam-client"
+exec "$(dirname "$0")/tam-client"

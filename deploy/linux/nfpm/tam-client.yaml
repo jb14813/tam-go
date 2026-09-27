@@ -25,6 +25,10 @@ contents:
     dst: /usr/bin/tam-client
     file_info:
       mode: 0755
+  - src: deploy/linux/tam-client-open
+    dst: /usr/bin/tam-client-open
+    file_info:
+      mode: 0755
   - src: build/pkg/tam-client/tam-client.service
     dst: /usr/lib/systemd/system/tam-client.service
     file_info:

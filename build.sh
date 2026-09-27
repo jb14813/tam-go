@@ -201,11 +201,11 @@ package_distro() {
 
 # package_program OS ARCH PROGRAM: one archive in build/ with a single
 # top-level folder holding that program, README.md, LICENSE.md and its deploy
-# files for that system: on Linux its unit, install.sh and icon (and the
-# application-menu entry for the client), on macOS its launchd file and the
-# notes as INSTALL.md.
+# files for that system: on Linux its unit, install.sh and icon (and for the
+# client the application-menu entry and tam-client-open, which it runs), on
+# macOS its launchd file and the notes as INSTALL.md.
 package_program() {
-  local os=$1 arch=$2 program=$3 ext="" name stage
+  local os=$1 arch=$2 program=$3 ext="" name stage f
   if [ "$os" = "windows" ]; then
     ext=".exe"
   fi
@@ -219,7 +219,7 @@ package_program() {
       cp "deploy/linux/$program.service" deploy/linux/install.sh "$stage/"
       cp "cmd/$program/icon.svg" "$stage/$program.svg"
       if [ "$program" = tam-client ]; then
-        cp deploy/linux/tam-client.desktop "$stage/"
+        cp deploy/linux/tam-client.desktop deploy/linux/tam-client-open "$stage/"
       fi
       ;;
     darwin)
@@ -227,13 +227,15 @@ package_program() {
       cp deploy/macos/README.md "$stage/INSTALL.md"
       ;;
   esac
-  # The program and the script are executable, the rest is not, whatever the
-  # file system here says.
+  # The program and the scripts are executable, the rest is not, whatever
+  # the file system here says.
   find "$stage" -type f -exec chmod 644 {} +
   chmod 755 "$stage/$program$ext"
-  if [ -f "$stage/install.sh" ]; then
-    chmod 755 "$stage/install.sh"
-  fi
+  for f in install.sh tam-client-open; do
+    if [ -f "$stage/$f" ]; then
+      chmod 755 "$stage/$f"
+    fi
+  done
 
   if [ "$os" = "windows" ]; then
     rm -f "build/$name.zip"
@@ -261,7 +263,7 @@ def modes(info):
     base = os.path.basename(info.name)
     info.uid = info.gid = 0
     info.uname = info.gname = ""
-    info.mode = 0o755 if info.isdir() or base in ("tam-server", "tam-client") or base.endswith(".sh") else 0o644
+    info.mode = 0o755 if info.isdir() or base in ("tam-server", "tam-client", "tam-client-open") or base.endswith(".sh") else 0o644
     return info
 with tarfile.open(os.path.join(build, name + ".tar.gz"), "w:gz") as tar:
     tar.add(os.path.join(build, name), arcname=name, filter=modes)
