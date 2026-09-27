@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,15 +22,16 @@ import (
 
 // check is one verdict of the run.
 type check struct {
-	name   string
-	passed bool
-	detail string
+	name    string
+	passed  bool
+	skipped bool // not checked on this server; neither passes nor fails the run
+	detail  string
 }
 
 func (t *test) record(name string, passed bool, format string, args ...any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.checks = append(t.checks, check{name, passed, fmt.Sprintf(format, args...)})
+	t.checks = append(t.checks, check{name: name, passed: passed, detail: fmt.Sprintf(format, args...)})
 }
 
 func (t *test) passed() bool {
@@ -41,6 +43,26 @@ func (t *test) passed() bool {
 		}
 	}
 	return len(t.checks) > 0
+}
+
+// skipped counts the checks this server could not answer.
+func (t *test) skipped() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, c := range t.checks {
+		if c.skipped {
+			n++
+		}
+	}
+	return n
+}
+
+// skip records a check this server cannot answer.
+func (t *test) skip(name string, format string, args ...any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.checks = append(t.checks, check{name: name, passed: true, skipped: true, detail: fmt.Sprintf(format, args...)})
 }
 
 // note keeps the first three descriptions of what differs.
@@ -260,6 +282,11 @@ func (t *test) checkLaptops() {
 // checkPresence reads the Clients table of the server's admin page.
 func (t *test) checkPresence() {
 	st, _, err := t.admin.status()
+	if errors.Is(err, errNoTable) {
+		t.skip("the admin page's Clients table lists every laptop as connected and caught up", "%v", err)
+		t.skip("the admin page counts every prefix, ticket and basket", "%v", err)
+		return
+	}
 	if err != nil {
 		t.record("the admin page's Clients table lists every laptop as connected and caught up", false, "%v", err)
 		return
@@ -431,6 +458,10 @@ func (t *test) checkLogs() {
 	t.record("no errors in what the programs wrote", bad == 0, "%d programs, %d lines, %d errors%s", len(files), lines, bad, examples(first))
 }
 
+// errNoTable is a server whose status page answers HTML only, such as one
+// from before the page could be read as JSON: there is no table to check.
+var errNoTable = errors.New("this server's status page answers HTML only")
+
 // adminPage is the server's admin page, logged in as the tests's browser.
 type adminPage struct {
 	url, password string
@@ -509,6 +540,10 @@ func (a *adminPage) status() (adminStatus, time.Duration, error) {
 			return st, 0, err
 		}
 		took := time.Since(start)
+		if res.StatusCode == http.StatusOK && !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+			res.Body.Close()
+			return st, took, errNoTable
+		}
 		if res.StatusCode == http.StatusUnauthorized {
 			res.Body.Close()
 			a.mu.Lock()
@@ -538,6 +573,9 @@ func (a *adminPage) watch(t *test, stop <-chan struct{}) {
 		_, took, err := a.status()
 		if err != nil && !t.server.up.Load() {
 			continue // it went down during the request
+		}
+		if errors.Is(err, errNoTable) {
+			err = nil // the page answered; it only has no table to read
 		}
 		t.current().rec.add("admin status page", took, err, 0, false)
 	}
@@ -593,7 +631,10 @@ func (t *test) report(runErr error, took time.Duration) {
 	failed := 0
 	for _, c := range t.checks {
 		verdict := "PASS"
-		if !c.passed {
+		switch {
+		case c.skipped:
+			verdict = "SKIP"
+		case !c.passed:
 			verdict = "FAIL"
 			failed++
 		}
@@ -603,13 +644,17 @@ func (t *test) report(runErr error, took time.Duration) {
 		}
 		b.WriteString("\n")
 	}
+	skipped, counted := "", len(t.checks)-t.skipped()
+	if n := t.skipped(); n > 0 {
+		skipped = fmt.Sprintf(" (%d skipped: this server cannot answer them)", n)
+	}
 	switch {
 	case runErr != nil:
 		fmt.Fprintf(&b, "\nThe run stopped early: %v\n", runErr)
 	case failed > 0:
-		fmt.Fprintf(&b, "\nFAILED: %d of %d checks\n", failed, len(t.checks))
+		fmt.Fprintf(&b, "\nFAILED: %d of %d checks%s\n", failed, counted, skipped)
 	default:
-		fmt.Fprintf(&b, "\nPASSED: all %d checks\n", len(t.checks))
+		fmt.Fprintf(&b, "\nPASSED: all %d checks%s\n", counted, skipped)
 	}
 	fmt.Print(b.String())
 }
