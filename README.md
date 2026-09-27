@@ -302,7 +302,7 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - Access keys are generated with a cryptographic random source; the server never accepts an empty key.
 - The number input for prefix weight only accepts non-negative integers; prefix names are trimmed, at most 100 characters, may not contain `/` or `\` and may not be `.` or `..` (they appear in URLs).
 - Ticket search treats `%` and `_` typed by the user as literal characters instead of SQL wildcards.
-- A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white); the contact preference stays free text as in the original.
+- A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white) or a name the prefix form would refuse today (`A/B`, a name with spaces around it): restores and a laptop copying its server's data take the rows as they are, so no prefix is cut off from its tickets. The contact preference stays free text as in the original.
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
 - Every link is a full page load (`data-sveltekit-reload`, as in the original), so pending rows on the forms are saved when you leave the page and each prefix starts with a clean form.
 - The client listens on port 3080 instead of the original's 3000.

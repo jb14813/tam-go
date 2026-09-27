@@ -105,10 +105,15 @@ func ValidateBaskets(bs []Basket) error {
 	return nil
 }
 
-// ValidateBackup validates every list of a backup file and replaces nil
-// lists with empty ones. Backups written by the original app may carry
-// colours outside the palette; those are shown as white rather than
-// rejected, so a restore at an event never fails over a colour.
+// ValidateBackup checks a backup file and replaces nil lists with empty
+// ones. Its rows are taken as they are: the rules for a new prefix name
+// (ValidatePrefixName) and the trimming of the save forms are for what is
+// typed now, while a backup carries what a database already holds, possibly
+// from the original app, which allowed any name. Renaming a prefix, or
+// trimming the prefix of its tickets, would cut them apart, and refusing
+// one row would refuse the whole backup. What must hold still holds: every
+// row names a prefix, and no id is negative. Colours outside the palette,
+// which the original also allowed, are shown as white.
 func ValidateBackup(bf *BackupFile) error {
 	if bf.Prefixes == nil {
 		bf.Prefixes = []Prefix{}
@@ -120,15 +125,28 @@ func ValidateBackup(bf *BackupFile) error {
 		bf.Tickets = []Ticket{}
 	}
 	for i := range bf.Prefixes {
+		if bf.Prefixes[i].Prefix == "" {
+			return fmt.Errorf("prefix %d: prefix name must not be empty", i+1)
+		}
 		if !validColor(bf.Prefixes[i].Color) {
 			bf.Prefixes[i].Color = "white"
 		}
 	}
-	if err := ValidatePrefixes(bf.Prefixes); err != nil {
-		return err
+	for i, b := range bf.Baskets {
+		switch {
+		case b.Prefix == "":
+			return fmt.Errorf("basket %d: prefix must not be empty", i+1)
+		case b.BID < 0 || b.WinningTicket < 0:
+			return fmt.Errorf("basket %d (%s/%d): ids must be zero or more", i+1, b.Prefix, b.BID)
+		}
 	}
-	if err := ValidateBaskets(bf.Baskets); err != nil {
-		return err
+	for i, t := range bf.Tickets {
+		switch {
+		case t.Prefix == "":
+			return fmt.Errorf("ticket %d: prefix must not be empty", i+1)
+		case t.TID < 0:
+			return fmt.Errorf("ticket %d (%s/%d): id must be zero or more", i+1, t.Prefix, t.TID)
+		}
 	}
-	return ValidateTickets(bf.Tickets)
+	return nil
 }
