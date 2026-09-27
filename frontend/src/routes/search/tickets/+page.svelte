@@ -1,6 +1,6 @@
 <script>
 	import { bS, iS, rBS, tS } from '$lib/client/styles';
-	import { postJSON } from '$lib/client/api';
+	import { saveMarked } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
@@ -43,18 +43,17 @@
 				setTimeout(() => focusIdx(0), 1);
 			}
 		},
+		// Resolves to false when the marked rows could not be saved.
 		async save() {
-			if (itemsBuffer.length > 0) {
-				const res = await postJSON('/api/search/tickets', itemsBuffer);
-				if (res.ok) {
-					itemsBuffer.forEach((i) => (i.changed = false));
-				} else {
-					alert('Error saving items.');
-				}
+			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
+			if (problem) {
+				alert(problem);
+				return false;
 			}
 			setTimeout(() => {
 				focusIdx(0);
 			}, 1);
+			return true;
 		},
 		nextLine() {
 			if (items[nextIdx]) {
