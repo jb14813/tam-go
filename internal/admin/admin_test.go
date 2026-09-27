@@ -658,6 +658,30 @@ func TestChangePassword(t *testing.T) {
 	fresh.login("new one")
 }
 
+// TestChangingThePasswordLogsOutTheOtherSessions: whoever logged in with
+// the old password, perhaps the person it was changed to keep out, is
+// logged out; the browser that changed it stays in.
+func TestChangingThePasswordLogsOutTheOtherSessions(t *testing.T) {
+	s := newSite(t, "secret")
+	s.login("secret")
+	other := &site{t: t, url: s.url, h: s.h, c: newBrowser(t)}
+	other.login("secret")
+	if res, _ := other.get("/admin/status"); res.StatusCode != 200 {
+		t.Fatal("the second browser is not logged in")
+	}
+	_, token := s.page("/admin/password")
+	res, _ := s.post("/admin/password", url.Values{"csrf": {token}, "current": {"secret"}, "password": {"new one"}, "confirm": {"new one"}})
+	wantRedirect(t, res, "/admin/password")
+	res, _ = other.get("/admin/status")
+	wantRedirect(t, res, "/admin/")
+	if res, _ := s.get("/admin/status"); res.StatusCode != 200 {
+		t.Fatalf("the browser that changed the password = %d, want still logged in", res.StatusCode)
+	}
+	if n := s.sessionCount(); n != 1 {
+		t.Fatalf("%d sessions left after the change, want the one that made it", n)
+	}
+}
+
 func TestUnknownPathsAndMethodsAreHTML(t *testing.T) {
 	s := newSite(t, "secret")
 	res, body := s.get("/admin/nope")
