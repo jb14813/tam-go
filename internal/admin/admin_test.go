@@ -686,6 +686,68 @@ func TestSessionExpires(t *testing.T) {
 	}
 }
 
+// sessionCount is how many sessions the table holds.
+func (s *site) sessionCount() int {
+	s.h.ss.mu.Lock()
+	defer s.h.ss.mu.Unlock()
+	return len(s.h.ss.byID)
+}
+
+// TestVisitsOfTheLoginFormKeepNoSession: anyone can open the login form,
+// as often as they like, so a visit must not add to the session table:
+// every visit used to add a session, and 100,000 of them made every page
+// that creates one 7 times slower and took 40 MB. The form's token is
+// still tied to the visitor's cookie (TestFormsNeedTheSessionToken).
+func TestVisitsOfTheLoginFormKeepNoSession(t *testing.T) {
+	for _, env := range []string{"secret", ""} { // the login form, and the setup form
+		s := newSite(t, env)
+		for i := 0; i < 200; i++ {
+			visitor := &site{t: t, url: s.url, c: newBrowser(t)}
+			if res, page := visitor.get("/admin/"); res.StatusCode != 200 || len(res.Cookies()) != 1 || visitor.token(page) == "" {
+				t.Fatalf("visit %d = %d, cookies %v", i+1, res.StatusCode, res.Cookies())
+			}
+		}
+		if n := s.sessionCount(); n != 0 {
+			t.Fatalf("200 visits of the form (password %q) left %d sessions", env, n)
+		}
+	}
+	s := newSite(t, "secret")
+	s.login("secret")
+	if n := s.sessionCount(); n != 1 {
+		t.Fatalf("after a login the table holds %d sessions, want the logged-in one", n)
+	}
+}
+
+// TestTheFormTokenOfAVisitExpires: the token of an anonymous visit is good
+// for an hour, like the session it replaces, and a cookie the server did
+// not hand out gets a new one rather than a token of the visitor's choice.
+func TestTheFormTokenOfAVisitExpires(t *testing.T) {
+	s := newSite(t, "secret")
+	res, page := s.get("/admin/")
+	cookie, token := res.Cookies()[0].Value, s.token(page)
+	s.h.ss.now = func() time.Time { return time.Now().Add(anonymousLife - time.Minute) }
+	if _, again := s.get("/admin/"); s.token(again) != token {
+		t.Fatal("within the hour the visit keeps its token")
+	}
+	s.h.ss.now = func() time.Time { return time.Now().Add(anonymousLife + time.Minute) }
+	if res, body := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}}); res.StatusCode != 403 || !strings.Contains(body, "expired") {
+		t.Fatalf("login with an hour-old form = %d\n%s", res.StatusCode, body)
+	}
+	s.h.ss.now = time.Now
+
+	far := cookie[:48] + "00000000ffffffff" // the same visit, good until the year 2106
+	req, _ := http.NewRequest("GET", s.url+"/admin/", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: far})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if c := res.Cookies(); len(c) != 1 || c[0].Value == far {
+		t.Fatalf("a cookie the server never handed out was kept: %v", c)
+	}
+}
+
 func TestCookieIsSecureOverTLS(t *testing.T) {
 	dir := t.TempDir()
 	sqldb, err := db.Open(filepath.Join(dir, "tam-remote.db"))
