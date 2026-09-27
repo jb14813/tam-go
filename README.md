@@ -1,51 +1,152 @@
-# Ticket Auction Manager (Go)
+# Ticket Auction Manager
 
-Ticket Auction Manager (TAM) runs in-person penny socials and benefit auctions: sell numbered tickets by prefix, describe the baskets, enter the drawn winning tickets, and print the winners and counts reports. This is the Go rewrite of [ticket-auction-manager/tam](https://github.com/ticket-auction-manager/tam): the same features and the same wire format, in two single-file binaries with no Python or Node at runtime.
+This is Ticket Auction Manager. A project I (Dilan Gilluly) am working on as a hobby project. It's main scope is to manage in person penny socials or benefit auctions.
 
-- **tam-client** serves the web app and its API on `http://localhost:3080`. In standalone mode it keeps everything in a local SQLite file. In remote mode it sends every change to a **tam-server** and keeps a local mirror.
-- **tam-server** is the shared database for large events with several laptops. It speaks the same API, protected by access keys.
+This is the Go version of it. The remote server (cmd/tam-server directory) and the client (cmd/tam-client directory) are written in Go, with the client's web pages written in Sveltekit (frontend directory) and built into the program, so each one is a single file that runs on Windows, Linux and macOS with nothing to install. The original version, with the server in FastAPI and Python and the client in Sveltekit, is at [ticket-auction-manager/tam](https://github.com/ticket-auction-manager/tam); the two speak the same API and use the same data files, so they can be mixed and a switch is a matter of pointing these programs at the old data folder (see [Switching from the original](#switching-from-the-original)).
 
-## Features
+Features:
 
-- **Forms** per prefix: Tickets (names, phone numbers, contact preference), Baskets (descriptions and donors), Drawing (winning ticket numbers with instant winner lookup). Range-based paging, keyboard shortcuts, copy/paste and duplicate rows, save-marked-rows.
-- **Reports**: Winners by Name, Winners by Basket (both printable, filterable by CALL or TEXT preference), Ticket Counts (unique buyers and total buys per prefix, auto-refresh).
-- **Print Sheets** for ticket sales, **Ticket Search** across every prefix.
-- **Settings**: remote server, port and TLS, default contact preference, venue name, attribution toggle; **Prefixes** with colours and ordering; **Auth Keys** for the server; **Backup/Restore** with local and remote downloads, uploads, and push-to-server.
-- Admin section on the main menu with `Alt+A`.
+- **Forms**: Facilitates the entry of data throughout the platform. The main goal of this is to allow one to manage in-person benefit auctions for non-profit causes.
+  - **Ticket Form**: Enter the names and phone numbers of ticket purchasers, as well as their contact preference, which the default is controllable via the Settings screen.
+  - **Basket Form**: Optionally, basket/item descriptions can be added as well as who the donor(s) are for each one. The descriptions appear on the reports later on.
+  - **Drawing Form**: Use this form to enter the winning ticket numbers. The form automatically looks up if an entry exists when a field is changed and will populate the information next to it if it does.
+- **Reports**: Reports are automatically generated with one click to avoid line shifts or other issues which may arise during compilation.
+  - **By Name Report**: This report orders the lines by the last name of each winner, then first name, phone number, and finally basket number.
+  - **By Basket Report**: Orders winners by basket number.
+  - **Counts Report**: Displays counts of ticket sales by prefix as well as totals.
+  - **Print Sheets**: Prints blank ticket sheets for a prefix, numbered, to write on at the door.
+  - **Ticket Search**: Finds tickets across every prefix by name or phone number, and lets you correct them in place.
+- **Settings**:
+  - **Settings section**: The Admin/settings section can be accessed on the main menu by pressing Alt(option)+A. The combination toggles it so if you want it to go away again, just press Alt(option)+A again. It also holds the Shut Down TAM button, which stops the program on this computer.
+  - **Settings page**: Allows you to control the base options of the operation. Including the server to pair with (leave it out for standalone(offline) mode), remote port, TLS, default contact preference, and the name of the venue/benefit (appears on main menu as well as reports).
+  - **Auth Keys**: Allows you to manage auth keys if it's in remote mode. To do so, you need to know the auth password on the server.
+  - **Prefixes**: Allows you to add or change prefixes which are available on the main menu to be able to access the respective forms for each prefix. Note, **you need to add prefixes through this form after first installation of either client or server to be able to access forms and reports.**
+  - **Backup/Restore**: Downloads the data of this computer or of the server as one file, and restores such a file into either.
+- **Remote Mode**: Remote mode, which is configurable in the Settings screen, allows data to be synched across multiple computers for large scale operations. Servers on the venue's network show up in the Settings screen by name, and pairing is done by entering the server password once. A computer that loses the server keeps working from its own copy of the data, queues what it saves, and delivers it when the server is back; the bar at the top of every page says Connected, Reconnecting or Offline, and how many saves are waiting.
+- **Server admin page**: The server has its own pages in the browser, protected by the server password, which is set on the first visit. The Status page lists every paired computer with whether it is connected, when it was last seen, when it last saved, and how many saves it still has to deliver, so you can tell when everyone has caught up. Keys, backups and the password are managed there as well.
+- **Runs everywhere**: One program per machine. On Windows an exe with an icon in the notification area; on Linux a `.deb`, an `.rpm` or a tarball with systemd units; on macOS with launchd files; or Docker. TLS is built in.
 
-## Quick start
+## Screenshots
 
-1. Get the archive of the program you need, for your system, from the GitHub release: `tam-client-<version>-windows-amd64.zip` for a laptop, `tam-server-<version>-windows-amd64.zip` for the machine that hosts the server (`-windows-arm64.zip` for a Snapdragon laptop), `-linux-amd64.tar.gz` (or `-linux-arm64`; on Debian, Ubuntu, Fedora, RHEL and their relatives take the `.deb` or `.rpm` of the program instead, see Deployment), `-darwin-arm64.tar.gz` for an Apple silicon Mac (or `-darwin-amd64` for an Intel one). Each unpacks to one folder holding that program, this README, the license, and its service files for that system (see Deployment). On Windows the program alone is on the release page as well, `tam-client-<version>-windows-amd64.exe` or `tam-server-<version>-windows-amd64.exe`: download it into a folder of its own and double-click it, nothing to unpack. It is not signed, so the first start brings up SmartScreen: More info, then Run anyway. On Linux and macOS run `chmod +x tam-client` (or `tam-server`) if your unzip tool dropped the executable bit (the tar.gz archives carry it), and on macOS clear the quarantine flag once with `xattr -dr com.apple.quarantine tam-client` (or `tam-server`).
-2. Run `tam-client` (double-click, or `./tam-client` in a terminal). It creates a `data/` folder in the directory it is started from, which is its own folder when double-clicked; set `TAM_DATA_DIR` to keep the data elsewhere.
-3. It opens http://localhost:3080/ in your default browser as soon as it is listening (start it with `-open=false` to skip that, for example from a script). On Windows a TAM icon sits in the notification area next to the clock while it runs (under the `^` overflow unless you pin it): left-click it to open the app again, right-click it for **Open TAM** and **Shut Down TAM**. The console window it started with stays open too, titled "Ticket Auction Manager - client" in the taskbar; closing it or pressing Ctrl+C in it also stops the program cleanly, as does **Shut Down TAM** under `Alt+A` on the main menu. Closing the browser tab alone leaves it running.
-4. Press `Alt+A`, open Settings, then Prefixes, and add at least one prefix. Prefixes are the ticket series (for example `CALL`, `A`, `B`) and unlock the forms and reports on the main menu.
+The client, on a computer paired with a server (the bar at the top says so):
 
-## Building from source
+![Main menu](docs/screenshots/client-main-menu.png)
 
-Requirements: Go 1.27.1 or newer (the version in `go.mod`), Node 24 or newer with pnpm (the scripts fall back to `npx pnpm` when pnpm is not installed).
+The Ticket Form. Rows are loaded by the pager at the top, and the row buttons duplicate, copy and paste entries:
 
-```bash
-./build.sh all          # web app + tam-client + tam-server into ./build
-./build.sh client       # or one of them
-GOOS=linux GOARCH=amd64 ./build.sh all     # cross-compile (CGO is not needed)
+![Ticket Form](docs/screenshots/client-tickets.png)
+
+The Basket Form and the Drawing Form. The Drawing Form looks the winner up as the ticket number is typed:
+
+![Basket Form](docs/screenshots/client-baskets.png)
+
+![Drawing Form](docs/screenshots/client-drawing.png)
+
+The reports:
+
+![Winners by Name](docs/screenshots/client-report-by-name.png)
+
+![Winners by Basket](docs/screenshots/client-report-by-basket.png)
+
+![Ticket Counts](docs/screenshots/client-counts.png)
+
+Ticket search across every prefix:
+
+![Ticket Search](docs/screenshots/client-search.png)
+
+The server went away: the pages keep working from the computer's own copy, and the save waits for the server to come back:
+
+![Offline](docs/screenshots/client-offline.png)
+
+Settings on a computer that has not paired yet, with the server it found on the network, and on one that has:
+
+![Settings, pairing](docs/screenshots/client-settings-pairing.png)
+
+![Settings, paired](docs/screenshots/client-settings.png)
+
+![Prefixes](docs/screenshots/client-prefixes.png)
+
+![Print Sheets](docs/screenshots/client-print-sheets.png)
+
+The server's admin page. The first visit sets the password; from then on the Status page shows every computer:
+
+![First visit](docs/screenshots/server-first-visit.png)
+
+![Log in](docs/screenshots/server-login.png)
+
+![Status](docs/screenshots/server-status.png)
+
+![Keys](docs/screenshots/server-keys.png)
+
+![Backup](docs/screenshots/server-backup.png)
+
+## Downloading
+
+The [releases page](https://github.com/ticket-auction-manager/tam-go/releases) has one file per program and system. Take `tam-client` for a computer at the event and `tam-server` for the machine that hosts the server:
+
+- **Windows**: `tam-client-<version>-windows-amd64.exe` or `tam-server-<version>-windows-amd64.exe` (`-windows-arm64` for a Snapdragon machine). Put it in a folder of its own and double-click it. The `.zip` of the same name adds this README. The programs are not signed, so SmartScreen asks once: More info, then Run anyway.
+- **Debian, Ubuntu, Mint and their relatives**: the `.deb` of the program (`sudo apt install ./tam-server_<version>_amd64.deb`).
+- **Fedora, RHEL, Rocky, Alma and their relatives**: the `.rpm` of the program (`sudo dnf install ./tam-server-<version>.x86_64.rpm`).
+- **Any other Linux**: the `-linux-amd64.tar.gz` (or `-linux-arm64`) of the program, with an installer script for systemd; run `chmod +x` on the program if your unzip tool dropped the executable bit.
+- **macOS**: the `-darwin-arm64.tar.gz` (Apple silicon) or `-darwin-amd64.tar.gz` (Intel) of the program, with a launchd file; clear the quarantine flag once with `xattr -dr com.apple.quarantine tam-client` (or `tam-server`).
+
+Then, on the server's machine, open `http://<that machine>:8000/admin` and set the server password. On each other computer start the client, press Alt(option)+A, open Settings, pick the server from the list, enter the password once and press Pair. See [Deployment](#deployment) for the details per system.
+
+## Cloning the repo
+
+To clone the repo you just need to run the git clone command to clone it to a directory of your choosing. Replace 'yourrepofolder' at the end with the folder/dir of your choosing.
+
+Github:
+
+`git clone https://www.github.com/Ticket-Auction-Manager/tam-go yourrepofolder`
+
+## Installing dependencies
+
+Server and client:
+
+(needs Go 1.27 or newer installed)
+
+Nothing to install: `go build` fetches the Go modules.
+
+Client web pages:
+
+(needs pnpm installed)
+
+```
+cd frontend
+pnpm install
+```
+
+## Building
+
+```
+./build.sh client       # the web pages, then tam-client into build/
+./build.sh server       # tam-server into build/
+./build.sh all          # both
 ./build.sh release      # every system: build/<os>-<arch>/ and one archive per program and target
 ```
 
-The web app must be built before `go build ./cmd/tam-client`, because the binary embeds `cmd/tam-client/dist`. `build.sh client` does both.
+`./build.sh release` builds the web pages once, then both programs for Windows, Linux and macOS on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w"`) into `build/<os>-<arch>/`, and packs each program of each target into `build/tam-server-<version>-<os>-<arch>.zip` and `build/tam-client-<version>-<os>-<arch>.zip` (Windows, where the bare program is also copied to `build/tam-server-<version>-windows-<arch>.exe` and `build/tam-client-<version>-windows-<arch>.exe`) or `.tar.gz` (Linux, macOS): one folder with that program, `README.md`, `LICENSE.md` and its files from `deploy/linux` or `deploy/macos` (its unit and `install.sh`, plus the application-menu entry for the client; its launchd file and the macOS notes as `INSTALL.md`). For Linux it also writes a `.deb` and an `.rpm` of each program with [nfpm](https://nfpm.goreleaser.com), from `deploy/linux/nfpm`, which `build.sh` installs with `go install` when it is not on the PATH. The version stamped into both programs, `internal/version.Version`, is `$VERSION` when set and otherwise `git describe --tags --always --dirty`; both programs print it in their banner and the server reports it on `GET /api` and its admin page. `SKIP_WEB=1` keeps an existing `cmd/tam-client/dist`. A tag `1.2.3` (or `v1.2.3`) becomes version 1.2.3 everywhere: the programs' banners and `GET /api`, the admin page, the Windows file properties, the `.deb` and `.rpm` versions and every file name; a tag `1.2.3-rc1` is a pre-release, marked so on GitHub and sorted before 1.2.3 by apt and dnf. To cut a release: `git tag -a 1.2.3 -m "1.2.3"` on the commit, then `git push origin 1.2.3`. The archives are written with `zip` and `tar` where those exist and with Python otherwise. Both Windows builds carry the TAM icons and version information from the `rsrc_windows_*.syso` files, which `go generate ./cmd/...` makes with [go-winres](https://github.com/tc-hib/go-winres) from `cmd/*/winres/winres.json`; a release build remakes them with the release version first and puts the committed files back afterwards.
 
-`./build.sh release` builds the web app once, then both programs for Windows, Linux and macOS on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w"`) into `build/<os>-<arch>/`, and packs each program of each target into `build/tam-server-<version>-<os>-<arch>.zip` and `build/tam-client-<version>-<os>-<arch>.zip` (Windows, where the bare program is also copied to `build/tam-server-<version>-windows-<arch>.exe` and `build/tam-client-<version>-windows-<arch>.exe`) or `.tar.gz` (Linux, macOS): one folder with that program, `README.md`, `LICENSE.md` and its files from `deploy/linux` or `deploy/macos` (its unit and `install.sh`, plus the application-menu entry for the client; its launchd file and the macOS notes as `INSTALL.md`). The version stamped into both programs, `internal/version.Version`, is `$VERSION` when set and otherwise `git describe --tags --always --dirty`; both programs print it in their banner and the server reports it on `GET /api` and its admin page. `VERSION=v1.2.3 ./build.sh release` names the archives `tam-server-v1.2.3-...` and `tam-client-v1.2.3-...`. `SKIP_WEB=1` keeps an existing `cmd/tam-client/dist`. A tag `1.2.3` (or `v1.2.3`) becomes version 1.2.3 everywhere: the programs' banners and `GET /api`, the admin page, the Windows file properties, the `.deb` and `.rpm` versions and every file name; a tag `1.2.3-rc1` is a pre-release, marked so on GitHub and sorted before 1.2.3 by apt and dnf. To cut a release: `git tag -a 1.2.3 -m "1.2.3"` on the commit, then `git push origin 1.2.3`. The archives are written with `zip` and `tar` where those exist and with Python otherwise (always with Python from Git Bash, which does not see the executable bit of a macOS program). Both Windows builds carry the TAM icons and version information from the `rsrc_windows_*.syso` files, which `go generate ./cmd/...` makes with [go-winres](https://github.com/tc-hib/go-winres) from `cmd/*/winres/winres.json`; a release build remakes them with the release version first and puts the committed files back afterwards.
+Releases come from `.github/workflows/release.yml`: pushing a version tag runs `VERSION=<tag> ./build.sh release` on GitHub and attaches the twelve archives (two programs, six targets), the four bare Windows programs and the eight Linux packages to a GitHub release of that tag. The release's description is `docs/release-notes.md` with the version filled in (what to download for which machine, the first start, upgrading, switching from the original), followed by the list of changes GitHub generates. `ci.yml` vets, tests and cross-compiles all six targets on every push, and runs the compatibility check against the original.
 
-Releases come from `.github/workflows/release.yml`: pushing a version tag runs `VERSION=<tag> ./build.sh release` on GitHub and attaches the twelve archives (two programs, six targets), the four bare Windows programs and the eight Linux packages (a `.deb` and an `.rpm` of each program for amd64 and arm64, written by [nfpm](https://nfpm.goreleaser.com) from `deploy/linux/nfpm`, which `build.sh` installs with `go install` when it is not on the PATH) to a GitHub release of that tag. The release's description is `docs/release-notes.md` with the version filled in (what to download for which machine, the first start, upgrading, switching from the original), followed by the list of changes GitHub generates. `ci.yml` vets and cross-compiles all six targets on every push.
+## Running dev instances
 
-Development:
+Server:
 
-```bash
-./run.sh server         # tam-server on localhost:8000, password "changeme"
-./run.sh client         # installs and builds the web app, then tam-client on localhost:3080
-go test ./...           # store, server and client tests, including remote mode
+```
+go run ./cmd/tam-server -addr 127.0.0.1:8000
 ```
 
-For work on the pages, `pnpm dev` in `frontend/` serves them on http://localhost:5173/web/ and proxies `/api` to a running `tam-client`.
+Client, with the web pages served live by Vite (they proxy `/api` to the client program):
+
+```
+go run ./cmd/tam-client -addr 127.0.0.1:3080 -open=false
+cd frontend
+pnpm dev
+```
+
+Or build the pages once (`./build.sh client`) and run `build/tam-client`, which serves them itself and opens the browser.
 
 ## Configuration
 
