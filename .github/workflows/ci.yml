@@ -4,17 +4,27 @@ on:
   push:
   pull_request:
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
+# Every step runs in bash with -o pipefail: a test piped into tee fails the
+# step when the test fails (GitHub's default bash runs without pipefail).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -26,7 +36,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -66,25 +76,94 @@ jobs:
             ${{ runner.temp }}/unit-tests.txt
           if-no-files-found: ignore
 
+  systems:
+    # The build job above tests on Linux x86-64; the programs also ship for
+    # Windows, macOS and ARM, so the tests and a small load test (real
+    # programs, the server killed and started again) run there too.
+    name: Tests on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS (Apple silicon)
+            os: macos-latest
+          - name: Linux on ARM
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -count=1 ./... 2>&1 | tee "$RUNNER_TEMP/unit-tests.txt"
+
+      - name: Load test (4 clients, the server killed during ticket entry)
+        run: go run ./scripts/loadtest -clients 4 -tickets 400 -baskets 60 -entry 8s -outage 3s -rush 3s -storm 2s -wifi-drop 4s -late 3s -crash-down 1s -out "$RUNNER_TEMP/load-test.txt"
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Unit tests on ${{ matrix.name }}'
+            echo '```'
+            cat "$RUNNER_TEMP/unit-tests.txt" 2>/dev/null || echo "(the tests did not run)"
+            echo '```'
+            echo '### Load test on ${{ matrix.name }}'
+            echo '```'
+            cat "$RUNNER_TEMP/load-test.txt" 2>/dev/null || echo "(the load test did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the printed results with the run
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/unit-tests.txt
+            ${{ runner.temp }}/load-test.txt
+          if-no-files-found: ignore
+
   compat:
     name: Compatibility with the original tam
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -120,13 +199,13 @@ jobs:
     name: Race detector and load test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -138,7 +217,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -181,7 +260,7 @@ jobs:
     name: Nix package and NixOS test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Let the NixOS test use KVM
         run: |

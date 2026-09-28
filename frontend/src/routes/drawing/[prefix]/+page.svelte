@@ -1,7 +1,7 @@
 <script>
-	import { resolve } from '$app/paths';
+	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, postJSON, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -25,19 +25,48 @@
 		}
 	};
 
+	// Shows the winner of the number in a row's Winning Ticket box. Every
+	// keystroke asks, and answers can come back out of order (a slow link to
+	// the server): an answer for a number no longer in the box is dropped, so
+	// the lookup of 1 cannot replace the winner of 123. An empty box, or one
+	// that holds no ticket number, has no winner and is not looked up.
+	async function showWinner(item) {
+		const wanted = item.winning_ticket;
+		let ticket = null;
+		if (Number.isInteger(wanted) && wanted >= 0) {
+			try {
+				ticket = await getJSON(`/api/tickets/${encodeURIComponent(prefix.prefix)}/${wanted}`);
+			} catch {
+				// No winner shown when the lookup fails.
+			}
+			if (item.winning_ticket !== wanted) return;
+		}
+		[item.last_name, item.first_name, item.phone_number] = [
+			ticket?.last_name || '',
+			ticket?.first_name || '',
+			ticket?.phone_number || ''
+		];
+	}
+
 	let pager = $state({ idFrom: 0, idTo: 0 });
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
 	const functions = {
-		async getPage() {
-			this.save();
+		// Saves the marked rows, then loads the pager's range, or `range` when given.
+		async getPage(range) {
+			// Rows that could not be saved stay on the page, with the message why.
+			if (!(await this.save())) return;
+			if (range) [pager.idFrom, pager.idTo] = range;
 			if (pager.idFrom > pager.idTo) {
 				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
 			}
 			if (pager.idTo - pager.idFrom > 300) {
 				pager.idTo = pager.idFrom + 300;
 			}
+			// Numbers start at 0: a row below it could not be saved.
+			if (pager.idFrom < 0) pager.idFrom = 0;
+			if (pager.idTo < 0) pager.idTo = 0;
 			let resData;
 			try {
 				resData = await getJSON(
@@ -51,18 +80,22 @@
 			items = [...resData];
 			setTimeout(() => focusIdx(0));
 		},
+		// Resolves to false when the marked rows could not be saved.
 		async save(opts = {}) {
-			if (itemsBuffer.length > 0) {
-				const res = await postJSON('/api/drawing', itemsBuffer, { keepalive: !!opts.keepalive });
-				if (res.ok) {
-					itemsBuffer.forEach((i) => (i.changed = false));
-				} else {
-					alert('Error saving items.');
-				}
+			const problem = await saveMarked('/api/drawing', itemsBuffer, {
+				keepalive: !!opts.keepalive,
+				// A drawing line stores its winning ticket; the winner's name
+				// beside it only shows the lookup, which may answer meanwhile.
+				saved: (line) => line.winning_ticket
+			});
+			// A save made as the page is hidden or closed shows nothing and leaves
+			// the cursor where it is: the volunteer may come back to the row.
+			if (problem) {
+				if (!opts.keepalive) alert(problem);
+				return false;
 			}
-			setTimeout(() => {
-				focusIdx(0);
-			}, 1);
+			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
+			return true;
 		},
 		cancel() {
 			if (itemsBuffer.length > 0) {
@@ -74,12 +107,12 @@
 			pager.idTo = pager.idFrom + (itemsLength - 1);
 		},
 		prevPage() {
-			((pager.idFrom -= itemsLength), (pager.idTo -= itemsLength));
-			this.getPage();
+			// Stops at 0, keeping the page's size: 1-10 goes to 0-9.
+			const from = Math.max(0, pager.idFrom - itemsLength);
+			this.getPage([from, from + (pager.idTo - pager.idFrom)]);
 		},
 		nextPage() {
-			((pager.idFrom += itemsLength), (pager.idTo += itemsLength));
-			this.getPage();
+			this.getPage([pager.idFrom + itemsLength, pager.idTo + itemsLength]);
 		},
 		nextLine() {
 			if (items[nextIdx]) {
@@ -141,15 +174,8 @@
 	};
 	const headers = ['Basket ID', 'Description', 'Winning Ticket', 'Winner', 'Save?'];
 
-	$effect(() => {
-		const saveOnUnload = () => {
-			if (itemsBuffer.length > 0) functions.save({ keepalive: true });
-		};
-		window.addEventListener('beforeunload', saveOnUnload);
-		return () => {
-			window.removeEventListener('beforeunload', saveOnUnload);
-		};
-	});
+	// Marked rows are saved when the page is hidden, left or closed.
+	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
 </script>
 
 <svelte:head>
@@ -164,7 +190,7 @@
 					<div>Drawing Forms:</div>
 					{#each prefixes as p (p.prefix)}
 						<a
-							href={resolve('/drawing/[prefix]', { prefix: p.prefix })}
+							href={prefixPage('/drawing/[prefix]', p.prefix)}
 							class={prefix.prefix == p.prefix ? bAS[p.color] : bS[p.color]}>{p.prefix}</a
 						>
 					{/each}
@@ -196,22 +222,10 @@
 						type="number"
 						class="{iS.normal} w-full"
 						id="{idx}_first"
-						oninput={async () => {
+						aria-label="Basket {item.b_id} winning ticket"
+						oninput={() => {
 							item.changed = true;
-							const res = await fetch(
-								`/api/tickets/${encodeURIComponent(prefix.prefix)}/${item.winning_ticket}`
-							);
-							if (res.ok) {
-								const ticket = await res.json();
-								[item.last_name, item.first_name, item.phone_number] = [
-									ticket.last_name || '',
-									ticket.first_name || '',
-									ticket.phone_number || ''
-								];
-							} else {
-								// A cleared or invalid ticket number has no winner.
-								[item.last_name, item.first_name, item.phone_number] = ['', '', ''];
-							}
+							showWinner(item);
 						}}
 						bind:value={item.winning_ticket}
 					/></td

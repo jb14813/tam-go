@@ -29,7 +29,13 @@ import (
 
 func newStore(t *testing.T, name string) *store.Store {
 	t.Helper()
-	sqldb, err := db.Open(filepath.Join(t.TempDir(), name))
+	return openStoreAt(t, filepath.Join(t.TempDir(), name))
+}
+
+// openStoreAt is a client store over the database at path.
+func openStoreAt(t *testing.T, path string) *store.Store {
+	t.Helper()
+	sqldb, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,23 +82,56 @@ var testDist = fstest.MapFS{
 	"index.html":          {Data: []byte("<!doctype html><title>TAM</title><div id=app></div>")},
 	"_app/immutable/x.js": {Data: []byte("console.log('x')")},
 	"robots.txt":          {Data: []byte("User-agent: *")},
+	"favicon.ico":         {Data: []byte("\x00\x00\x01\x00icon")},
 }
 
 type fixture struct {
 	t        *testing.T
 	url      string
 	st       *store.Store
+	dbPath   string
 	settings string
 	h        *handler
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	st := newStore(t, "local.db")
-	settings := filepath.Join(t.TempDir(), "settings.json")
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "tam-local.db")
+	st := openStoreAt(t, dbPath)
+	settings := filepath.Join(dir, "settings.json")
 	h := newHandler(st, settings, testDist, WithTimings(testTimings))
 	ts := newTestServer(t, h.routes(testDist))
-	return &fixture{t: t, url: ts.URL, st: st, settings: settings, h: h}
+	return &fixture{t: t, url: ts.URL, st: st, dbPath: dbPath, settings: settings, h: h}
+}
+
+// exec runs a statement on the client's database from outside its store,
+// as a copy of the data folder put back would change it.
+func (f *fixture) exec(query string, args ...any) {
+	f.t.Helper()
+	sqldb, err := db.Open(f.dbPath)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer sqldb.Close()
+	if _, err := sqldb.Exec(query, args...); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// clientName is the name this client gives its saves (see store.NextSave).
+func (f *fixture) clientName() string {
+	f.t.Helper()
+	sqldb, err := db.Open(f.dbPath)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer sqldb.Close()
+	var name string
+	if err := sqldb.QueryRow(`SELECT client FROM save_order WHERE id = 1`).Scan(&name); err != nil {
+		f.t.Fatal(err)
+	}
+	return name
 }
 
 // newTestServer serves h on a local port until the test ends. Its
@@ -184,7 +223,8 @@ func TestSPA(t *testing.T) {
 	if code, _ := f.do("GET", "/", nil, nil); code != 302 {
 		t.Fatalf("/ = %d, want 302", code)
 	}
-	for _, p := range []string{"/web/", "/web/tickets/CALL/", "/web/settings/prefixes/"} {
+	// A prefix may be named 5.00: a page's address can look like a file's.
+	for _, p := range []string{"/web/", "/web/tickets/CALL/", "/web/settings/prefixes/", "/web/tickets/5.00", "/web/drawing/5.00/"} {
 		code, body := f.do("GET", p, nil, nil)
 		if code != 200 || !strings.Contains(string(body), "<div id=app>") {
 			t.Fatalf("%s = %d %q, want the app shell", p, code, body)
@@ -209,6 +249,21 @@ func TestSPA(t *testing.T) {
 	}
 	if code, _ := f.do("GET", "/web/_app/", nil, nil); code != 200 {
 		t.Fatalf("directory path falls back to the app = %d", code)
+	}
+}
+
+// TestIconAtTheRoot: a browser asks for /favicon.ico on pages that name no
+// icon, such as the API's own answers; it gets the web app's icon.
+func TestIconAtTheRoot(t *testing.T) {
+	f := newFixture(t)
+	res, err := http.Get(f.url + "/favicon.ico")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/x-icon" || string(body) != string(testDist["favicon.ico"].Data) {
+		t.Fatalf("/favicon.ico = %d %q %q", res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
 }
 

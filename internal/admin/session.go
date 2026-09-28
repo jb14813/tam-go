@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -19,10 +21,6 @@ const (
 	// anonymousLife is how long a login form can sit open before its token
 	// expires. Anyone can open the form, so these sessions are short.
 	anonymousLife = time.Hour
-	// maxFailures is how many wrong passwords an address may send before it
-	// has to wait failureWait.
-	maxFailures = 5
-	failureWait = 30 * time.Second
 )
 
 // session is one browser's state: an id in the cookie, a token every form
@@ -35,22 +33,24 @@ type session struct {
 	flash    string // a message shown once on the next page
 }
 
-// sessions is the in-memory session table plus the login rate limit. Both
-// are lost on restart, which just means logging in again.
+// sessions is the in-memory table of logged-in sessions. The anonymous
+// session of a visitor who has not logged in is not kept: its id carries
+// its end and its form token is a MAC of the id (see visit), so anyone can
+// open the login form as often as they like without adding to the table.
+// All of it is lost on restart, which just means logging in again.
 type sessions struct {
-	mu       sync.Mutex
-	byID     map[string]*session
-	failures map[string]*failure // by remote address
-	now      func() time.Time
-}
-
-type failure struct {
-	count int
-	until time.Time // when count reached maxFailures: the end of the wait
+	mu   sync.Mutex
+	byID map[string]*session // logged-in sessions
+	key  []byte              // signs the form tokens of anonymous sessions
+	now  func() time.Time
 }
 
 func newSessions() *sessions {
-	return &sessions{byID: map[string]*session{}, failures: map[string]*failure{}, now: time.Now}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	return &sessions{byID: map[string]*session{}, key: key, now: time.Now}
 }
 
 func randomHex() string {
@@ -61,10 +61,11 @@ func randomHex() string {
 	return hex.EncodeToString(buf)
 }
 
-// create starts a session. It sweeps expired sessions on the way so the
-// table stays bounded by the number of visitors in the last hour.
-func (ss *sessions) create(loggedIn bool) *session {
-	s := &session{id: randomHex(), csrf: randomHex(), loggedIn: loggedIn}
+// create starts a logged-in session. It sweeps expired sessions on the way,
+// so the table stays bounded by the logins of the last sessionLife; only
+// the password makes one.
+func (ss *sessions) create() *session {
+	s := &session{id: randomHex(), csrf: randomHex(), loggedIn: true}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	now := ss.now()
@@ -73,16 +74,57 @@ func (ss *sessions) create(loggedIn bool) *session {
 			delete(ss.byID, id)
 		}
 	}
-	if loggedIn {
-		s.expires = now.Add(sessionLife)
-	} else {
-		s.expires = now.Add(anonymousLife)
-	}
+	s.expires = now.Add(sessionLife)
 	ss.byID[s.id] = s
 	return s
 }
 
-// get returns a copy of the live session with that id, or nil.
+// visit starts the anonymous session of a visitor of the login or setup
+// form, and keeps nothing: the id is 24 random bytes followed by the second
+// the session ends, and the form token is a MAC of the id with the table's
+// key. A form posted with that token thus comes from the browser that holds
+// the cookie, as with a kept session.
+func (ss *sessions) visit() *session {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw[:24]); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	expires := ss.now().Add(anonymousLife).Truncate(time.Second)
+	binary.BigEndian.PutUint64(raw[24:], uint64(expires.Unix()))
+	return &session{id: hex.EncodeToString(raw), csrf: ss.sign(raw), expires: expires}
+}
+
+// anonymous returns the anonymous session id names, or nil when id is not
+// one that visit could have handed out within the last anonymousLife.
+func (ss *sessions) anonymous(id string) *session {
+	raw, err := hex.DecodeString(id)
+	if err != nil || len(raw) != 32 {
+		return nil
+	}
+	expires := time.Unix(int64(binary.BigEndian.Uint64(raw[24:])), 0)
+	if now := ss.now(); !expires.After(now) || expires.After(now.Add(anonymousLife)) {
+		return nil
+	}
+	return &session{id: id, csrf: ss.sign(raw), expires: expires}
+}
+
+// sign is the form token of an anonymous session's id.
+func (ss *sessions) sign(raw []byte) string {
+	mac := hmac.New(sha256.New, ss.key)
+	mac.Write(raw)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// visitor returns the session a cookie names: a logged-in one, or else an
+// anonymous one, or nil.
+func (ss *sessions) visitor(id string) *session {
+	if s := ss.get(id); s != nil {
+		return s
+	}
+	return ss.anonymous(id)
+}
+
+// get returns a copy of the live logged-in session with that id, or nil.
 func (ss *sessions) get(id string) *session {
 	if id == "" {
 		return nil
@@ -105,6 +147,17 @@ func (ss *sessions) get(id string) *session {
 func (ss *sessions) delete(id string) {
 	ss.mu.Lock()
 	delete(ss.byID, id)
+	ss.mu.Unlock()
+}
+
+// deleteOthers ends every session but keep.
+func (ss *sessions) deleteOthers(keep string) {
+	ss.mu.Lock()
+	for id := range ss.byID {
+		if id != keep {
+			delete(ss.byID, id)
+		}
+	}
 	ss.mu.Unlock()
 }
 
@@ -133,55 +186,6 @@ func (ss *sessions) takeFlash(id string) string {
 // validToken reports whether token is the session's form token.
 func (s *session) validToken(token string) bool {
 	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.csrf)) == 1
-}
-
-// --- login rate limit ---
-
-// remoteIP is the address part of r.RemoteAddr.
-func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// loginAllowed reports whether addr may try a password now. Once the wait
-// after maxFailures wrong passwords is over the count starts again.
-func (ss *sessions) loginAllowed(addr string) bool {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	f, ok := ss.failures[addr]
-	if !ok || f.count < maxFailures {
-		return true
-	}
-	if ss.now().Before(f.until) {
-		return false
-	}
-	delete(ss.failures, addr)
-	return true
-}
-
-// noteFailure counts a wrong password from addr.
-func (ss *sessions) noteFailure(addr string) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	f, ok := ss.failures[addr]
-	if !ok {
-		f = &failure{}
-		ss.failures[addr] = f
-	}
-	f.count++
-	if f.count >= maxFailures {
-		f.until = ss.now().Add(failureWait)
-	}
-}
-
-// noteSuccess forgets addr's wrong passwords.
-func (ss *sessions) noteSuccess(addr string) {
-	ss.mu.Lock()
-	delete(ss.failures, addr)
-	ss.mu.Unlock()
 }
 
 // --- cookies ---

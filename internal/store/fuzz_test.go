@@ -323,7 +323,7 @@ func FuzzStoreRoundTrip(f *testing.F) {
 		bs, err = s.BasketsByPrefix(prefix)
 		expect("BasketsByPrefix", bs, []Basket{bk}, err)
 		line := DrawingLine{Prefix: prefix, BID: int(id), Description: s1, WinningTicket: int(winning)}
-		if winning == id {
+		if winning == id && winning > 0 { // a basket not drawn (0) has no winner
 			line.LastName, line.FirstName, line.PhoneNumber = s2, s1, s3
 		}
 		d, err := s.DrawingLine(prefix, int(id))

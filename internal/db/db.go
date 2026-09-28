@@ -44,19 +44,22 @@ type View struct {
 	SQL  string
 }
 
-// Views are the report views of the original.
+// Views are the report views of the original, but for one thing: a basket
+// joins its winner only once it is drawn. Winning ticket 0 means not drawn
+// yet, and the original's join made a ticket numbered 0 the winner of every
+// basket still to draw.
 var Views = []View{
 	{"drawing", `CREATE VIEW drawing AS
 		SELECT b.prefix, b.b_id, b.description, b.winning_ticket, t.last_name, t.first_name, t.phone_number
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY b.prefix, b.b_id`},
 	{"report_by_name", `CREATE VIEW report_by_name AS
 		SELECT t.last_name, t.first_name, t.phone_number, t.pref, b.prefix, b.b_id, b.description, b.donors, b.winning_ticket
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY t.last_name, t.first_name, t.phone_number, b.prefix, b.b_id`},
 	{"report_by_basket", `CREATE VIEW report_by_basket AS
 		SELECT b.prefix, b.b_id, b.description, b.donors, b.winning_ticket, t.last_name, t.first_name, t.phone_number, t.pref
-		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id
+		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY b.prefix, b.b_id`},
 	{"report_counts", `CREATE VIEW report_counts AS
 		SELECT prefix, COUNT(DISTINCT(CONCAT(first_name, last_name, phone_number))) AS unique_buyers, COUNT(*) AS total_buys
@@ -69,8 +72,14 @@ var Views = []View{
 
 // Open opens (and creates when missing) the SQLite database at path with a
 // busy timeout and WAL journaling, and verifies the connection.
+//
+// Transactions begin IMMEDIATE, taking the write lock at the start: SQLite
+// does not apply the busy timeout to a transaction that has read and then
+// asks to write, but fails it at once with "database is locked" when the
+// lock is held for a moment, as a reader under load repairing the WAL index
+// does. Every transaction here writes, so none loses anything by it.
 func Open(path string) (*sql.DB, error) {
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)

@@ -8,6 +8,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -33,6 +34,9 @@ const (
 	Offline State = "offline"
 	// Unauthenticated: the server answers but refuses this client's key.
 	Unauthenticated State = "unauthenticated"
+	// Certificate: the server's certificate is not the one pinned when the
+	// client was paired; pairing again with the server trusts the new one.
+	Certificate State = "certificate"
 )
 
 // Status is what GET /api/status answers in remote mode.
@@ -44,6 +48,9 @@ type Status struct {
 	Pending    int    `json:"pending"`
 	Failed     int    `json:"failed"`
 	LastOK     string `json:"last_ok"`
+	// SettingsError says why settings.json could not be used, in either
+	// mode; see config.File.Problem.
+	SettingsError string `json:"settings_error,omitempty"`
 }
 
 // Timings are the delays the syncer works with; tests shorten them.
@@ -83,6 +90,18 @@ type Syncer struct {
 	kick       chan struct{}
 	touched    map[string]bool // rows saved since the running pull began; nil when none runs
 	pulling    func()          // tests: runs as a pull starts
+	pullAt     time.Time       // no mirror pull before this, after a download that could not be used
+	running    context.Context // Run's context; the replay stops between saves when it ends
+
+	// numbering is held while a save is numbered and then sent or queued,
+	// so saves are numbered, queued and sent directly in one order (see
+	// Numbering). sending is held for each numbered request on its way to
+	// the server, by the replay and by a page sending a save directly, so
+	// the server sees a client's saves one at a time, in the order of their
+	// numbers, which its check of the numbers relies on (see store.InOrder).
+	// Lock numbering before sending, never the other way.
+	numbering sync.Mutex
+	sending   sync.Mutex
 
 	// saving is held for reading by every page save (BeginSave) and for
 	// writing by the mirror pull while it starts noting saved rows and while
@@ -126,6 +145,25 @@ func (s *Syncer) InStep() bool {
 // Row names a row for BeginSave: its table, prefix and id (0 for a prefix).
 func Row(table, prefix string, id int) string {
 	return table + "\x00" + prefix + "\x00" + strconv.Itoa(id)
+}
+
+// Numbering holds this client's saves in line while the caller numbers one
+// and then queues it, or sends it (taking Sending as well). While it is
+// held no other save is numbered or queued, so a caller that finds the
+// queue empty (InStep) can count on it staying empty. done lets the next go.
+func (s *Syncer) Numbering() (done func()) {
+	s.numbering.Lock()
+	return s.numbering.Unlock
+}
+
+// Sending takes the way to the server for one numbered request: the replay
+// holds it for each queued save it sends, and a page for a save it sends
+// directly. A page whose save goes to the queue does not wait for it, so a
+// replay held up by a dead link does not hold up the pages. done lets the
+// next go.
+func (s *Syncer) Sending() (done func()) {
+	s.sending.Lock()
+	return s.sending.Unlock
 }
 
 // BeginSave tells the syncer that a page is saving the named rows and
@@ -180,14 +218,26 @@ func (s *Syncer) NoteSuccess() {
 	s.wake()
 }
 
-// NoteFailure records that the server could not be reached or was unwell.
+// NoteFailure records that the server could not be reached or was unwell,
+// or that its certificate is no longer the one pinned at pairing.
 func (s *Syncer) NoteFailure(err error) {
 	label := labelOf(s.cfg.Get())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
+	if errors.Is(err, remote.ErrCertificateChanged) {
+		if s.state != Certificate {
+			log.Printf("server %s: its certificate changed (%v); pair with it again in Settings", s.label, err)
+			s.state = Certificate
+		}
+		return
+	}
 	now := time.Now()
 	switch s.state {
+	case Certificate:
+		// The certificate is refused before anything else; this failure is
+		// the same one seen through a page, so the state stays.
+		return
 	case Reconnecting:
 		if now.Sub(s.since) >= s.t.OfflineAfter {
 			s.state = Offline
@@ -267,8 +317,9 @@ func (s *Syncer) wake() {
 // Status answers the status route. In standalone mode only Mode is set.
 func (s *Syncer) Status() Status {
 	settings := s.cfg.Get()
+	problem := s.cfg.Problem()
 	if settings.RemoteURL() == "" {
-		return Status{Mode: "standalone"}
+		return Status{Mode: "standalone", SettingsError: problem}
 	}
 	pending, failed, err := s.st.OutboxCounts()
 	if err != nil {
@@ -296,12 +347,17 @@ func (s *Syncer) Status() Status {
 		Pending:    pending,
 		Failed:     failed,
 		LastOK:     lastOK,
+
+		SettingsError: problem,
 	}
 }
 
 // Run pings the server, replays the outbox and refreshes the mirror until
 // ctx ends. It is the only goroutine that talks to the server on its own.
 func (s *Syncer) Run(ctx context.Context) {
+	s.mu.Lock()
+	s.running = ctx
+	s.mu.Unlock()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -350,7 +406,7 @@ func (s *Syncer) Tick() {
 		return
 	}
 	s.mu.Lock()
-	pull := s.pullNeeded
+	pull := s.pullNeeded && !time.Now().Before(s.pullAt)
 	s.mu.Unlock()
 	if pull {
 		s.pull(rc)
@@ -384,50 +440,102 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 // pull a mirror it cannot trust.
 func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
 	for ; ; handled++ {
-		o, err := s.st.NextOutbox()
-		if err != nil {
-			log.Printf("outbox: %v", err)
+		if s.stopping() {
 			return handled, false
 		}
-		if o == nil {
-			return handled, true
-		}
-		var body any
-		if len(o.Body) > 0 {
-			body = json.RawMessage(o.Body)
-		}
-		res, err := rc.Do(o.Method, o.Path, OrderHeaders(o.Order), body)
-		switch {
-		case err != nil:
-			s.noteAttempt(o.ID, err.Error())
-			s.NoteFailure(err)
-			s.backOff()
-			return handled, false
-		case res.OK():
-			if err := s.st.DeleteOutbox(o.ID); err != nil {
-				log.Printf("outbox: %v", err)
-				return handled, false
-			}
-			s.NoteSuccess()
-			log.Printf("server %s: took a queued %s %s", s.name(), o.Method, o.Path)
-		case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
-			s.noteAttempt(o.ID, detail(res))
-			s.NoteUnauthorized()
-			return handled, false
-		case res.Retryable():
-			s.noteAttempt(o.ID, detail(res))
-			s.NoteFailure(fmt.Errorf("server answered %d", res.Status))
-			s.backOff()
-			return handled, false
-		default:
-			reason := detail(res)
-			if err := s.st.FailOutbox(o.ID, reason); err != nil {
-				log.Printf("outbox: %v", err)
-				return handled, false
-			}
-			log.Printf("server %s: refused a queued %s %s (%s); kept in the failed list", s.name(), o.Method, o.Path, reason)
+		took, ok := s.replayOne(rc)
+		if !took || !ok {
+			return handled, ok
 		}
 	}
+}
+
+// stopping reports that Run's context has ended: the program is shutting
+// down, and the replay stops between saves so the database can close.
+func (s *Syncer) stopping() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running != nil && s.running.Err() != nil
+}
+
+// replayOne sends the oldest queued request, holding the way to the server
+// meanwhile (see Sending). took reports that it left the queue (sent,
+// or set aside in the failed list); ok is false when the server stopped
+// taking requests or the queue could not be read.
+func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
+	defer s.Sending()()
+	o, err := s.st.NextOutbox()
+	if err != nil {
+		log.Printf("outbox: %v", err)
+		return false, false
+	}
+	if o == nil {
+		return false, true
+	}
+	var body any
+	if len(o.Body) > 0 {
+		body = json.RawMessage(o.Body)
+	}
+	res, err := rc.Do(o.Method, o.Path, OrderHeaders(o.Order), body)
+	last, behind := LastSave(res)
+	switch {
+	case err != nil:
+		s.noteAttempt(o.ID, err.Error())
+		s.NoteFailure(err)
+		s.backOff()
+		return false, false
+	case res.OK():
+		if err := s.st.DeleteOutbox(o.ID); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		s.NoteSuccess()
+		log.Printf("server %s: took a queued %s %s", s.name(), o.Method, o.Path)
+	case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
+		s.noteAttempt(o.ID, detail(res))
+		s.NoteUnauthorized()
+		return false, false
+	case res.Retryable():
+		s.noteAttempt(o.ID, detail(res))
+		s.NoteFailure(fmt.Errorf("server answered %d", res.Status))
+		s.backOff()
+		return false, false
+	case behind:
+		// The server has applied a newer save from this client than this
+		// one: the client's data folder was put back from a copy taken
+		// before it. This save may have reached the server before the copy
+		// was put back, or not; the volunteer decides in Settings (Retry
+		// numbers it anew and sends it, Discard drops it). The client's own
+		// count moves past the server's, so its next saves are taken.
+		if err := s.st.SkipSavesTo(last); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		reason := fmt.Sprintf("the server has newer saves from this client (up to its save %d), so this one may have reached it already: this client's data folder was put back from a copy; retry to send it again", last)
+		if err := s.st.FailOutbox(o.ID, reason); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		s.NoteSuccess()
+		log.Printf("server %s: a queued %s %s is older than this client's save %d on the server; kept in the failed list", s.name(), o.Method, o.Path, last)
+	case res.Status == http.StatusNotFound && o.Method == http.MethodDelete:
+		// A prefix already gone from the server, which is what the delete
+		// wanted; a delete made online takes the same answer as done.
+		if err := s.st.DeleteOutbox(o.ID); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		s.NoteSuccess()
+		log.Printf("server %s: a queued %s %s found it gone already", s.name(), o.Method, o.Path)
+	default:
+		reason := detail(res)
+		if err := s.st.FailOutbox(o.ID, reason); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		log.Printf("server %s: refused a queued %s %s (%s); kept in the failed list", s.name(), o.Method, o.Path, reason)
+	}
+	return true, true
 }
 
 func (s *Syncer) noteAttempt(id int64, errText string) {
@@ -501,11 +609,11 @@ func (s *Syncer) pull(rc *remote.Client) {
 	}
 	var bf store.BackupFile
 	if err := res.JSON(&bf); err != nil {
-		log.Printf("server %s: sent an unreadable backup: %v", s.name(), err)
+		s.pullFailed(fmt.Errorf("sent an unreadable backup: %w", err))
 		return
 	}
 	if err := store.ValidateBackup(&bf); err != nil {
-		log.Printf("server %s: sent an invalid backup: %v", s.name(), err)
+		s.pullFailed(fmt.Errorf("sent a backup this client cannot use: %w", err))
 		return
 	}
 	// Import only adds and updates: a client's own standalone rows are never
@@ -517,13 +625,40 @@ func (s *Syncer) pull(rc *remote.Client) {
 	err = s.st.Import(without(bf, saved))
 	s.saving.Unlock()
 	if err != nil {
-		log.Printf("mirror: %v", err)
+		s.pullFailed(fmt.Errorf("its backup could not be copied into this client: %w", err))
 		return
 	}
 	s.mu.Lock()
 	s.pullNeeded = false
+	s.pullAt = time.Time{}
 	s.mu.Unlock()
 	log.Printf("mirror refreshed from %s: %d prefixes, %d tickets, %d baskets", s.name(), len(bf.Prefixes), len(bf.Tickets), len(bf.Baskets))
+}
+
+// pullFailed notes a mirror download that could not be used and puts the
+// next try off by a heartbeat, instead of downloading the whole data set
+// again every second.
+func (s *Syncer) pullFailed(err error) {
+	s.mu.Lock()
+	s.pullAt = time.Now().Add(s.t.Heartbeat)
+	s.mu.Unlock()
+	log.Printf("server %s: %v; trying again in %s", s.name(), err, s.t.Heartbeat)
+}
+
+// LastSave reads the number of the last save the server applied from this
+// client out of its answer to a save it did not apply as older than that
+// (409, see store.InOrder). ok is false for any other answer.
+func LastSave(res *remote.Response) (last int64, ok bool) {
+	if res == nil || res.Status != http.StatusConflict {
+		return 0, false
+	}
+	var doc struct {
+		LastSave int64 `json:"last_save"`
+	}
+	if res.JSON(&doc) != nil || doc.LastSave <= 0 {
+		return 0, false
+	}
+	return doc.LastSave, true
 }
 
 // OrderHeaders are the headers that name and number a save for the server

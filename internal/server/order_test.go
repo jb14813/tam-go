@@ -42,21 +42,27 @@ func (a *api) phone() string {
 // TestSavesFromAClientApplyInOrder: a save the network delivers late (the
 // client gave up on it, queued it and sent it again) must not undo what
 // came after it. The server applies a numbered save only when it is newer
-// than the last one applied from that client and answers the others with
-// X-TAM-Stale; saves without numbers, as the original client sends them,
-// apply as they come.
+// than the last one applied from that client. The last save arriving again
+// is answered as done with X-TAM-Stale; any other save at or below the
+// last number is answered 409 with that number (X-TAM-Last-Save), so a
+// client whose numbers went back numbers it anew rather than lose it.
+// Saves without numbers, as the original client sends them, apply as they
+// come.
 func TestSavesFromAClientApplyInOrder(t *testing.T) {
 	a := newAPI(t)
 	if code, h := a.orderedSave("L1", "7", "seventh"); code != 200 || h.Get("X-TAM-Stale") != "" {
 		t.Fatalf("a new save = %d, stale %q", code, h.Get("X-TAM-Stale"))
 	}
-	for _, again := range []string{"6", "7"} {
-		code, h := a.orderedSave("L1", again, "late copy "+again)
-		if code != 200 || h.Get("X-TAM-Stale") != "1" {
-			t.Fatalf("save %s after save 7 = %d, stale %q; want 200 and marked stale", again, code, h.Get("X-TAM-Stale"))
+	if code, h := a.orderedSave("L1", "7", "seventh"); code != 200 || h.Get("X-TAM-Stale") != "1" || a.phone() != "seventh" {
+		t.Fatalf("save 7 again = %d, stale %q; want 200 and marked stale (the ticket reads %q)", code, h.Get("X-TAM-Stale"), a.phone())
+	}
+	for _, c := range []struct{ n, phone string }{{"6", "late copy 6"}, {"7", "another save numbered 7"}} {
+		code, h := a.orderedSave("L1", c.n, c.phone)
+		if code != 409 || h.Get("X-TAM-Last-Save") != "7" {
+			t.Fatalf("save %s (%s) after save 7 = %d, last save %q; want 409 and 7", c.n, c.phone, code, h.Get("X-TAM-Last-Save"))
 		}
 		if a.phone() != "seventh" {
-			t.Fatalf("save %s after save 7 changed the ticket to %q", again, a.phone())
+			t.Fatalf("save %s after save 7 changed the ticket to %q", c.n, a.phone())
 		}
 	}
 	if code, _ := a.orderedSave("L1", "8", "eighth"); code != 200 || a.phone() != "eighth" {

@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -13,10 +14,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/db"
+	"ticket-auction-manager/tam-go/internal/guard"
+	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
@@ -32,7 +36,7 @@ type site struct {
 	c   *http.Client
 }
 
-func newSite(t *testing.T, envPassword string) *site {
+func newSite(t *testing.T, envPassword string, opts ...Option) *site {
 	t.Helper()
 	dir := t.TempDir()
 	sqldb, err := db.Open(filepath.Join(dir, "tam-remote.db"))
@@ -51,7 +55,7 @@ func newSite(t *testing.T, envPassword string) *site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hd := NewHandler(st, pw, Info{Addr: ":8000", DataDir: dir, Version: "0.0.1", Started: time.Now().Add(-90 * time.Second)})
+	hd := NewHandler(st, pw, Info{Addr: ":8000", DataDir: dir, Version: "0.0.1", Started: time.Now().Add(-90 * time.Second)}, opts...)
 	ts := httptest.NewServer(hd)
 	t.Cleanup(ts.Close)
 	return &site{t: t, url: ts.URL, dir: dir, st: st, pw: pw, h: hd.(*handler), c: newBrowser(t)}
@@ -324,9 +328,118 @@ func TestFiveWrongPasswordsWaitThirtySeconds(t *testing.T) {
 	}
 
 	// Once the wait is over the right password works.
-	s.h.ss.now = func() time.Time { return time.Now().Add(31 * time.Second) }
+	s.h.guesses.Now = func() time.Time { return time.Now().Add(31 * time.Second) }
 	res, _ = s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}})
 	wantRedirect(t, res, "/admin/status")
+}
+
+// TestWrongPasswordsSentAtOnceAreCountedFirst: wrong passwords sent all at
+// once must not all be checked before the first of them is counted. With a
+// password from server.json every check takes a while (bcrypt), long enough
+// for the others to arrive; still five are checked and the rest wait.
+func TestWrongPasswordsSentAtOnceAreCountedFirst(t *testing.T) {
+	s := newSite(t, "")
+	if err := s.pw.Set("secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, page := s.get("/admin/")
+	token := s.token(page)
+	const n = 40
+	var (
+		mu    sync.Mutex
+		count = map[int]int{}
+		errs  []error
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+	)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := s.c.PostForm(s.url+"/admin/login", url.Values{"csrf": {token}, "password": {fmt.Sprintf("wrong-%d", i)}})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+			count[res.StatusCode]++
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if len(errs) > 0 {
+		t.Fatalf("%d of %d logins failed, the first: %v", len(errs), n, errs[0])
+	}
+	if count[401] != 5 || count[429] != n-5 {
+		t.Fatalf("%d wrong passwords sent at once were answered %v; want 5 checked (401) and %d refused (429)", n, count, n-5)
+	}
+}
+
+// TestGuessesAreSharedWithTheAPI: TAM-PW on the API's key routes checks the
+// same password as the login, so both count against one limit, as
+// tam-server wires them: three wrong guesses through the API and two
+// through the login form use up an address's five.
+func TestGuessesAreSharedWithTheAPI(t *testing.T) {
+	guesses := guard.New()
+	s := newSite(t, "secret", WithGuesses(guesses))
+	api := httptest.NewServer(server.NewHandler(s.st, s.pw, server.WithGuesses(guesses)))
+	t.Cleanup(api.Close)
+	apiAuth := func(password string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", api.URL+"/api/auth", nil)
+		req.Header.Set("TAM-PW", password)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for i := 0; i < 3; i++ {
+		if code := apiAuth("wrong"); code != 401 {
+			t.Fatalf("wrong password %d through the API = %d", i+1, code)
+		}
+	}
+	_, page := s.get("/admin/")
+	token := s.token(page)
+	for i := 0; i < 2; i++ {
+		if res, _ := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"wrong"}}); res.StatusCode != 401 {
+			t.Fatalf("wrong password %d through the login = %d", i+1, res.StatusCode)
+		}
+	}
+	if res, _ := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}}); res.StatusCode != 429 {
+		t.Fatalf("the login after five wrong passwords in all = %d, want 429", res.StatusCode)
+	}
+	if code := apiAuth("secret"); code != 429 {
+		t.Fatalf("the API after five wrong passwords in all = %d, want 429", code)
+	}
+}
+
+// TestTheCurrentPasswordFieldIsLimited: the password form checks the current
+// password, so it counts wrong ones like the login does; a stolen session
+// cannot guess the password there without limit.
+func TestTheCurrentPasswordFieldIsLimited(t *testing.T) {
+	s := newSite(t, "secret")
+	s.login("secret")
+	_, token := s.page("/admin/password")
+	change := url.Values{"csrf": {token}, "current": {"nope"}, "password": {"new one"}, "confirm": {"new one"}}
+	for i := 0; i < 5; i++ {
+		if res, body := s.post("/admin/password", change); res.StatusCode != 400 || !strings.Contains(body, "The current password is wrong.") {
+			t.Fatalf("wrong current password %d = %d\n%s", i+1, res.StatusCode, body)
+		}
+	}
+	change.Set("current", "secret")
+	res, body := s.post("/admin/password", change)
+	if res.StatusCode != 429 || res.Header.Get("Retry-After") != "30" || !strings.Contains(body, "Wait 30 seconds") {
+		t.Fatalf("the right current password after five wrong ones = %d %q\n%s", res.StatusCode, res.Header.Get("Retry-After"), body)
+	}
+	if !s.pw.Check("secret") {
+		t.Fatal("a refused change must keep the password")
+	}
 }
 
 func TestKeysPage(t *testing.T) {
@@ -538,6 +651,30 @@ func TestChangePassword(t *testing.T) {
 	fresh.login("new one")
 }
 
+// TestChangingThePasswordLogsOutTheOtherSessions: whoever logged in with
+// the old password, perhaps the person it was changed to keep out, is
+// logged out; the browser that changed it stays in.
+func TestChangingThePasswordLogsOutTheOtherSessions(t *testing.T) {
+	s := newSite(t, "secret")
+	s.login("secret")
+	other := &site{t: t, url: s.url, h: s.h, c: newBrowser(t)}
+	other.login("secret")
+	if res, _ := other.get("/admin/status"); res.StatusCode != 200 {
+		t.Fatal("the second browser is not logged in")
+	}
+	_, token := s.page("/admin/password")
+	res, _ := s.post("/admin/password", url.Values{"csrf": {token}, "current": {"secret"}, "password": {"new one"}, "confirm": {"new one"}})
+	wantRedirect(t, res, "/admin/password")
+	res, _ = other.get("/admin/status")
+	wantRedirect(t, res, "/admin/")
+	if res, _ := s.get("/admin/status"); res.StatusCode != 200 {
+		t.Fatalf("the browser that changed the password = %d, want still logged in", res.StatusCode)
+	}
+	if n := s.sessionCount(); n != 1 {
+		t.Fatalf("%d sessions left after the change, want the one that made it", n)
+	}
+}
+
 func TestUnknownPathsAndMethodsAreHTML(t *testing.T) {
 	s := newSite(t, "secret")
 	res, body := s.get("/admin/nope")
@@ -566,6 +703,68 @@ func TestSessionExpires(t *testing.T) {
 	}
 }
 
+// sessionCount is how many sessions the table holds.
+func (s *site) sessionCount() int {
+	s.h.ss.mu.Lock()
+	defer s.h.ss.mu.Unlock()
+	return len(s.h.ss.byID)
+}
+
+// TestVisitsOfTheLoginFormKeepNoSession: anyone can open the login form,
+// as often as they like, so a visit must not add to the session table:
+// every visit used to add a session, and 100,000 of them made every page
+// that creates one 7 times slower and took 40 MB. The form's token is
+// still tied to the visitor's cookie (TestFormsNeedTheSessionToken).
+func TestVisitsOfTheLoginFormKeepNoSession(t *testing.T) {
+	for _, env := range []string{"secret", ""} { // the login form, and the setup form
+		s := newSite(t, env)
+		for i := 0; i < 200; i++ {
+			visitor := &site{t: t, url: s.url, c: newBrowser(t)}
+			if res, page := visitor.get("/admin/"); res.StatusCode != 200 || len(res.Cookies()) != 1 || visitor.token(page) == "" {
+				t.Fatalf("visit %d = %d, cookies %v", i+1, res.StatusCode, res.Cookies())
+			}
+		}
+		if n := s.sessionCount(); n != 0 {
+			t.Fatalf("200 visits of the form (password %q) left %d sessions", env, n)
+		}
+	}
+	s := newSite(t, "secret")
+	s.login("secret")
+	if n := s.sessionCount(); n != 1 {
+		t.Fatalf("after a login the table holds %d sessions, want the logged-in one", n)
+	}
+}
+
+// TestTheFormTokenOfAVisitExpires: the token of an anonymous visit is good
+// for an hour, like the session it replaces, and a cookie the server did
+// not hand out gets a new one rather than a token of the visitor's choice.
+func TestTheFormTokenOfAVisitExpires(t *testing.T) {
+	s := newSite(t, "secret")
+	res, page := s.get("/admin/")
+	cookie, token := res.Cookies()[0].Value, s.token(page)
+	s.h.ss.now = func() time.Time { return time.Now().Add(anonymousLife - time.Minute) }
+	if _, again := s.get("/admin/"); s.token(again) != token {
+		t.Fatal("within the hour the visit keeps its token")
+	}
+	s.h.ss.now = func() time.Time { return time.Now().Add(anonymousLife + time.Minute) }
+	if res, body := s.post("/admin/login", url.Values{"csrf": {token}, "password": {"secret"}}); res.StatusCode != 403 || !strings.Contains(body, "expired") {
+		t.Fatalf("login with an hour-old form = %d\n%s", res.StatusCode, body)
+	}
+	s.h.ss.now = time.Now
+
+	far := cookie[:48] + "00000000ffffffff" // the same visit, good until the year 2106
+	req, _ := http.NewRequest("GET", s.url+"/admin/", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: far})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if c := res.Cookies(); len(c) != 1 || c[0].Value == far {
+		t.Fatalf("a cookie the server never handed out was kept: %v", c)
+	}
+}
+
 func TestCookieIsSecureOverTLS(t *testing.T) {
 	dir := t.TempDir()
 	sqldb, err := db.Open(filepath.Join(dir, "tam-remote.db"))
@@ -586,5 +785,51 @@ func TestCookieIsSecureOverTLS(t *testing.T) {
 	res.Body.Close()
 	if c := res.Cookies(); len(c) != 1 || !c[0].Secure {
 		t.Fatalf("cookie over TLS = %+v, want Secure", c)
+	}
+}
+
+// TestLogoAndIcon: every page shows the TAM logo and names the TAM icon, its
+// policy lets them load, and they are the web app's own files.
+func TestLogoAndIcon(t *testing.T) {
+	s := newSite(t, "secret")
+	for _, c := range []struct{ path, contentType, file string }{
+		{"/admin/logo.svg", "image/svg+xml", "logo.svg"},
+		{"/admin/favicon.ico", "image/x-icon", "favicon.ico"},
+		{"/favicon.ico", "image/x-icon", "favicon.ico"}, // asked for by pages that name no icon
+	} {
+		want, err := os.ReadFile(filepath.Join("static", c.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, body := s.get(c.path)
+		if res.StatusCode != 200 || res.Header.Get("Content-Type") != c.contentType || body != string(want) {
+			t.Fatalf("%s = %d %q, %d bytes; want the %d bytes of static/%s", c.path, res.StatusCode, res.Header.Get("Content-Type"), len(body), len(want), c.file)
+		}
+		if cc := res.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age") {
+			t.Fatalf("%s: Cache-Control %q, want it cached unlike the pages", c.path, cc)
+		}
+	}
+	res, page := s.get("/admin/")
+	if !strings.Contains(page, `<link rel="icon" href="/admin/favicon.ico">`) || !strings.Contains(page, `src="/admin/logo.svg"`) {
+		t.Fatalf("the login page must name the icon and show the logo:\n%s", page)
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self'") {
+		t.Fatalf("Content-Security-Policy %q blocks the logo", csp)
+	}
+	s.login("secret")
+	if page, _ := s.page("/admin/status"); !strings.Contains(page, `src="/admin/logo.svg"`) {
+		t.Fatalf("the status page must show the logo:\n%s", page)
+	}
+
+	// The server keeps copies of the web app's logo and icon; they must not drift.
+	for file, original := range map[string]string{
+		"static/logo.svg":    "../../frontend/src/lib/assets/logo.svg",
+		"static/favicon.ico": "../../frontend/static/favicon.ico",
+	} {
+		a, errA := os.ReadFile(file)
+		b, errB := os.ReadFile(original)
+		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+			t.Fatalf("%s must be a copy of %s (%v, %v)", file, original, errA, errB)
+		}
 	}
 }

@@ -216,3 +216,114 @@ func TestFilePicksUpHandEditsAndKeepsLastGood(t *testing.T) {
 		t.Fatal("a rejected update must not write the file")
 	}
 }
+
+// TestSaveKeepsACopyAndLoadFallsBackToIt: every save also writes the copy
+// next to the file; a file a power cut left full of zeros (or a hand edit
+// broke) loads the copy instead of the defaults, and says so.
+func TestSaveKeepsACopyAndLoadFallsBackToIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	saved := Defaults()
+	saved.VenueName, saved.RemoteServer, saved.RemoteKey = "Hall", "front-desk", "k"
+	if err := Save(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := os.ReadFile(path)
+	b, err := os.ReadFile(BackupPath(path))
+	if err != nil || string(a) != string(b) {
+		t.Fatalf("the copy = %q (%v), want the file's content", b, err)
+	}
+	os.WriteFile(path, make([]byte, len(a)), 0o644)
+	s, err := Load(path)
+	var le *LoadError
+	if !errors.As(err, &le) || !le.FromBackup || s != saved {
+		t.Fatalf("Load of a zeroed file = %+v, %v; want the copy's settings and a *LoadError from the copy", s, err)
+	}
+	os.WriteFile(BackupPath(path), []byte("{"), 0o644)
+	if s, err := Load(path); !errors.As(err, &le) || le.FromBackup || s != Defaults() {
+		t.Fatalf("Load with no good copy = %+v, %v; want defaults", s, err)
+	}
+}
+
+// TestFileReportsAProblem: the live document says why its file could not
+// be used, for the pages, until the file is fixed or saved again.
+func TestFileReportsAProblem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	saved := Defaults()
+	saved.VenueName = "Hall"
+	if err := Save(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(path, make([]byte, 40), 0o644)
+	f := Open(path)
+	if f.Get() != saved || !strings.Contains(f.Problem(), "settings.json.bak") {
+		t.Fatalf("Open of a zeroed file = %+v, problem %q; want the copy's settings and the problem named", f.Get(), f.Problem())
+	}
+	if _, err := f.Update(func(s Settings) (Settings, error) { s.VenueName = "Hall 2"; return s, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if f.Problem() != "" {
+		t.Fatalf("after a save the problem is %q, want none", f.Problem())
+	}
+	os.WriteFile(path, []byte(`{"venue_name": "Typo",}`), 0o644)
+	if s := f.Get(); s.VenueName != "Hall 2" || !strings.Contains(f.Problem(), "keeps the settings it had") {
+		t.Fatalf("a hand edit with a typo: %+v, problem %q", s, f.Problem())
+	}
+}
+
+// TestOpenCopiesAFileSavedBeforeCopiesWereKept: a settings file written by
+// an older version, with no copy next to it, gets its copy when opened.
+func TestOpenCopiesAFileSavedBeforeCopiesWereKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(path, []byte(`{"venue_name": "Old Hall"}`), 0o644)
+	Open(path)
+	if b, err := os.ReadFile(BackupPath(path)); err != nil || !strings.Contains(string(b), "Old Hall") {
+		t.Fatalf("the copy = %q, %v", b, err)
+	}
+}
+
+// TestOriginalClientSettingsFileLoads: the file the original client writes
+// (client/src/lib/server/settings/index.js) is read as it is, and what this
+// program writes back keeps every key the original knows, so a data folder
+// can move between the two.
+func TestOriginalClientSettingsFileLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	original := `{
+  "remote_server": "tam.lan",
+  "remote_key": "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+  "remote_port": "8000",
+  "remote_tls": true,
+  "default_pref": "TEXT",
+  "venue_name": "Village Hall",
+  "disable_attrib": true
+}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.RemoteServer != "tam.lan" || s.RemoteKey != "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" || s.RemotePort != "8000" || !s.RemoteTLS ||
+		s.DefaultPref != "TEXT" || s.VenueName != "Village Hall" || !s.DisableAttrib {
+		t.Fatalf("original settings read back as %+v", s)
+	}
+	if s.RemoteURL() != "https://tam.lan:8000" {
+		t.Fatalf("remote URL = %q", s.RemoteURL())
+	}
+	if err := Save(path, s); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"remote_server", "remote_key", "remote_port", "remote_tls", "default_pref", "venue_name", "disable_attrib"} {
+		if _, ok := keys[k]; !ok {
+			t.Fatalf("saved file lost the original's key %q: %s", k, raw)
+		}
+	}
+	if string(keys["remote_port"]) != `"8000"` || string(keys["remote_tls"]) != `true` {
+		t.Fatalf("saved file changed the types the original reads: %s", raw)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/desktop"
 	"ticket-auction-manager/tam-go/internal/discovery"
 	"ticket-auction-manager/tam-go/internal/env"
+	"ticket-auction-manager/tam-go/internal/guard"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/tlscert"
@@ -70,9 +71,9 @@ func browseAddr(addr string) string {
 
 func main() {
 	addr := flag.String("addr", "", "address to listen on (default :8000, or :8443 with -tls)")
-	useTLS := flag.Bool("tls", false, "serve HTTPS; a self-signed certificate is created in the data directory when none is given")
-	certFile := flag.String("cert", "", "TLS certificate file (default <data dir>/server.crt)")
-	keyFile := flag.String("key", "", "TLS key file (default <data dir>/server.key)")
+	useTLS := flag.Bool("tls", false, "serve HTTPS; without -cert and -key, with a self-signed certificate created in the data directory on first start")
+	certFile := flag.String("cert", "", "TLS certificate file (PEM) to serve with -tls; it must exist, and -key goes with it (default <data dir>/server.crt, created when missing)")
+	keyFile := flag.String("key", "", "TLS key file (PEM) of -cert; it must exist (default <data dir>/server.key, created when missing)")
 	useTray := flag.Bool("tray", desktop.TraySupported, "show a TAM icon in the notification area with a Shut Down entry (Windows)")
 	announce := flag.Bool("announce", true, "announce this server on the local network (mDNS) so clients can find it in Settings")
 	flag.Parse()
@@ -147,11 +148,15 @@ func main() {
 		absDataDir = dataDir
 	}
 	st := store.New(sqldb)
+	// One limit on wrong passwords per address covers the admin login and
+	// the API's key routes, so guesses cannot be split between the two.
+	guesses := guard.New()
 	mux := http.NewServeMux()
-	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()})
+	adminPages := admin.NewHandler(st, password, admin.Info{Addr: *addr, Addresses: reachable, TLS: *useTLS, DataDir: absDataDir, Version: server.Version, Started: time.Now()}, admin.WithGuesses(guesses))
 	mux.Handle("/admin", adminPages)
 	mux.Handle("/admin/", adminPages)
-	mux.Handle("/", server.NewHandler(st, password))
+	mux.Handle("/favicon.ico", adminPages)
+	mux.Handle("/", server.NewHandler(st, password, server.WithGuesses(guesses)))
 	srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -161,19 +166,14 @@ func main() {
 	}
 
 	if *useTLS {
-		if *certFile == "" {
-			*certFile = filepath.Join(dataDir, "server.crt")
-		}
-		if *keyFile == "" {
-			*keyFile = filepath.Join(dataDir, "server.key")
-		}
 		hostname, _ := os.Hostname()
-		created, err := tlscert.EnsurePair(*certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
+		cert, key, created, err := tlscert.Files(dataDir, *certFile, *keyFile, []string{"localhost", hostname, "127.0.0.1", "::1"})
 		if err != nil {
 			log.Fatal(err)
 		}
+		*certFile, *keyFile = cert, key
 		if created {
-			log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", *certFile)
+			log.Printf("created a self-signed certificate at %s (clients with Remote TLS on accept it)", cert)
 		}
 	}
 

@@ -169,8 +169,8 @@ type ReportCountLine struct {
 
 // AuthKey is a server access key. LastSeen is the time of the key's last
 // authenticated request in RFC 3339, or "" when the key has never been used
-// or the database has no last_seen column; it is left out of the JSON when
-// empty so the wire format stays the original's.
+// or the database has no auth_key_activity table; it is left out of the
+// JSON when empty so the wire format stays the original's.
 type AuthKey struct {
 	AuthKey     string `json:"auth_key"`
 	Description string `json:"description"`

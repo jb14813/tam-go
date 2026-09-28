@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,7 +41,7 @@ func LocalNetworks() []*net.IPNet {
 	}
 	var out []*net.IPNet
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || skipInterface(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -56,6 +57,28 @@ func LocalNetworks() []*net.IPNet {
 		}
 	}
 	return out
+}
+
+// bridgePrefixes name the interfaces Docker, libvirt, LXC, Kubernetes and
+// Podman create for their containers and VMs. Nothing outside the machine
+// is reached through them, so they are neither listed nor swept. A plain
+// "br0" is kept: that is how Unraid and others name the real LAN bridge.
+var bridgePrefixes = []string{"docker", "br-", "virbr", "veth", "lxc", "cni", "flannel", "podman"}
+
+// skipInterface reports whether an interface only leads to containers or
+// VMs on this machine. On Windows that is the WSL and Hyper-V default
+// switches; an external Hyper-V switch carries the real network and stays.
+func skipInterface(name string) bool {
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "vethernet") { // Hyper-V, not a Linux veth
+		return strings.Contains(name, "(WSL") || strings.Contains(name, "(Default Switch)")
+	}
+	for _, p := range bridgePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return strings.Contains(name, "(WSL") || strings.Contains(name, "(Default Switch)")
 }
 
 // LocalAddresses returns this machine's IPv4 addresses as strings, for a
@@ -147,19 +170,38 @@ func sweepHosts(ctx context.Context, hosts []string, ports []portSpec) []Server 
 	return dedupe(all)
 }
 
-// dedupe keeps one entry per server. A server that listens on every
-// interface of a machine with several networks answers on each of them,
-// so entries with the same name, port and TLS setting collapse into the
-// one with the lowest address; a server that gave no name (the original)
-// is only known by its address and stays as it is.
-func dedupe(all []Server) []Server {
+// dedupe keeps one entry per swept server; see Collapse.
+func dedupe(all []Server) []Server { return Collapse(all, nil) }
+
+// Collapse keeps one entry per server, sorted by name. A server that
+// listens on every interface of a machine with several networks is seen
+// at each of its addresses, so entries with the same name, port and TLS
+// setting collapse into one: the address on a network this machine is on
+// (local) when there is one, else the lowest. A server that gave no name
+// (the original) is only known by its address and stays as it is.
+func Collapse(all []Server, local []*net.IPNet) []Server {
+	onLocal := func(host string) bool {
+		ip := net.ParseIP(host)
+		for _, n := range local {
+			if ip != nil && n.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	better := func(s, prev Server) bool {
+		if sl, pl := onLocal(s.Host), onLocal(prev.Host); sl != pl {
+			return sl
+		}
+		return s.Host < prev.Host
+	}
 	seen := map[string]Server{}
 	for _, s := range all {
 		key := net.JoinHostPort(s.Host, s.Port)
 		if s.Name != s.Host {
 			key = s.Name + "|" + s.Port + "|" + map[bool]string{true: "tls", false: "plain"}[s.TLS]
 		}
-		if prev, ok := seen[key]; !ok || s.Host < prev.Host {
+		if prev, ok := seen[key]; !ok || better(s, prev) {
 			seen[key] = s
 		}
 	}

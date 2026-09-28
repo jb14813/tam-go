@@ -111,3 +111,40 @@ func port(t *testing.T, raw string) string {
 	}
 	return u.Port()
 }
+
+// A Docker or VM host has a bridge per container network; none of them
+// reaches a client, so they are neither listed as reachable nor swept.
+func TestSkipInterfaceLeavesOutContainerAndVMBridges(t *testing.T) {
+	for _, name := range []string{"docker0", "br-53de69a58e2a", "virbr0", "veth1a2b3c", "lxcbr0", "cni0", "flannel.1", "podman1", "vEthernet (WSL (Hyper-V firewall))", "vEthernet (Default Switch)"} {
+		if !skipInterface(name) {
+			t.Errorf("%q must be skipped", name)
+		}
+	}
+	for _, name := range []string{"eth0", "br0", "enp4s0f1", "wlan0", "Wi-Fi", "Ethernet 2", "vEthernet (External)", "tailscale0"} {
+		if skipInterface(name) {
+			t.Errorf("%q must be kept", name)
+		}
+	}
+}
+
+// One server announced on two networks is one entry, at the address the
+// client shares a network with; without such an address the lowest wins.
+func TestCollapsePrefersAnAddressOnTheClientsNetwork(t *testing.T) {
+	both := []Server{
+		{Name: "front-desk", Host: "192.168.50.10", Port: "8000"},
+		{Name: "front-desk", Host: "10.1.2.112", Port: "8000"},
+		{Name: "10.1.2.119", Host: "10.1.2.119", Port: "8000"},
+	}
+	got := Collapse(both, []*net.IPNet{addrNet("10.1.2.50", 24)})
+	if len(got) != 2 || got[1].Name != "front-desk" || got[1].Host != "10.1.2.112" {
+		t.Fatalf("with the client on 10.1.2.0/24: %+v", got)
+	}
+	got = Collapse(both, nil)
+	if len(got) != 2 || got[1].Host != "10.1.2.112" {
+		t.Fatalf("without a shared network the lowest address wins: %+v", got)
+	}
+	got = Collapse(both, []*net.IPNet{addrNet("192.168.50.7", 24)})
+	if len(got) != 2 || got[1].Host != "192.168.50.10" {
+		t.Fatalf("with the client on 192.168.50.0/24: %+v", got)
+	}
+}

@@ -25,16 +25,29 @@
 	const SERVERS_POLL_MS = 5000;
 	const STATUS_POLL_MS = 5000;
 
-	let paired = $derived(!!data.settings.remote_server);
+	// A server is set either by pairing, which also names it, or by typing
+	// it into the Remote Mode fields below, the original's way, where the
+	// key comes from Auth Keys. Only the first is "paired".
+	let configured = $derived(!!data.settings.remote_server);
+	let paired = $derived(configured && !!data.settings.remote_name);
 	let pairedName = $derived(data.settings.remote_name || data.settings.remote_server);
+	let serverAddress = $derived(`${data.settings.remote_server}:${data.settings.remote_port}`);
+	let pairVerb = $derived(paired ? 'Pair again' : 'Pair');
 	let servers = $state([]);
 	let pairingUnsupported = $state(false);
-	// Fields for pairing by hand; a discovered server's Use button fills them.
+	// Fields for pairing; a discovered server's Use button fills them, and
+	// while paired they hold the current server, for pairing again.
 	let pair = $state(untrack(() => pairFields(data.settings)));
 	let busy = $state(false);
 	let serverMsg = $state({ message: '', color: 'green' });
-	// Saves the server rejected, from GET /api/status (0 in standalone mode).
+	// Saves the server rejected, and saves still waiting to reach it, from
+	// GET /api/status (0 in standalone mode).
 	let failed = $state(0);
+	let pending = $state(0);
+	// The connection state, from GET /api/status ('' in standalone mode).
+	let connState = $state('');
+	// A refused key and a changed certificate are both fixed by pairing again.
+	let mustPairAgain = $derived(connState === 'unauthenticated' || connState === 'certificate');
 
 	function pairFields(s) {
 		return {
@@ -88,20 +101,27 @@
 		if (!host) return say('Enter the server host or pick one from the list', 'red');
 		if (!port) return say('Enter the server port', 'red');
 		busy = true;
+		// Pairing again with the server this client is paired with keeps the
+		// saves still waiting for it; the client sends them once paired.
 		const r = await post('/api/pair', { host, port, tls: !!pair.tls, password: pair.password });
 		busy = false;
+		// The whole answer: it may also say what became of this client's own data.
 		say(r.message, r.ok ? 'green' : 'red');
 		if (r.ok) {
 			pair.password = '';
 			await reloadSettings();
+			await pollStatus();
 		}
 	}
 
 	async function doUnpair() {
 		if (busy) return;
+		// After pairing, the client's own copy is the server's data; what the
+		// client had not sent yet goes to the failed list (see the client's unpair).
+		const now = pending > 0 ? ` (${pending} now)` : '';
 		if (
 			!confirm(
-				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps its local data.`
+				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps the copy of the server's data it has now. Saves still waiting to reach the server${now} are set aside in the failed list.`
 			)
 		)
 			return;
@@ -138,11 +158,14 @@
 
 	async function pollStatus() {
 		const { status: code, data: s } = await pollJSON('/api/status');
-		failed = code === 200 && s && s.mode === 'remote' ? Number(s.failed) || 0 : 0;
+		const remote = code === 200 && s && s.mode === 'remote';
+		failed = remote ? Number(s.failed) || 0 : 0;
+		pending = remote ? Number(s.pending) || 0 : 0;
+		connState = remote ? String(s.state || '') : '';
 		return code;
 	}
 
-	// The connection state, for the "could not be sent" line, while the page is open.
+	// The connection state, for Pair again and the "could not be sent" line, while the page is open.
 	$effect(() => {
 		let stopped = false;
 		let timer;
@@ -159,10 +182,10 @@
 		};
 	});
 
-	// The servers found on the network, while not paired. An older client
-	// answers 404: pairing is not available then.
+	// The servers found on the network, while no server is set. An older
+	// client answers 404: pairing is not available then.
 	$effect(() => {
-		if (paired || pairingUnsupported) return;
+		if (configured || pairingUnsupported) return;
 		let stopped = false;
 		let timer;
 		const loop = async () => {
@@ -187,6 +210,48 @@
 	<title>{pageTitle}</title>
 </svelte:head>
 
+<!-- The pairing form: for a first pairing, and while paired for pairing again. -->
+{#snippet pairForm(label)}
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_host">Host:</label>
+		<input type="text" id="pair_host" class={iS.normal} bind:value={pair.host} />
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_port">Port:</label>
+		<input type="text" id="pair_port" class={iS.normal} bind:value={pair.port} />
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<div>TLS:</div>
+		<button
+			class={bS.gray}
+			onclick={() => {
+				pair.tls = !pair.tls;
+				pair.port = pair.tls ? '8443' : '8000';
+			}}>{pair.tls ? 'Yes' : 'No'}</button
+		>
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<label for="pair_password">Server password:</label>
+		<input
+			type="password"
+			id="pair_password"
+			autocomplete="off"
+			class={iS.normal}
+			onkeydown={(e) => {
+				if (e.key == 'Enter') doPair();
+			}}
+			bind:value={pair.password}
+		/>
+	</div>
+	<div class="flex flex-row gap-1 items-center">
+		<button
+			class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
+			disabled={busy}
+			onclick={doPair}>{label}</button
+		>
+	</div>
+{/snippet}
+
 <div id="app_container" class="p-1">
 	<HeaderBar>
 		<div>Settings Sections:</div>
@@ -199,17 +264,50 @@
 	<h1 class="text-xl font-bold">{pageTitle}</h1>
 	<div id="server_section" class="flex flex-col gap-1 w-full py-1">
 		<h2 class="text-lg font-bold">Server:</h2>
-		{#if paired}
+		{#if configured}
 			<div class="flex flex-row gap-1 items-center">
 				<div>
-					Paired with <span class="font-bold">{pairedName}:{data.settings.remote_port}</span>
-					(TLS {data.settings.remote_tls ? 'on' : 'off'})
+					{#if paired}
+						Paired with <span class="font-bold">{pairedName}</span>
+						({serverAddress}, TLS {data.settings.remote_tls ? 'on' : 'off'})
+					{:else}
+						Remote server <span class="font-bold">{serverAddress}</span>
+						(TLS {data.settings.remote_tls ? 'on' : 'off'}), set in the Remote Mode fields below,
+						not paired{data.settings.remote_key ? '; it uses the key chosen under Auth Keys' : ''}
+					{/if}
 				</div>
 				<button
 					class="{bS.red} disabled:opacity-50 disabled:cursor-not-allowed"
 					disabled={busy}
 					onclick={doUnpair}>Unpair</button
 				>
+			</div>
+			<div
+				id="pair_again"
+				class="flex flex-col gap-1 self-start max-w-3xl {mustPairAgain
+					? 'p-2 border-2 border-red-600 rounded bg-red-50'
+					: ''}"
+			>
+				{#if connState === 'certificate'}
+					<p class="{tS.red} font-bold">
+						The server's certificate changed since this client paired with it. If the server was
+						set up again or given a new certificate, {pairVerb.toLowerCase()} with the server password
+						to trust the new one; the saves waiting stay queued and are sent once paired.
+					</p>
+				{:else if connState === 'unauthenticated'}
+					<p class="{tS.red} font-bold">
+						The server refused this client's key. {pairVerb} with the server password: the saves
+						waiting stay queued and are sent once paired.
+					</p>
+				{:else if paired}
+					<div>
+						Pair again with the server password when the server refuses this client's key, its
+						certificate changed, or it moved to another address:
+					</div>
+				{:else}
+					<div>Pair with the server password to give this client a key of its own:</div>
+				{/if}
+				{@render pairForm(pairVerb)}
 			</div>
 		{:else if pairingUnsupported}
 			<div>{NOT_SUPPORTED}</div>
@@ -226,44 +324,7 @@
 			{:else}
 				<div class="italic">Looking for servers on this network...</div>
 			{/each}
-			<div class="flex flex-row gap-1 items-center">
-				<div>Host:</div>
-				<input type="text" id="pair_host" class={iS.normal} bind:value={pair.host} />
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>Port:</div>
-				<input type="text" id="pair_port" class={iS.normal} bind:value={pair.port} />
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>TLS:</div>
-				<button
-					class={bS.gray}
-					onclick={() => {
-						pair.tls = !pair.tls;
-						pair.port = pair.tls ? '8443' : '8000';
-					}}>{pair.tls ? 'Yes' : 'No'}</button
-				>
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<div>Server password:</div>
-				<input
-					type="password"
-					id="pair_password"
-					autocomplete="off"
-					class={iS.normal}
-					onkeydown={(e) => {
-						if (e.key == 'Enter') doPair();
-					}}
-					bind:value={pair.password}
-				/>
-			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<button
-					class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
-					disabled={busy}
-					onclick={doPair}>Pair</button
-				>
-			</div>
+			{@render pairForm('Pair')}
 		{/if}
 		{#if failed > 0}
 			<div class="flex flex-row gap-1 items-center">
@@ -281,7 +342,7 @@
 			</div>
 		{/if}
 		{#if serverMsg.message}
-			<p class={tS[serverMsg.color]}>{serverMsg.message}</p>
+			<p class="{tS[serverMsg.color]} break-words">{serverMsg.message}</p>
 		{/if}
 	</div>
 	<div class="flex flex-col gap-1 w-full py-1">
@@ -355,8 +416,14 @@
 						status.color = 'red';
 					} else {
 						const resData = await res.json();
+						// The Remote Mode fields set where the server is; they do not pair.
+						const remoteChanged = ['remote_server', 'remote_port', 'remote_tls'].some(
+							(k) => resData[k] !== data.settings[k]
+						);
 						settings = { ...resData };
-						status.message = 'Settings saved successfully!';
+						status.message = remoteChanged
+							? 'Remote server settings saved.'
+							: 'Settings saved successfully!';
 						status.color = 'green';
 						clearTimeout(reloadTimer);
 						reloadTimer = setTimeout(() => window.location.reload(), 3000);
