@@ -55,10 +55,26 @@ func ValidatePrefixName(name string) (string, error) {
 // ValidatePrefixes trims names and rejects empty or unusable names, unknown
 // colours and negative weights. Errors name the offending row.
 func ValidatePrefixes(ps []Prefix) error {
+	return ValidatePrefixChanges(ps, nil)
+}
+
+// ValidatePrefixChanges preserves exact identities already in existing,
+// including names restored from the original app that today's new-prefix
+// rules reject. New names are normalized and validated as before; every
+// row's color and weight must still be valid.
+func ValidatePrefixChanges(ps, existing []Prefix) error {
+	known := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		known[p.Prefix] = true
+	}
 	for i := range ps {
-		name, err := ValidatePrefixName(ps[i].Prefix)
-		if err != nil {
-			return fmt.Errorf("prefix %d: %w", i+1, err)
+		name := ps[i].Prefix
+		if !known[name] {
+			var err error
+			name, err = ValidatePrefixName(name)
+			if err != nil {
+				return fmt.Errorf("prefix %d: %w", i+1, err)
+			}
 		}
 		ps[i].Prefix = name
 		if !validColor(ps[i].Color) {
@@ -72,12 +88,12 @@ func ValidatePrefixes(ps []Prefix) error {
 }
 
 // ValidateTickets rejects tickets without a prefix or with a negative id.
-// The contact preference is free text, as in the original; the pages send
-// CALL or TEXT.
+// Prefixes identify existing rows and must stay as restored, including any
+// surrounding whitespace. The contact preference is free text, as in the
+// original; the pages send CALL or TEXT.
 func ValidateTickets(ts []Ticket) error {
 	for i := range ts {
-		ts[i].Prefix = strings.TrimSpace(ts[i].Prefix)
-		if ts[i].Prefix == "" {
+		if strings.TrimSpace(ts[i].Prefix) == "" {
 			return fmt.Errorf("ticket %d: prefix must not be empty", i+1)
 		}
 		if ts[i].TID < 0 {
@@ -88,11 +104,11 @@ func ValidateTickets(ts []Ticket) error {
 	return nil
 }
 
-// ValidateBaskets rejects baskets without a prefix or with negative ids.
+// ValidateBaskets rejects baskets without a prefix or with negative ids,
+// keeping the prefix identity unchanged as ValidateTickets does.
 func ValidateBaskets(bs []Basket) error {
 	for i := range bs {
-		bs[i].Prefix = strings.TrimSpace(bs[i].Prefix)
-		if bs[i].Prefix == "" {
+		if strings.TrimSpace(bs[i].Prefix) == "" {
 			return fmt.Errorf("basket %d: prefix must not be empty", i+1)
 		}
 		if bs[i].BID < 0 {

@@ -19,7 +19,7 @@ const restoreBasketSQL = `INSERT INTO baskets (prefix, b_id, description, donors
 	winning_ticket = EXCLUDED.winning_ticket`
 
 func (s *Store) queryBaskets(query string, args ...any) ([]Basket, error) {
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -66,10 +66,30 @@ func (s *Store) BasketRange(prefix string, from, to int) ([]Basket, error) {
 // UpsertBaskets inserts baskets or updates their description and donors.
 func (s *Store) UpsertBaskets(bs []Basket) error {
 	return s.tx(func(tx *sql.Tx) error {
-		return execEach(tx, upsertBasketSQL, len(bs), func(i int) []any {
-			b := bs[i]
-			return []any{b.Prefix, b.BID, b.Description, b.Donors, b.WinningTicket}
-		})
+		if len(bs) == 0 {
+			return nil
+		}
+		components, err := tx.Prepare(markBasketComponentSQL)
+		if err != nil {
+			return err
+		}
+		defer components.Close()
+		baskets, err := tx.Prepare(upsertBasketSQL)
+		if err != nil {
+			return err
+		}
+		defer baskets.Close()
+		for _, b := range bs {
+			// Mark immediately before each write: a repeated basket in one
+			// batch is an update after the first entry inserted it.
+			if _, err := components.Exec(basketComponentArgs(b, true, false)...); err != nil {
+				return err
+			}
+			if _, err := baskets.Exec(b.Prefix, b.BID, b.Description, b.Donors, b.WinningTicket); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -77,6 +97,9 @@ func (s *Store) UpsertBaskets(bs []Basket) error {
 // when it does not exist yet.
 func (s *Store) UpsertWinning(bs []Basket) error {
 	return s.tx(func(tx *sql.Tx) error {
+		if err := markBasketComponents(tx, bs, false, true); err != nil {
+			return err
+		}
 		return execEach(tx, upsertWinningSQL, len(bs), func(i int) []any {
 			b := bs[i]
 			return []any{b.Prefix, b.BID, b.WinningTicket}

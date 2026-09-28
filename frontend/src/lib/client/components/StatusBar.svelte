@@ -52,6 +52,12 @@
 		const server = status.server_name || status.server || 'server';
 		switch (status.state) {
 			case 'connected':
+				if (status.recovering) {
+					return {
+						color: 'amber',
+						text: `Connected to ${server}, restoring this client's saved data${waiting(pending)}`
+					};
+				}
 				return {
 					color: 'green',
 					text: `Connected to ${server}${pending > 0 ? `, sending ${saves(pending)}` : ''}`
@@ -64,7 +70,7 @@
 				return {
 					color: 'red',
 					text: `The server rejected this client's key${waiting(pending)}: open`,
-					settings: 'and pair again'
+					settings: 'and pair with the server, or choose a new key under Auth Keys'
 				};
 			case 'certificate':
 				return {

@@ -9,7 +9,7 @@ const upsertTicketSQL = `INSERT INTO tickets (prefix, t_id, first_name, last_nam
 	phone_number = EXCLUDED.phone_number, pref = EXCLUDED.pref`
 
 func (s *Store) queryTickets(query string, args ...any) ([]Ticket, error) {
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.query(query, args...)
 	if err != nil {
 		return nil, err
 	}

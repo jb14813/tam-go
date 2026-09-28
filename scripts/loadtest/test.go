@@ -226,7 +226,7 @@ func (t *test) start() error {
 func (t *test) tls() bool { return strings.HasPrefix(t.server.url, "https:") }
 
 // pair pairs every client with the server through its Settings route, all
-// at once, and waits until each shows Connected.
+// at once, and waits until each is connected with recovery and queued saves done.
 func (t *test) pair() error {
 	ph := t.newPhase("Pairing")
 	defer func() { ph.end = time.Now() }()
@@ -240,16 +240,16 @@ func (t *test) pair() error {
 	for _, l := range t.clients {
 		for {
 			st, err := l.peek()
-			if err == nil && st.State == "connected" {
+			if err == nil && st.caughtUp() {
 				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("%s did not show Connected within 30s of pairing (%+v, %v)", l.prog.name, st, err)
+				return fmt.Errorf("%s was not connected and caught up within 30s of pairing (%+v, %v)", l.prog.name, st, err)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	t.record("every client paired and showed Connected", true, "%d clients, in %s", len(t.clients), secs(time.Since(ph.start)))
+	t.record("every client paired, finished recovery and showed Connected", true, "%d clients, in %s", len(t.clients), secs(time.Since(ph.start)))
 	return nil
 }
 
@@ -260,6 +260,9 @@ func (t *test) setup() error {
 	defer func() { ph.end = time.Now() }()
 	if _, err := t.clients[0].call(ph, "save prefixes", http.MethodPost, "/api/prefixes", t.ev.prefixes, nil, len(t.ev.prefixes)); err != nil {
 		return err
+	}
+	if !t.untilCaughtUp(t.clients[0]) {
+		return fmt.Errorf("setup prefixes did not finish recovery/delivery within %s", t.o.settle)
 	}
 	t.each(func(l *client) {
 		var ps []store.Prefix
@@ -399,11 +402,11 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 	fmt.Println("  Wi-Fi back everywhere, queues sent")
 }
 
-// untilCaughtUp waits until the client shows Connected with nothing queued.
+// untilCaughtUp waits until connection, recovery and queue delivery are ready.
 func (t *test) untilCaughtUp(l *client) bool {
 	deadline := time.Now().Add(t.o.settle)
 	for time.Now().Before(deadline) {
-		if st, err := l.peek(); err == nil && st.State == "connected" && st.Pending == 0 {
+		if st, err := l.peek(); err == nil && st.caughtUp() {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -489,7 +492,7 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 			l.mu.Lock()
 			// The outage's window closes the first time the client shows
 			// Connected with nothing queued.
-			if w := &l.away[l.outage]; w.to.IsZero() && st.State == "connected" && st.Pending == 0 {
+			if w := &l.away[l.outage]; w.to.IsZero() && st.caughtUp() {
 				w.to = time.Now()
 			}
 			all = all && !l.away[l.outage].to.IsZero()
@@ -504,14 +507,14 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 	}
 }
 
-// settle waits until every client shows Connected with nothing queued.
+// settle waits until every client's recovery and queued saves have finished.
 func (t *test) settle(when string) {
 	deadline := time.Now().Add(t.o.settle)
 	for {
 		away, waiting := 0, 0
 		for _, l := range t.clients {
 			st, err := l.peek()
-			if err != nil || st.State != "connected" {
+			if err != nil || st.State != "connected" || st.Recovering {
 				away++
 			}
 			if err == nil {
@@ -522,7 +525,7 @@ func (t *test) settle(when string) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.problems.add("settle", 1, "%s: %s later %d clients were not connected and %d saves were still queued", when, t.o.settle, away, waiting)
+			t.problems.add("settle", 1, "%s: %s later %d clients were disconnected or recovering and %d saves were still queued", when, t.o.settle, away, waiting)
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

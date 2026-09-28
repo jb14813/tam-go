@@ -15,6 +15,19 @@ type Order struct {
 	Save   int64
 }
 
+// ClientName returns this data folder's stable save-order identity without
+// consuming a save number. Recovery uses it to distinguish clients that
+// share an access key. A copied data folder on a new host gets a new name.
+func (s *Store) ClientName(host string) (string, error) {
+	var name string
+	err := s.tx(func(tx *sql.Tx) error {
+		var err error
+		name, _, err = clientName(tx, host)
+		return err
+	})
+	return name, err
+}
+
 // NextSave returns this client's name and the number of its next save. The
 // name is made on first use; a data folder copied to another machine
 // (another host name) makes a name of its own there, so two clients never
@@ -31,24 +44,34 @@ func (s *Store) NextSave(host string) (Order, error) {
 
 // nextSave is NextSave inside a transaction.
 func nextSave(tx *sql.Tx, host string) (Order, error) {
+	client, last, err := clientName(tx, host)
+	if err != nil {
+		return Order{}, err
+	}
+	last++
+	if _, err := tx.Exec(`UPDATE save_order SET last_save = ? WHERE id = 1`, last); err != nil {
+		return Order{}, err
+	}
+	return Order{Client: client, Save: last}, nil
+}
+
+func clientName(tx *sql.Tx, host string) (string, int64, error) {
 	var client, known string
 	var last int64
 	err := tx.QueryRow(`SELECT client, host, last_save FROM save_order WHERE id = 1`).Scan(&client, &known, &last)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return Order{}, err
+		return "", 0, err
 	}
 	if client == "" || known != host {
 		if client, err = newClientName(); err != nil {
-			return Order{}, err
+			return "", 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO save_order (id, client, host, last_save) VALUES (1, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET client = excluded.client, host = excluded.host`, client, host, last); err != nil {
+			return "", 0, err
 		}
 	}
-	last++
-	if _, err := tx.Exec(`INSERT INTO save_order (id, client, host, last_save) VALUES (1, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET client = excluded.client, host = excluded.host, last_save = excluded.last_save`,
-		client, host, last); err != nil {
-		return Order{}, err
-	}
-	return Order{Client: client, Save: last}, nil
+	return client, last, nil
 }
 
 func newClientName() (string, error) {

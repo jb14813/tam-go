@@ -54,6 +54,14 @@ func (s *Store) exec(query string, args ...any) (sql.Result, error) {
 	return s.db.Exec(query, args...)
 }
 
+// query lets a transaction-scoped Store read its own consistent snapshot.
+func (s *Store) query(query string, args ...any) (*sql.Rows, error) {
+	if s.in != nil {
+		return s.in.Query(query, args...)
+	}
+	return s.db.Query(query, args...)
+}
+
 // execReturning runs one statement that writes and returns a row (DELETE
 // ... RETURNING), in its turn, and scans the row into dest.
 func (s *Store) execReturning(query string, args []any, dest ...any) error {
@@ -106,7 +114,7 @@ func scanPrefixes(rows *sql.Rows) ([]Prefix, error) {
 
 // ListPrefixes returns every prefix ordered by weight, then name.
 func (s *Store) ListPrefixes() ([]Prefix, error) {
-	rows, err := s.db.Query(`SELECT ` + prefixCols + ` FROM prefixes ORDER BY weight, prefix`)
+	rows, err := s.query(`SELECT ` + prefixCols + ` FROM prefixes ORDER BY weight, prefix`)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +127,9 @@ const upsertPrefixSQL = `INSERT INTO prefixes (prefix, color, weight) VALUES (?,
 // UpsertPrefixes inserts or updates the given prefixes in one transaction.
 func (s *Store) UpsertPrefixes(ps []Prefix) error {
 	return s.tx(func(tx *sql.Tx) error {
+		if err := recoveryPrefixesSaved(tx, ps); err != nil {
+			return err
+		}
 		return execEach(tx, upsertPrefixSQL, len(ps), func(i int) []any {
 			return []any{ps[i].Prefix, ps[i].Color, ps[i].Weight}
 		})
@@ -131,12 +142,22 @@ func (s *Store) DeletePrefix(name string) (*Prefix, error) {
 	var p Prefix
 	var color sql.NullString
 	var weight sql.NullInt64
-	err := s.execReturning(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, []any{name}, &p.Prefix, &color, &weight)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	found := false
+	err := s.tx(func(tx *sql.Tx) error {
+		// An absent row still records the user's deletion: a later client's
+		// saved copy must not put its menu prefix back during recovery.
+		err := tx.QueryRow(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, name).Scan(&p.Prefix, &color, &weight)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		found = err == nil
+		return recoveryPrefixDeleted(tx, name, found)
+	})
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	p.Color, p.Weight = nstr(color), nint(weight)
 	return &p, nil
@@ -339,6 +360,9 @@ func (s *Store) Import(bf BackupFile) error {
 			return []any{p.Prefix, p.Color, p.Weight}
 		}); err != nil {
 			return fmt.Errorf("prefixes: %w", err)
+		}
+		if err := markBasketComponents(tx, bf.Baskets, true, true); err != nil {
+			return fmt.Errorf("basket components: %w", err)
 		}
 		if err := execEach(tx, restoreBasketSQL, len(bf.Baskets), func(i int) []any {
 			b := bf.Baskets[i]

@@ -8,8 +8,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Tables is the table schema of both daemons, copied from the original
-// Ticket Auction Manager. Every statement is idempotent.
+// Tables is the shared schema. The original event tables keep their column
+// layout; basket_components records which form supplied each basket part.
+// Every statement is idempotent.
 var Tables = []string{
 	`CREATE TABLE IF NOT EXISTS prefixes (
 		prefix TEXT PRIMARY KEY,
@@ -33,6 +34,12 @@ var Tables = []string{
 	`CREATE TABLE IF NOT EXISTS auth_keys (
 		auth_key TEXT PRIMARY KEY,
 		description TEXT)`,
+	`CREATE TABLE IF NOT EXISTS basket_components (
+		prefix TEXT NOT NULL,
+		b_id INTEGER NOT NULL,
+		metadata INTEGER NOT NULL DEFAULT 0,
+		drawing INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (prefix, b_id))`,
 }
 
 // View is a named view definition. Views are recreated on every start so a
@@ -97,6 +104,27 @@ func Migrate(sqldb *sql.DB) error {
 	for _, stmt := range Tables {
 		if _, err := sqldb.Exec(stmt); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
+		}
+	}
+	if _, err := sqldb.Exec(`CREATE TRIGGER IF NOT EXISTS basket_components_delete
+		AFTER DELETE ON baskets BEGIN
+		DELETE FROM basket_components WHERE prefix = OLD.prefix AND b_id = OLD.b_id; END`); err != nil {
+		return fmt.Errorf("apply basket component cleanup: %w", err)
+	}
+	// The original apps can reopen this database and write the shared
+	// basket columns directly. Track their explicit column updates too,
+	// including clearing a field to its existing empty/zero value. Rows
+	// without provenance already use the conservative complete fallback.
+	for _, statement := range []string{
+		`CREATE TRIGGER IF NOT EXISTS basket_components_metadata
+			AFTER UPDATE OF description, donors ON baskets BEGIN
+			UPDATE basket_components SET metadata = 1 WHERE prefix = NEW.prefix AND b_id = NEW.b_id; END`,
+		`CREATE TRIGGER IF NOT EXISTS basket_components_drawing
+			AFTER UPDATE OF winning_ticket ON baskets BEGIN
+			UPDATE basket_components SET drawing = 1 WHERE prefix = NEW.prefix AND b_id = NEW.b_id; END`,
+	} {
+		if _, err := sqldb.Exec(statement); err != nil {
+			return fmt.Errorf("apply basket component tracking: %w", err)
 		}
 	}
 	for _, v := range Views {

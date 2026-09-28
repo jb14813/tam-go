@@ -63,7 +63,9 @@
 		// Resolves to false when the marked rows could not be saved.
 		async save(opts = {}) {
 			const problem = await saveMarked('/api/baskets', itemsBuffer, {
-				keepalive: !!opts.keepalive
+				keepalive: !!opts.keepalive,
+				// A winner displayed in a server row belongs to the Drawing form.
+				payload: ({ prefix, b_id, description, donors }) => ({ prefix, b_id, description, donors })
 			});
 			// A save made as the page is hidden or closed shows nothing and leaves
 			// the cursor where it is: the volunteer may come back to the row.

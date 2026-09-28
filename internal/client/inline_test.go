@@ -67,7 +67,7 @@ func serverHas(t *testing.T, rst *store.Store, id int, name string) {
 }
 
 // TestRetryPutsSavesBehindTheQueue: the Settings page offers Retry for the
-// saves set aside when the client paired with another server. A save still
+// saves the server refused. A save still
 // queued for the new server when Retry is pressed must not be overtaken:
 // the retried save goes behind it, with a newer number, and both arrive.
 func TestRetryPutsSavesBehindTheQueue(t *testing.T) {
@@ -80,6 +80,10 @@ func TestRetryPutsSavesBehindTheQueue(t *testing.T) {
 		t.Fatalf("save with the first server gone = %d %s", code, body)
 	}
 	other := newServerStore(t)
+	// Model a permanent refusal, rather than changing the event's server.
+	if _, err := f.st.FailAllOutbox("server refused this save"); err != nil {
+		t.Fatal(err)
+	}
 	second := newFlakyServer(t, other, "second-box")
 	f.pairTo(second.ts.URL)
 	f.h.sync.Tick()
@@ -376,9 +380,8 @@ func TestBrokenSettingsFileWithoutACopyIsReported(t *testing.T) {
 }
 
 // TestPairingWithAnotherServerKeepsLocalDataInAFile: a client with data of
-// its own (entered standalone) that pairs with a server gets the server's
-// data, which replaces its rows with the same numbers; its own data is
-// saved to a file in its data folder first, and the answer says where.
+// its own (entered standalone) keeps that data and a backup file when it
+// pairs with a server; the answer says where the backup was saved.
 func TestPairingWithAnotherServerKeepsLocalDataInAFile(t *testing.T) {
 	f := newFixture(t)
 	if code, body := f.do("POST", "/api/prefixes", []store.Prefix{{Prefix: "A", Color: "red", Weight: 1}}, nil); code != 200 {

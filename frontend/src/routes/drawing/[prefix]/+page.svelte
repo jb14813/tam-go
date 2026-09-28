@@ -1,7 +1,8 @@
 <script>
+	import { onMount } from 'svelte';
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
+	import { getJSON, lookupTicket, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -25,27 +26,52 @@
 		}
 	};
 
-	// Shows the winner of the number in a row's Winning Ticket box. Every
-	// keystroke asks, and answers can come back out of order (a slow link to
-	// the server): an answer for a number no longer in the box is dropped, so
-	// the lookup of 1 cannot replace the winner of 123. An empty box, or one
-	// that holds no ticket number, has no winner and is not looked up.
+	let active = false;
+	let lookupSequence = 0;
+	const lookups = new WeakMap();
+	const contact = (ticket) => {
+		const name = [ticket.last_name, ticket.first_name].filter(Boolean).join(', ');
+		return [name, ticket.phone_number].filter(Boolean).join(': ');
+	};
+	// The request identity also rejects an older retry for the same number.
+	// Zero means undrawn; it must not look up ticket zero.
 	async function showWinner(item) {
 		const wanted = item.winning_ticket;
-		let ticket = null;
-		if (Number.isInteger(wanted) && wanted >= 0) {
-			try {
-				ticket = await getJSON(`/api/tickets/${encodeURIComponent(prefix.prefix)}/${wanted}`);
-			} catch {
-				// No winner shown when the lookup fails.
+		const wantedPrefix = prefix.prefix;
+		const request = ++lookupSequence;
+		lookups.set(item, request);
+		item.lookupMessage = '';
+		item.lookupRetry = false;
+		item.lookupPending = false;
+		if (!Number.isInteger(wanted) || wanted <= 0) return;
+		item.lookupMessage = 'Lookup pending…';
+		item.lookupPending = true;
+		const current = () => active && lookups.get(item) === request &&
+			item.winning_ticket === wanted && prefix.prefix === wantedPrefix && items.includes(item);
+		try {
+			const { ticket, found, source, mode } = await lookupTicket(wantedPrefix, wanted);
+			if (!current()) return;
+			item.lookupRetry = mode !== 'standalone' && (source !== 'server' || !found);
+			if (mode === 'standalone') {
+				item.lookupMessage = found
+					? contact(ticket) || 'Ticket found; no contact info entered'
+					: 'Ticket not found on this client';
+			} else if (source === 'server') {
+				item.lookupMessage = found
+					? contact(ticket) || 'Ticket found; no contact info entered'
+					: 'Ticket not found on server; another client may still have unsent entries';
+			} else {
+				item.lookupMessage = found
+					? `${contact(ticket) || 'Ticket found; no contact info entered'}. Local entry only; server lookup unavailable. Retrying.`
+					: 'Server lookup unavailable; this client has no local entry for this ticket. Retrying.';
 			}
-			if (item.winning_ticket !== wanted) return;
+		} catch {
+			if (!current()) return;
+			item.lookupMessage = 'Ticket lookup unavailable; could not reach the TAM client program. Retrying.';
+			item.lookupRetry = true;
+		} finally {
+			if (current()) item.lookupPending = false;
 		}
-		[item.last_name, item.first_name, item.phone_number] = [
-			ticket?.last_name || '',
-			ticket?.first_name || '',
-			ticket?.phone_number || ''
-		];
 	}
 
 	let pager = $state({ idFrom: 0, idTo: 0 });
@@ -78,6 +104,7 @@
 			}
 			resData.map((i) => (i.changed = false));
 			items = [...resData];
+			for (const item of items) showWinner(item);
 			setTimeout(() => focusIdx(0));
 		},
 		// Resolves to false when the marked rows could not be saved.
@@ -86,7 +113,8 @@
 				keepalive: !!opts.keepalive,
 				// A drawing line stores its winning ticket; the winner's name
 				// beside it only shows the lookup, which may answer meanwhile.
-				saved: (line) => line.winning_ticket
+				saved: (line) => line.winning_ticket,
+				payload: ({ prefix, b_id, winning_ticket }) => ({ prefix, b_id, winning_ticket })
 			});
 			// A save made as the page is hidden or closed shows nothing and leaves
 			// the cursor where it is: the volunteer may come back to the row.
@@ -138,9 +166,9 @@
 		},
 		dupDown() {
 			if (items[nextIdx]) {
-				const buffer = { ...items[curIdx] };
-				['prefix', 'b_id'].forEach((key) => delete buffer[key]);
-				items[nextIdx] = { ...items[nextIdx], ...buffer, changed: true };
+				items[nextIdx].winning_ticket = items[curIdx].winning_ticket;
+				items[nextIdx].changed = true;
+				showWinner(items[nextIdx]);
 				this.nextLine();
 			} else {
 				focusIdx(curIdx);
@@ -148,9 +176,9 @@
 		},
 		dupUp() {
 			if (curIdx > 0) {
-				const buffer = { ...items[curIdx] };
-				['prefix', 'b_id'].forEach((key) => delete buffer[key]);
-				items[prevIdx] = { ...items[prevIdx], ...buffer, changed: true };
+				items[prevIdx].winning_ticket = items[curIdx].winning_ticket;
+				items[prevIdx].changed = true;
+				showWinner(items[prevIdx]);
 				this.prevLine();
 			} else {
 				focusIdx(curIdx);
@@ -158,8 +186,7 @@
 		},
 		copy() {
 			if (items[curIdx]) {
-				const buffer = { ...items[curIdx] };
-				['prefix', 'b_id'].forEach((key) => delete buffer[key]);
+				const buffer = { winning_ticket: items[curIdx].winning_ticket };
 				window.localStorage.setItem('tam-drawing', JSON.stringify(buffer));
 			}
 			focusIdx(curIdx);
@@ -167,7 +194,11 @@
 		paste() {
 			if (items[curIdx]) {
 				const buffer = JSON.parse(window.localStorage.getItem('tam-drawing'));
-				items[curIdx] = { ...items[curIdx], ...buffer, changed: true };
+				if (buffer) {
+					items[curIdx].winning_ticket = buffer.winning_ticket;
+					items[curIdx].changed = true;
+					showWinner(items[curIdx]);
+				}
 			}
 			focusIdx(curIdx);
 		}
@@ -176,6 +207,19 @@
 
 	// Marked rows are saved when the page is hidden, left or closed.
 	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
+	onMount(() => {
+		active = true;
+		const retry = setInterval(() => {
+			if (document.visibilityState === 'hidden') return;
+			for (const item of items) {
+				if (item.lookupRetry && !item.lookupPending) showWinner(item);
+			}
+		}, 5000);
+		return () => {
+			active = false;
+			clearInterval(retry);
+		};
+	});
 </script>
 
 <svelte:head>
@@ -223,7 +267,9 @@
 						class="{iS.normal} w-full"
 						id="{idx}_first"
 						aria-label="Basket {item.b_id} winning ticket"
-						oninput={() => {
+						oninput={(event) => {
+							// Svelte runs this handler before updating bind:value.
+							item.winning_ticket = event.currentTarget.value === '' ? undefined : event.currentTarget.valueAsNumber;
 							item.changed = true;
 							showWinner(item);
 						}}
@@ -231,7 +277,7 @@
 					/></td
 				>
 				<td class="p-0.5 border">
-					{item.last_name || ''}, {item.first_name || ''}: {item.phone_number || ''}
+					<div role="status" aria-label="Basket {item.b_id} winner lookup">{item.lookupMessage || ''}</div>
 				</td>
 				<td class="p-0.5 border"
 					><button

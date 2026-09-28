@@ -137,7 +137,7 @@ func TestStandaloneHasNoState(t *testing.T) {
 	}
 }
 
-func TestDrainOrderFailedListAndPull(t *testing.T) {
+func TestDrainOrderAndFailedList(t *testing.T) {
 	f := newFakeServer(t)
 	s, st := newSyncer(t, f.ts.URL)
 	for _, q := range [][2]string{{"POST", "/api/tickets"}, {"POST", "/api/bad"}, {"POST", "/api/baskets"}} {
@@ -151,7 +151,7 @@ func TestDrainOrderFailedListAndPull(t *testing.T) {
 	}
 	seen := f.seen()
 	// The replay is followed at once by a heartbeat saying nothing waits.
-	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api", "GET /api/backuprestore"}
+	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api"}
 	if len(seen) != len(want) {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
@@ -163,12 +163,6 @@ func TestDrainOrderFailedListAndPull(t *testing.T) {
 	failed, _ := st.ListFailed()
 	if len(failed) != 1 || failed[0].Path != "/api/bad" || failed[0].LastError != "400: nope" {
 		t.Fatalf("failed list = %+v", failed)
-	}
-	// The pull copied the server's data into the mirror.
-	ps, _ := st.ListPrefixes()
-	ts, _ := st.AllTickets()
-	if len(ps) != 1 || ps[0].Prefix != "S" || len(ts) != 1 || ts[0].LastName != "Server" {
-		t.Fatalf("mirror after pull: prefixes %+v tickets %+v", ps, ts)
 	}
 	status := s.Status()
 	if status.Mode != "remote" || status.State != Connected || status.ServerName != "fake" || status.Pending != 0 || status.Failed != 1 || status.LastOK == "" {
@@ -218,9 +212,9 @@ func TestServerGoesAwayAndComesBack(t *testing.T) {
 		t.Fatalf("outbox after reconnect: pending %d failed %d", p, fl)
 	}
 	seen := f.seen()
-	last := seen[len(seen)-3:]
-	if last[0] != "POST /api/tickets" || last[1] != "GET /api" || last[2] != "GET /api/backuprestore" {
-		t.Fatalf("after reconnect the queue drains, a heartbeat says so, then the mirror is pulled; tail = %v", last)
+	last := seen[len(seen)-2:]
+	if last[0] != "POST /api/tickets" || last[1] != "GET /api" {
+		t.Fatalf("after reconnect the queue drains and a heartbeat says so; tail = %v", last)
 	}
 }
 
@@ -292,46 +286,6 @@ func TestHeartbeatCarriesTheQueuedSaves(t *testing.T) {
 	s.Tick()
 	if got := f.lastHeartbeat().Get("X-TAM-Pending"); got != "0" {
 		t.Fatalf("heartbeat after the drain said X-TAM-Pending %q, want 0", got)
-	}
-}
-
-// TestPullWaitsForSavesQueuedAfterTheReplay: a page save can be queued in
-// the moment between the replay finding nothing left to send and the pull
-// starting. The server does not have that save yet, so the pull must wait
-// until it has been sent instead of copying the server's older row over it.
-func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
-	f := newFakeServer(t)
-	s, st := newSyncer(t, f.ts.URL)
-	s.pulling = func() {
-		s.pulling = nil
-		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Client", PhoneNumber: "2", Pref: "CALL"}}
-		if err := st.UpsertTickets(row); err != nil {
-			t.Fatal(err)
-		}
-		body, _ := json.Marshal(row)
-		if err := s.Enqueue("POST", "/api/tickets", body); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s.Tick()
-	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Client" {
-		t.Fatalf("the client's copy has %+v, want its queued save (Client)", tk)
-	}
-	for _, r := range f.seen() {
-		if r == "GET /api/backuprestore" {
-			t.Fatalf("the pull downloaded while a save was still queued: %v", f.seen())
-		}
-	}
-
-	// The next tick sends the save first (and says the queue is empty),
-	// then pulls.
-	s.Tick()
-	if p, _ := pendingFailed(t, st); p != 0 {
-		t.Fatalf("pending after the second tick = %d, want 0", p)
-	}
-	seen := f.seen()
-	if n := len(seen); n < 3 || seen[n-3] != "POST /api/tickets" || seen[n-2] != "GET /api" || seen[n-1] != "GET /api/backuprestore" {
-		t.Fatalf("requests = %v, want the queued save sent before the download", seen)
 	}
 }
 

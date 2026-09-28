@@ -101,8 +101,7 @@
 		if (!host) return say('Enter the server host or pick one from the list', 'red');
 		if (!port) return say('Enter the server port', 'red');
 		busy = true;
-		// Pairing again with the server this client is paired with keeps the
-		// saves still waiting for it; the client sends them once paired.
+		// The event's waiting saves follow the server, including a replacement.
 		const r = await post('/api/pair', { host, port, tls: !!pair.tls, password: pair.password });
 		busy = false;
 		// The whole answer: it may also say what became of this client's own data.
@@ -116,12 +115,11 @@
 
 	async function doUnpair() {
 		if (busy) return;
-		// After pairing, the client's own copy is the server's data; what the
-		// client had not sent yet goes to the failed list (see the client's unpair).
+		// Keep the event copy and pause delivery until a server is configured.
 		const now = pending > 0 ? ` (${pending} now)` : '';
 		if (
 			!confirm(
-				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps the copy of the server's data it has now. Saves still waiting to reach the server${now} are set aside in the failed list.`
+				`Unpair from ${pairedName}? This client keeps its event data and works standalone. Saves waiting to reach the server${now} stay queued and resume when a server is configured again.`
 			)
 		)
 			return;

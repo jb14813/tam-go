@@ -122,6 +122,12 @@ type handler struct {
 // {"detail": ...} like the original. Every request with a valid key is
 // recorded for the admin page; see WithPresence.
 func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
+	if err := st.BeginRecovery(); err != nil {
+		log.Printf("initialize event recovery: %v", err)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpx.WriteInternal(w, err)
+		})
+	}
 	hostname, _ := os.Hostname()
 	h := &handler{
 		st: st, pw: pw, info: Info{Name: hostname, Version: version.Version},
@@ -143,6 +149,7 @@ func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 	mux.Handle("DELETE /api/auth", h.requirePassword(h.deleteKey))
 
 	key := h.requireKey
+	mux.Handle("POST /api/recovery", key(h.recoverEvent))
 	mux.Handle("GET /api/prefixes", key(h.listPrefixes))
 	mux.Handle("POST /api/prefixes", key(h.postPrefixes))
 	mux.Handle("DELETE /api/prefixes", key(h.deletePrefix))
@@ -348,10 +355,26 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 			h.presence.Seen(key, clientOf(r))
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+	reply := map[string]any{
 		"whoami": "TAM Server", "authenticated": authed, "healthy": true,
 		"name": h.info.Name, "version": h.info.Version,
-	})
+	}
+	if authed {
+		client, err := recoveryClient(r)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		token, err := h.st.RecoveryToken(key, client)
+		if err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
+		if token != "" {
+			reply["recovery_token"] = token
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, reply)
 }
 
 // errOrder is a save whose name and number (X-TAM-Client-Name, X-TAM-Save) do
@@ -502,6 +525,9 @@ func (h *handler) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k, err := h.st.CreateKey(req.Description)
+	if err == nil {
+		err = h.st.BeginRecovery()
+	}
 	respond(w, k, err)
 }
 
@@ -532,7 +558,14 @@ func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	ps, ok := decodeList(w, r, store.ValidatePrefixes)
+	existing, err := h.st.ListPrefixes()
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	ps, ok := decodeList(w, r, func(ps []store.Prefix) error {
+		return store.ValidatePrefixChanges(ps, existing)
+	})
 	if !ok {
 		return
 	}

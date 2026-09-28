@@ -1,5 +1,9 @@
 # Test results
 
+The latest recovery and shared winner-lookup validation is in
+[Event recovery test results](recovery-test-results.md) (2026-09-28). The results
+below are the archived 2026-09-27 build at `fcbb12e`.
+
 The printed results of the tests, as the tools print them. CI prints the same for every push, on the run's page on GitHub (Actions), and keeps them as files under Artifacts; these are the longer runs, made on a real machine. [Running the tests](../README.md#running-the-tests) has the commands.
 
 - Date: 2026-09-27

@@ -269,14 +269,14 @@ func (t *test) checkClients() {
 		st, err := l.peek()
 		mu.Lock()
 		defer mu.Unlock()
-		if err != nil || st.State != "connected" {
+		if err != nil || st.State != "connected" || st.Recovering {
 			away++
 		}
 		waiting += st.Pending
 		failed += st.Failed
 	})
 	t.record("every client ends connected with nothing waiting or refused", away+waiting+failed == 0,
-		"%d clients: %d not connected, %d saves waiting, %d refused by the server", len(t.clients), away, waiting, failed)
+		"%d clients: %d disconnected or recovering, %d saves waiting, %d refused by the server", len(t.clients), away, waiting, failed)
 }
 
 // checkPresence reads the Clients table of the server's admin page.
@@ -336,20 +336,27 @@ func (t *test) checkRequests() {
 	// client still has saves from then to send: from the moment the server
 	// was killed (a save already on its way may be cut off too, hence the
 	// client's five-second write timeout of slack) until the client shows
-	// nothing queued. Any other queued save means the server was too slow.
-	total, unexpected := 0, 0
+	// nothing queued. Online recovery/catch-up also legitimately queues,
+	// but requires status evidence observed before that save was made.
+	total, unexpected, recovering, catchup := 0, 0, 0, 0
 	for _, l := range t.clients {
 		l.mu.Lock()
 		for _, at := range l.queuedAt {
 			total++
+			if at.reason == "recovery" {
+				recovering++
+			}
+			if at.reason == "catchup" {
+				catchup++
+			}
 			if !l.queuedRightly(at) {
 				unexpected++
 			}
 		}
 		l.mu.Unlock()
 	}
-	t.record("saves were queued only while the server was out of reach", unexpected == 0,
-		"%d saves queued, %d of them while the client could reach the server", total, unexpected)
+	t.record("saves were queued only during outages or observed recovery/catch-up", unexpected == 0,
+		"%d saves queued, %d observed during recovery, %d behind an existing online queue, %d unexplained", total, recovering, catchup, unexpected)
 
 	// A page waits for the server five seconds at most, then works from the
 	// client's own copy; a second more covers the rest of the work.

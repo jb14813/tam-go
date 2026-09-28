@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
-PIN=19eab77
+PIN=7ff95fa228c23c14f5d86c131b079e83cbe19fde
 WORK=${TAM_COMPAT_WORK:-$(mktemp -d)}
 mkdir -p "$WORK"
 ORIG=${TAM_ORIGINAL:-$WORK/tam}
@@ -23,6 +23,17 @@ PY=${PYTHON:-}
 if [ -z "$PY" ]; then
   if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
 fi
+# The original server's reports use SQLite's concat() function. Fail here
+# with the actual runtime problem instead of letting its 500 response make
+# the Go client fall back to its local data during a compatibility check.
+"$PY" - <<'PY'
+import sqlite3
+import sys
+try:
+    sqlite3.connect(":memory:").execute("SELECT concat('T', 'AM')").fetchone()
+except sqlite3.OperationalError:
+    sys.exit("Compatibility tests need a Python SQLite runtime with concat(); use a newer Python/SQLite runtime.")
+PY
 pnpm_cmd="pnpm"
 command -v pnpm >/dev/null 2>&1 || pnpm_cmd="npx --yes pnpm@12"
 PASSWORD=compat-secret

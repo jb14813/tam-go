@@ -631,6 +631,9 @@ func (h *handler) createKey(w http.ResponseWriter, r *http.Request, s *session) 
 		return
 	}
 	k, err := h.st.CreateKey(description)
+	if err == nil {
+		err = h.st.BeginRecovery()
+	}
 	if err != nil {
 		h.internal(w, r, err)
 		return

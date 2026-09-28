@@ -148,6 +148,69 @@ jobs:
             ${{ runner.temp }}/load-test.txt
           if-no-files-found: ignore
 
+  browser:
+    name: Browser saves and shared winner lookups
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: scripts/browser/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build the real Linux programs
+        run: go build -o "$RUNNER_TEMP/" ./cmd/tam-client ./cmd/tam-server
+
+      - name: Install the pinned browser test tools
+        working-directory: scripts/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Save marked rows and look up winners across clients
+        working-directory: scripts/browser
+        env:
+          TAM_CLIENT_BIN: ${{ runner.temp }}/tam-client
+          TAM_SERVER_BIN: ${{ runner.temp }}/tam-server
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/browser-tests.txt"
+
+      - name: Printed results on the run page
+        if: always()
+        run: |
+          {
+            echo '### Browser saves and shared winner lookups'
+            echo '```'
+            cat "$RUNNER_TEMP/browser-tests.txt" 2>/dev/null || echo "(the tests did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep browser results and failure traces
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-tests
+          path: |
+            ${{ runner.temp }}/browser-tests.txt
+            scripts/browser/playwright-report/
+            scripts/browser/test-results/
+          if-no-files-found: ignore
+
   compat:
     name: Compatibility with the original tam
     runs-on: ubuntu-latest

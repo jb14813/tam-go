@@ -8,10 +8,9 @@ import (
 )
 
 // MigrateServer applies the schema additions only tam-server needs, after
-// Migrate: the client_saves table and the auth_key_activity table (see
-// migrateKeyActivity). The original app never reads either, so a database
-// shared with the original server keeps working. It is safe to run on
-// every start.
+// Migrate: save ordering, key activity (see migrateKeyActivity), and event
+// recovery. The original app never reads these tables, so a database shared
+// with the original server keeps working. It is safe to run on every start.
 func MigrateServer(sqldb *sql.DB) error {
 	// client_saves holds, per client, the number and digest of the last save
 	// applied from it, so a copy of an older save the network delivers late
@@ -32,7 +31,41 @@ func MigrateServer(sqldb *sql.DB) error {
 			return fmt.Errorf("add client_saves.last_hash: %w", err)
 		}
 	}
-	return migrateKeyActivity(sqldb)
+	if err := migrateKeyActivity(sqldb); err != nil {
+		return err
+	}
+	// Recovery is server-only metadata; the original event and auth-key
+	// tables keep their shared schema. Each client has its own receipt,
+	// including when several clients use the same access key.
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS recovery_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL,
+			populated INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS recovery_requests (
+			auth_key TEXT PRIMARY KEY, token TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS recovery_receipts (
+			auth_key TEXT NOT NULL, client TEXT NOT NULL, token TEXT NOT NULL,
+			PRIMARY KEY (auth_key, client))`,
+		`CREATE TABLE IF NOT EXISTS recovery_deleted_prefixes (prefix TEXT PRIMARY KEY)`,
+	} {
+		if _, err := sqldb.Exec(statement); err != nil {
+			return fmt.Errorf("apply recovery schema: %w", err)
+		}
+	}
+	// Remember actual writes, even if the event is emptied before another
+	// heartbeat or restart. The next empty startup can then distinguish a
+	// new loss from an unfinished recovery whose clients had no data yet.
+	for _, table := range []string{"prefixes", "tickets", "baskets"} {
+		for _, operation := range []string{"INSERT", "UPDATE"} {
+			statement := `CREATE TRIGGER IF NOT EXISTS recovery_populated_` + table + `_` + strings.ToLower(operation) +
+				` AFTER ` + operation + ` ON ` + table + ` BEGIN
+				UPDATE recovery_state SET populated = 1 WHERE id = 1 AND populated = 0; END`
+			if _, err := sqldb.Exec(statement); err != nil {
+				return fmt.Errorf("apply recovery trigger: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // keyActivity are the columns of auth_key_activity besides the key: last_seen

@@ -41,6 +41,26 @@ export async function getJSON(url, { fetch: doFetch = globalThis.fetch, headers 
 	return res.json();
 }
 
+/** A ticket placeholder has the same JSON shape as a saved blank ticket.
+ * The client API headers distinguish existence and a shared-server answer
+ * from this workstation's own local entries when the server is unavailable.
+ */
+export async function lookupTicket(prefix, id, { fetch: doFetch = globalThis.fetch } = {}) {
+	let res;
+	try {
+		res = await doFetch(`/api/tickets/${encodeURIComponent(prefix)}/${id}`);
+	} catch {
+		error(503, API_UNREACHABLE);
+	}
+	if (!res.ok) error(res.status, await readDetail(res));
+	return {
+		ticket: await res.json(),
+		found: res.headers.get('X-TAM-Found') === '1',
+		source: res.headers.get('X-TAM-Source') === 'server' ? 'server' : 'local',
+		mode: res.headers.get('X-TAM-Mode') === 'standalone' ? 'standalone' : 'remote'
+	};
+}
+
 /**
  * POST a JSON body (always with `Content-Type: application/json`).
  * Returns the raw Response so callers can check `res.ok` and read the body.
@@ -73,17 +93,18 @@ export const SAVE_UNREACHABLE =
  * `saved(row)` is the part of a row the save stores, the whole row unless
  * the form says otherwise; a row whose part changed while the save was on
  * its way stays marked.
+ * `payload(row)` selects the fields the form actually edits for the request.
  */
 export async function saveMarked(
 	url,
 	rows,
-	{ keepalive = false, saved = (r) => JSON.stringify(r) } = {}
+	{ keepalive = false, saved = (r) => JSON.stringify(r), payload = (r) => r } = {}
 ) {
 	if (rows.length === 0) return '';
 	const sent = rows.map(saved);
 	let res;
 	try {
-		res = await postJSON(url, rows, { keepalive });
+		res = await postJSON(url, rows.map(payload), { keepalive });
 	} catch {
 		return SAVE_UNREACHABLE;
 	}

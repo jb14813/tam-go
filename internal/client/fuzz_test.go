@@ -23,12 +23,12 @@ import (
 // FuzzTicketRoundTrip: a ticket that tam-client accepts, paired with a
 // server or standalone, is in every store the save reaches (the client's
 // own copy, and the server's, directly or through the client's queue) as it
-// was sent: prefix and preference trimmed, the text as a JSON decoder reads
+// was sent: prefix preserved and preference trimmed, text as a JSON decoder reads
 // it. Every route the pages read it through returns it: the list of all
 // tickets, and the single ticket, the range and the prefix's list with the
 // prefix escaped as the web app escapes it, and as tam-client escapes it for
 // the server. A search for its own name and phone number finds it, and a
-// pull leaves the client's copy equal to the server's. A batch the client
+// reconnect leaves the client's own entries intact. A batch the client
 // refuses answers 4xx with a detail and changes nothing anywhere.
 func FuzzTicketRoundTrip(f *testing.F) {
 	type seed struct {
@@ -103,11 +103,11 @@ func FuzzTicketRoundTrip(f *testing.F) {
 
 		spelled, tid, idOK := jsonID(id, form)
 		want := store.Ticket{
-			Prefix: strings.TrimSpace(decoded(prefix)), TID: int(tid),
+			Prefix: decoded(prefix), TID: int(tid),
 			FirstName: decoded(first), LastName: decoded(last), PhoneNumber: decoded(phone),
 			Pref: strings.TrimSpace(decoded(pref)),
 		}
-		accepted := want.Prefix != "" && idOK && want.TID >= 0
+		accepted := strings.TrimSpace(want.Prefix) != "" && idOK && want.TID >= 0
 		items := []string{ticketJSON(prefix, spelled, first, last, phone, pref, raw)}
 		// A neighbour in every store, which the save must leave alone.
 		nb := store.Ticket{Prefix: "A", TID: 99, FirstName: "Neighbour", Pref: "CALL"}
@@ -207,9 +207,7 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			t.Fatalf("a search for the ticket's own fields found %d tickets, not %+v", len(found), want)
 		}
 		if len(sts) == 2 {
-			// A pull copies the server's data into the client's copy, which
-			// then holds what the server holds, a row only the server had
-			// included.
+			// Reconnecting must not adopt rows entered on another client.
 			only := store.Ticket{Prefix: "Z", TID: 1, FirstName: "Server only", Pref: "CALL"}
 			if want.Prefix == only.Prefix && want.TID == only.TID {
 				only.TID = 2
@@ -221,12 +219,8 @@ func FuzzTicketRoundTrip(f *testing.F) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			server, err := sts[1].Export()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(client, server) {
-				t.Fatalf("after a pull the client's copy holds %+v, the server %+v", client.Tickets, server.Tickets)
+			if slices.Contains(client.Tickets, only) || !slices.Contains(client.Tickets, want) {
+				t.Fatalf("reconnect changed the client's own entries: %+v", client.Tickets)
 			}
 		}
 	})
@@ -294,10 +288,10 @@ func FuzzBasketRoundTrip(f *testing.F) {
 		spelledID, bid, idOK := jsonID(id, form)
 		spelledWin, win, winOK := jsonID(winning, form)
 		want := store.Basket{
-			Prefix: strings.TrimSpace(decoded(prefix)), BID: int(bid),
+			Prefix: decoded(prefix), BID: int(bid),
 			Description: decoded(description), Donors: decoded(donors), WinningTicket: int(win),
 		}
-		accepted := want.Prefix != "" && idOK && winOK && want.BID >= 0 && want.WinningTicket >= 0
+		accepted := strings.TrimSpace(want.Prefix) != "" && idOK && winOK && want.BID >= 0 && want.WinningTicket >= 0
 		// A neighbour in every store, which the save must leave alone.
 		nb := store.Basket{Prefix: "A", BID: 99, Description: "Neighbour", Donors: "Next door", WinningTicket: 3}
 		if want.Prefix == nb.Prefix && want.BID == nb.BID {

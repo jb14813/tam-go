@@ -1,7 +1,7 @@
 // Package client is the HTTP surface of tam-client: it serves the embedded
 // web app and an /api that works against the local database or, in remote
-// mode, against a tam-server, with the local database as the mirror that
-// keeps the pages working while the server is away.
+// mode, against a tam-server. The local database keeps this client's own
+// entries and shared prefix configuration for use while the server is away.
 package client
 
 import (

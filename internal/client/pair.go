@@ -89,17 +89,12 @@ type pairRequest struct {
 // a TAM server, creates an access key with the server password, and saves
 // the connection. Over TLS the server certificate is pinned from now on.
 //
-// Saves still queued stay queued when the client pairs with the server it
-// was paired with (at the same address, or by the same name at a new one),
-// which is how a client whose key was refused, or whose server has a new
-// certificate, gets going again. Pairing with another server moves them to
-// the failed list instead: they are not sent anywhere by themselves, and
-// Settings offers Retry and Discard.
+// Saves still queued belong to this event and follow the new connection,
+// including a replacement server, a renewed key or a new certificate.
 //
-// Pairing with another server while this client holds data of its own (from
-// working standalone, or a copy of another server's data) first saves that
-// data to a file in the data folder (see keepLocalData): the first copy of
-// the server's data replaces the rows with the same numbers here.
+// Pairing with another server also saves a backup of this client's local
+// data in its data folder (see keepLocalData). Reading shared server rows
+// does not replace the entries kept on this client.
 func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	var req pairRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -187,53 +182,38 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Before the settings change: from then on the syncer may copy the
-	// server's data in at any moment.
+	// Keep a local backup before changing the connection.
 	kept := ""
 	if !same {
 		kept = h.keepLocalData(name)
 	}
 
-	// The settings and the queue change together, while no save is numbered
-	// or on its way to the old server.
-	defer h.sync.Numbering()()
-	defer h.sync.Sending()()
-	if _, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
-		cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
-		cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = key.AuthKey, name, fingerprint
-		return config.Normalize(cur), nil
+	// The event queue follows the connection; a different address or server
+	// name does not make the volunteer's pending edits a different dataset.
+	if err := h.sync.Reconfigure(func() error {
+		_, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
+			cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
+			cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = key.AuthKey, name, fingerprint
+			return config.Normalize(cur), nil
+		})
+		return err
 	}); err != nil {
 		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
 	msg := "Paired with " + name + "." + kept
-	if !same {
-		from := "before this pairing"
-		if prev.RemoteURL() != "" {
-			from = "for " + serverLabel(prev)
-		}
-		moved, err := h.st.FailAllOutbox("queued " + from + "; retry to send it to " + name)
-		switch {
-		case err != nil:
-			log.Printf("outbox: %v", err)
-		case moved > 0:
-			log.Printf("paired with %s: %s queued %s set aside in the failed list", name, plural(moved, "save"), from)
-			msg += fmt.Sprintf(" %s queued %s %s set aside: Settings lists them under could not be sent, to retry here or discard.",
-				plural(moved, "save"), from, wasWere(moved))
-		}
+	if waiting, _, err := h.st.OutboxCounts(); err == nil && waiting > 0 {
+		msg += " " + plural(waiting, "save") + " waiting for this event will be sent to the server."
 	}
-	h.sync.Reset()
 	h.sync.Kick()
 	log.Printf("paired with %s (%s)", name, hostPort)
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": msg, "server": hostPort})
 }
 
-// keepLocalData saves the data this client holds of its own to a file in
-// its data folder before it pairs with another server, whose data then
-// replaces the rows with the same numbers here: nothing entered on this
-// client is lost, and Backup and Restore can load the file again or send
-// it to the server. It returns the sentence the pairing's message adds, or
-// "" when the client holds no data.
+// keepLocalData saves this client's entries to a backup in its data folder
+// before pairing with another server. The entries also remain in its local
+// database. Backup and Restore can load the file or send it to the server.
+// It returns the sentence the pairing's message adds, or "" for no data.
 func (h *handler) keepLocalData(server string) string {
 	bf, err := h.st.Export()
 	if err != nil {
@@ -251,7 +231,7 @@ func (h *handler) keepLocalData(server string) string {
 	what := fmt.Sprintf("%s, %s and %s", count(len(bf.Prefixes), "prefix", "prefixes"), plural(len(bf.Tickets), "ticket"), plural(len(bf.Baskets), "basket"))
 	if err != nil {
 		log.Printf("pair: keeping this client's data (%s): %v", what, err)
-		return fmt.Sprintf(" This client's own data (%s) could not be saved to a file first (%v); %s's data replaces rows with the same numbers.", what, err, server)
+		return fmt.Sprintf(" This client's own data (%s) could not be backed up before pairing with %s (%v); it remains in this client's local database.", what, server, err)
 	}
 	log.Printf("pair: this client's own data (%s) saved to %s before pairing with %s", what, name, server)
 	return fmt.Sprintf(" This client's own data (%s) was saved to %s in its data folder first; Backup and Restore can load it again or send it to the server.", what, name)
@@ -287,8 +267,6 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "This client is not paired with a server")
 		return
 	}
-	defer h.sync.Numbering()() // no save is numbered or on its way while the queue is set aside
-	defer h.sync.Sending()()
 	if req.Password != "" && s.RemoteKey != "" {
 		if rc := h.remote(s); rc != nil {
 			res, err := rc.WithTimeout(5*time.Second).Do(http.MethodDelete, "/api/auth?key_to_del="+url.QueryEscape(s.RemoteKey),
@@ -301,24 +279,24 @@ func (h *handler) unpair(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if _, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
-		cur.RemoteServer, cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = "", "", "", ""
-		return cur, nil
+	if err := h.sync.Reconfigure(func() error {
+		_, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
+			cur.RemoteServer, cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = "", "", "", ""
+			return cur, nil
+		})
+		return err
 	}); err != nil {
 		httpx.WriteInternal(w, fmt.Errorf("save settings: %w", err))
 		return
 	}
-	// Saves that had not reached the server are kept in the failed list,
-	// where Settings offers Retry and Discard once the client is paired again.
-	kept, err := h.st.FailAllOutbox("not sent before unpairing from " + serverLabel(s))
+	// Pause delivery without classifying valid event edits as failures.
+	kept, _, err := h.st.OutboxCounts()
 	if err != nil {
 		log.Printf("outbox: %v", err)
 	}
-	h.sync.Reset()
 	msg := "Standalone again."
 	if kept > 0 {
-		msg += fmt.Sprintf(" %s that had not reached the server %s kept: after pairing again, Settings lists them under could not be sent, to retry or discard.",
-			plural(kept, "save"), wasWere(kept))
+		msg += " " + plural(kept, "save") + " waiting for this event will resume when a server is configured again."
 	}
 	log.Print("unpaired: standalone again")
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": msg})

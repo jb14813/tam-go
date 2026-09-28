@@ -27,7 +27,9 @@
 	};
 
 	async function addChange() {
-		const name = String(editPrefix.prefix ?? '').trim();
+		const entered = String(editPrefix.prefix ?? '');
+		// An existing prefix is an identity, including any restored whitespace.
+		const name = prefixes.some((p) => p.prefix === entered) ? entered : entered.trim();
 		if (!name) {
 			status = 'Prefix name cannot be empty.';
 			selectPrefixInput();

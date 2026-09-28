@@ -18,12 +18,14 @@ This is Ticket Auction Manager. A project I (Dilan Gilluly) am working on as a h
 
 This is the Go version of it. The remote server (cmd/tam-server directory) and the client (cmd/tam-client directory) are written in Go, with the client's web pages written in Sveltekit (frontend directory) and built into the program, so each one is a single file that runs on Windows, Linux and macOS with nothing to install. The original version, with the server in FastAPI and Python and the client in Sveltekit, is at [ticket-auction-manager/tam](https://github.com/ticket-auction-manager/tam); the two speak the same API and use the same data files, so they can be mixed and a switch is a matter of pointing these programs at the old data folder (see [Switching from the original](#switching-from-the-original)).
 
+This is the [jb14813/tam-go fork](https://github.com/jb14813/tam-go) of [ticket-auction-manager/tam-go](https://github.com/ticket-auction-manager/tam-go).
+
 Features:
 
 - **Forms**: Facilitates the entry of data throughout the platform. The main goal of this is to allow one to manage in-person benefit auctions for non-profit causes.
   - **Ticket Form**: Enter the names and phone numbers of ticket purchasers, as well as their contact preference, which the default is controllable via the Settings screen.
   - **Basket Form**: Optionally, basket/item descriptions can be added as well as who the donor(s) are for each one. The descriptions appear on the reports later on.
-  - **Drawing Form**: Use this form to enter the winning ticket numbers. The form automatically looks up if an entry exists when a field is changed and will populate the information next to it if it does.
+  - **Drawing Form**: Enter a winning ticket number to look up its buyer, including tickets entered on another client through the shared server. The form shows the buyer or explains that the ticket is missing or the shared lookup is unavailable. Unresolved lookups retry so entries queued on another client can appear after it reconnects. Zero clears the winner.
 - **Reports**: Reports are automatically generated with one click to avoid line shifts or other issues which may arise during compilation.
   - **By Name Report**: This report orders the lines by the last name of each winner, then first name, phone number, and finally basket number.
   - **By Basket Report**: Orders winners by basket number.
@@ -96,7 +98,7 @@ The server's admin page. The first visit sets the password; from then on the Sta
 
 ## Downloading
 
-The [releases page](https://github.com/ticket-auction-manager/tam-go/releases) has one file per program and system. Take `tam-client` for a computer at the event and `tam-server` for the machine that hosts the server:
+The [fork's releases page](https://github.com/jb14813/tam-go/releases) has one file per program and system. Take `tam-client` for a computer at the event and `tam-server` for the machine that hosts the server:
 
 - **Windows**: `tam-client-<version>-windows-amd64.exe` or `tam-server-<version>-windows-amd64.exe` (`-windows-arm64` for a Snapdragon machine). Put it in a folder of its own and double-click it. The `.zip` of the same name adds this README. The programs are not signed, so SmartScreen asks once: More info, then Run anyway.
 - **Debian, Ubuntu, Mint and their relatives**: the `.deb` of the program (`sudo apt install ./tam-server_<version>-1_amd64.deb`, where `-1` is the package revision; 1.0.0-rc1's is `tam-server_1.0.0.rc1-1_amd64.deb`).
@@ -113,23 +115,18 @@ To clone the repo you just need to run the git clone command to clone it to a di
 
 Github:
 
-`git clone https://www.github.com/Ticket-Auction-Manager/tam-go yourrepofolder`
+`git clone https://github.com/jb14813/tam-go.git yourrepofolder`
 
 ## Installing dependencies
 
-Server and client:
+Server and client need Go 1.27.1 or newer, as declared in `go.mod`; `go build` fetches the Go modules. The client web pages use Node.js 24 and pnpm 12, matching CI. The build script also needs Bash (Git Bash on Windows); it uses `npx --yes pnpm@12` if pnpm is not installed.
 
-(needs Go 1.27 or newer installed)
-
-Nothing to install: `go build` fetches the Go modules.
-
-Client web pages:
-
-(needs pnpm installed)
+For frontend development, install the dependencies with pnpm 12:
 
 ```
 cd frontend
-pnpm install
+pnpm install --frozen-lockfile
+cd ..
 ```
 
 ## Building
@@ -140,6 +137,8 @@ pnpm install
 ./build.sh all          # both
 ./build.sh release      # every system: build/<os>-<arch>/ and one archive per program and target
 ```
+
+The local builds write `build/tam-client` and `build/tam-server`, with `.exe` appended on Windows. Run these commands from Bash; `client`, `all` and `release` install and build the frontend automatically. To build directly from PowerShell or another shell, first run `pnpm install --frozen-lockfile` and `pnpm build` in `frontend/`, return to the repository root, then run `go build -o build/ ./cmd/tam-client ./cmd/tam-server`. The `-o build/` is needed to keep both executable files; without it, building multiple packages only checks that they compile.
 
 With Nix, `nix build` builds both programs into `result/bin` (see NixOS under [Deployment](#deployment)).
 
@@ -155,10 +154,24 @@ Server:
 go run ./cmd/tam-server -addr 127.0.0.1:8000
 ```
 
-Client, with the web pages served live by Vite (they proxy `/api` to the client program):
+Before the first client run in a fresh checkout, build the embedded pages once. Go requires `cmd/tam-client/dist` even when Vite will serve the pages:
+
+```
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+cd ..
+```
+
+Start the client API in one terminal:
 
 ```
 go run ./cmd/tam-client -addr 127.0.0.1:3080 -open=false
+```
+
+In another terminal, start Vite for live web page updates (it proxies `/api` to the client program):
+
+```
 cd frontend
 pnpm dev
 ```
@@ -167,7 +180,7 @@ Or build the pages once (`./build.sh client`) and run `build/tam-client`, which 
 
 ## Running the tests
 
-The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push and keeps what they print: each run's page on GitHub (Actions) shows the unit tests, the compatibility run, the tests with the race detector, the load test's report, the NixOS test, the release build and the Linux package tests, and has them as files to download under Artifacts. [docs/test-results.md](docs/test-results.md) has the printed results of the longer runs, made on a real machine.
+The tests need Go and the built web app (`pnpm build` in `frontend/`, as for any build). CI runs all of them on every push and keeps what they print: each run's page on GitHub (Actions) shows the unit tests, the browser tests, the compatibility run, the tests with the race detector, the load test's report, the NixOS test, the release build and the Linux package tests, and has them as files to download under Artifacts. [Event recovery test results](docs/recovery-test-results.md) records the latest local validation; [docs/test-results.md](docs/test-results.md) preserves the earlier printed results.
 
 Unit and integration tests; the client tests drive the real server handler as their server:
 
@@ -180,6 +193,8 @@ The compatibility run against the original tam, its FastAPI server at a pinned c
 ```
 bash scripts/compat/run.sh
 ```
+
+The [browser regression suite](scripts/browser/README.md) checks marked rows on Tickets, Baskets, Drawing and Search across page hiding, navigation and tab closing. It runs against a real Linux client and fails if saved values differ.
 
 The load test runs a whole event through one real `tam-server` and many real `tam-client` programs on the machine, each client with its own data folder and paired through its Settings route. Ticket entry is paced over 40 seconds, fixing a typo now and then and opening sheets again; a quarter of the way in the server is killed and started again 8 seconds later while the clients keep saving, and each client goes back to correct the sheets it saved meanwhile as soon as it sees the server again. Then another client corrects every 40th ticket, the baskets are entered and drawn (each winner looked up as the page does), every report and a few searches are read, and for 10 seconds every client saves as fast as it can. It then checks every ticket, basket and winner on the server and in each client's own copy, the admin page's Clients table, and everything the programs wrote, and prints the time of every page action:
 
@@ -249,17 +264,19 @@ A data folder from the original app is a drop-in: the tables and views are the s
 Remote mode is for events with several clients: one `tam-server` holds the data and every client works against it. It is built for clients that move around and lose wifi: a save never waits for a dead connection and is never lost.
 
 1. Run `tam-server` on the machine that stays put, where every client can reach it. On first start it has no password: open `http://<that machine>:8000/admin` and set one (or start it with `TAM_PWD` set, as the original was). For HTTPS start it with `-tls`: it listens on port 8443 and writes a self-signed certificate (`server.crt`, `server.key`) into its data directory on first start; put your own PEM files there, or point `-cert` and `-key` at them, to use a real certificate. Windows asks once whether to allow the program through the firewall. To stop it, right-click its icon in the notification area and choose **Shut Down TAM Server**, close its console window, or press Ctrl+C in it; the clients' **Shut Down TAM** button only stops the client it is pressed on.
-2. On each client press `Alt+A`, open Settings and look at the **Server** section. Servers on the venue network appear there by name: they announce themselves (mDNS, `_tam._tcp`), and because some access points drop multicast, the client also asks the standard ports (8000, and 8443 for TLS) on every address of its own /24 networks, which takes a second or two and finds the server wherever plain traffic gets through. Interfaces that only lead to containers or VMs on the computer itself (Docker, WSL and the like) are left out, and a server seen at several addresses is listed once, at the address the client shares a network with. A server on another port or another subnet is typed in by hand; its admin status page and its start-up banner list the addresses to type. Pick one, enter the server password once and press **Pair**. The client creates its own access key on the server, named after the computer it runs on, and over TLS it pins the server's certificate. When a client that holds data of its own (entered standalone, or a copy of another server's data) pairs with a different server, it first saves that data to `before-pairing-<date>-<time>.json` in its data folder and says so: the server's data then replaces the client's rows with the same numbers, and Backup and Restore can load the file again or send it to the server. **Unpair** returns the client to standalone mode, keeping the copy of the server's data it has. The original way still works too: the remote fields and the Auth Keys page are still there.
-3. A bar on every page then shows where the client stands: green **Connected to <server>** (with the number of saves still being sent, if any), amber **Reconnecting** or red **Offline** with the number of saves waiting, red when the server rejected this client's key, and red when the server's certificate is no longer the one pinned at pairing; for those two, **Pair again** in Settings (with the server password) gets the client going and keeps its queue. The main menu footer keeps the original's three lines.
+2. On each client press `Alt+A`, open Settings and look at the **Server** section. Servers on the venue network appear there by name: they announce themselves (mDNS, `_tam._tcp`), and because some access points drop multicast, the client also asks the standard ports (8000, and 8443 for TLS) on every address of its own /24 networks, which takes a second or two and finds the server wherever plain traffic gets through. Interfaces that only lead to containers or VMs on the computer itself (Docker, WSL and the like) are left out, and a server seen at several addresses is listed once, at the address the client shares a network with. A server on another port or another subnet is typed in by hand; its admin status page and its start-up banner list the addresses to type. Pick one, enter the server password once and press **Pair**. The client creates its own access key on the server, named after the computer it runs on, and over TLS it pins the server's certificate. Pairing with a replacement preserves this client's entries and pending saves. It also keeps a dated backup file when changing servers. **Unpair** pauses delivery and returns to standalone mode; configuring a server again resumes the waiting saves. The original Remote Mode fields and Auth Keys page still work.
+3. A bar on every page then shows where the client stands: green **Connected to <server>** (with the number of saves still being sent, if any), amber while restoring this client's saved data or **Reconnecting** or red **Offline** with the number of saves waiting, red when the server rejected this client's key, and red when the server's certificate is no longer the one pinned at pairing; for those two, **Pair again** in Settings (with the server password) gets the client going and keeps its queue. The main menu footer keeps the original's three lines.
 
 What happens with the connection:
 
-- **Reads** come from the server while it answers and nothing saved on this client is still waiting to reach it, and are copied into the client's own database on the way. Otherwise the pages read that copy, so the forms, reports and search keep working, and a sheet saved while the server was away shows what was saved until the server has it too. On pairing and every time the connection comes back, the client pulls the server's whole data set into its copy (0.25 s at 9,000 tickets) so a client that goes offline later has everything; rows the client saves while that download is on its way keep what was saved.
-- **Saves** go to the server first, with a five-second limit, one at a time: a save waits until the client's previous save has been answered or queued, so saves from two tabs, or a sheet saved while the last one is still on its way over a weak link, reach the server in the order they were numbered. When the server does not answer (or answers 5xx), or this client still has saves waiting for it, the rows are stored on the client and queued in an outbox behind the ones already there, so the server takes a client's saves in the order they were made; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, replays the outbox in order as soon as it answers, and then pulls the data set again. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again with the same server (at its old address, or by its name at a new one) sends it. Pairing with another server, or unpairing, sets the saves still queued aside in the failed list rather than sending them anywhere by themselves.
+- **Reads** use the shared server while it is available and this client has no waiting saves. They do not import other clients' tickets or baskets into this client's local database. Offline pages use the entries saved on this client; prefix definitions may be cached as shared configuration so its forms remain accessible. Reconnecting does not download the server's whole event.
+- **Saves** go to the server first, with a five-second limit, one at a time: a save waits until the client's previous save has been answered or queued, so saves from two tabs, or a sheet saved while the last one is still on its way over a weak link, reach the server in the order they were numbered. When the server does not answer (or answers 5xx), or this client still has saves waiting for it, the rows are stored on the client and queued in an outbox behind the ones already there, so the server takes a client's saves in the order they were made; the page gets its normal answer plus an `X-TAM-Queued: 1` header. A background worker pings the server every five seconds, uploads this client's saved entries when an empty server requests recovery, then replays the outbox in order. A save the server rejects as bad data (a 4xx) is not queued: the error goes back to the page. A save the server refuses because the key is wrong stays queued, the bar says so, and pairing again with the same server (at its old address, or by its name at a new one) sends it. Pairing with a replacement keeps the same queue; unpairing pauses it until a server is configured again.
 - **Conflicts** are settled by arrival at the server: the last save wins, as in the original. A client replaying an old edit after another client changed the same ticket wins with the older edit. Within one client, its saves apply in the order it made them: when the Wi-Fi drops in the middle of a save, the network may still deliver that request seconds after the client gave up on it and sent it again, and the server does not apply that late copy, so it cannot undo newer saves (see API). A client whose data folder was put back from a copy counts its saves from an older number than the server has seen from it; the server says so, and the client numbers its saves past the server's count and sends them again, so none is lost.
-- **Refused saves** (the server answered 4xx during a replay), saves set aside when the client paired with another server or was unpaired, and queued saves older than what the server already has from this client (a data folder put back from a copy: they may have reached the server before, or not), are kept in a failed list, counted in the bar, and can be retried (numbered anew and sent, after the saves already queued, to the server the client is paired with now) or discarded from Settings. Nothing queued is ever dropped without a Discard. A queued prefix delete that finds the prefix already gone from the server counts as done, as it does online.
+- **Refused saves** (the server answered 4xx during a replay), saves set aside by earlier client versions, and queued saves older than what the server already has from this client (a data folder put back from a copy: they may have reached the server before, or not), are kept in a failed list, counted in the bar, and can be retried (numbered anew and sent, after the saves already queued, to the server the client is paired with now) or discarded from Settings. Nothing queued is ever dropped without a Discard. A queued prefix delete that finds the prefix already gone from the server counts as done, as it does online.
 
 Backup/Restore can still push the local prefixes, tickets or baskets to the server and download the server's data; those two actions are direct and report failure instead of queueing.
+
+An empty Go server automatically asks authenticated clients for their own saved entries, including clients sharing an access key and clients that reconnect later. Each client contributes before its own pending saves replay. See [event data and server recovery](docs/recovery.md) for the recovery rules and limits with older data files.
 
 ### Server admin page
 
@@ -271,7 +288,9 @@ Two optional headers feed the table. `X-TAM-Client: tam-client/<version>`, which
 
 ### Compatibility with the original
 
-The API is the original's, so the original `tam-client` (Linux/Docker) and the Go client can share one server, and either server works. `scripts/compat/run.sh` proves it: it starts the original FastAPI server at a pinned commit and runs the Go client's `TestCompat*` tests against it, then starts the Go server with both the original SvelteKit client and the Go client and drives every route through each (`scripts/compat/drive.py`). CI runs it on every push. Two quirks of the original as published are handled on this side, so a mixed setup comes out right either way: its server leaves winning tickets alone on a restore, so `tam-client` sends them a second time through the drawing route after every restore or push into a server; and its client sends the key as `TAM_KEY` on its server-backup download, so `tam-server` accepts that spelling too. Fixes for the original itself, including its local restore skipping tickets that already exist, are submitted as [ticket-auction-manager/tam#1](https://github.com/ticket-auction-manager/tam/pull/1). The checks here are strict.
+The API is the original's, so the original `tam-client` (Linux/Docker) and the Go client can share one server, and either server works. `scripts/compat/run.sh` checks this against the original at commit `7ff95fa228c23c14f5d86c131b079e83cbe19fde`: it starts the FastAPI server and runs the Go client's `TestCompat*` tests against it, then starts the Go server with both the original SvelteKit client and the Go client and drives their routes (`scripts/compat/drive.py`). CI runs it on every push. This pin includes the merged fixes in [ticket-auction-manager/tam#1](https://github.com/ticket-auction-manager/tam/pull/1) and [#2](https://github.com/ticket-auction-manager/tam/pull/2).
+
+Compatibility handling for older versions remains: older servers leave winning tickets alone on a restore, so `tam-client` sends them through the drawing route after every restore or push into a server; older clients send the key as `TAM_KEY` on their server-backup download, so `tam-server` accepts that spelling too. The original's merged fixes also correct local restore skipping tickets that already exist. The checks here are strict.
 
 ## Deployment
 
@@ -310,11 +329,11 @@ ExecStart=/usr/bin/tam-client -addr :3080 -open=false -tray=false
 
 The application-menu entry, Ticket Auction Manager, opens the web app of the client running on the computer, the service or one started by hand, and otherwise starts `tam-client` for the user who clicked it, with its data in `~/.local/share/tam-client`, apart from the service's. On a computer used by one person that is simpler than the service: `sudo systemctl disable --now tam-client` turns the service off for good, and the menu entry then runs the client by hand; it opens the browser itself and stops from Alt+A, Shut Down TAM.
 
-**NixOS.** The repository is a flake. `nix build` builds both programs from source into `result/bin` (the web app with pnpm, then Go, running the unit tests on the way); `nix run github:ticket-auction-manager/tam-go` starts `tam-client`, `nix run github:ticket-auction-manager/tam-go#tam-server` the server, and `nix develop` gives Go, Node and pnpm. The version the programs report is the commit they were built from. Its NixOS module runs either program as a service under its own unprivileged user, with its data in `/var/lib/tam-server` or `/var/lib/tam-client` and its log in the journal (`journalctl -u tam-client`). In a flake-based configuration, a client computer:
+**NixOS.** The repository is a flake. `nix build` builds both programs from source into `result/bin` (the web app with pnpm, then Go, running the unit tests on the way); `nix run github:jb14813/tam-go` starts `tam-client`, `nix run github:jb14813/tam-go#tam-server` the server, and `nix develop` gives Go, Node and pnpm. The version the programs report is the commit they were built from. Its NixOS module runs either program as a service under its own unprivileged user, with its data in `/var/lib/tam-server` or `/var/lib/tam-client` and its log in the journal (`journalctl -u tam-client`). In a flake-based configuration, a client computer:
 
 ```nix
 {
-  inputs.tam-go.url = "github:ticket-auction-manager/tam-go";
+  inputs.tam-go.url = "github:jb14813/tam-go";
 
   outputs = { nixpkgs, tam-go, ... }: {
     nixosConfigurations.client1 = nixpkgs.lib.nixosSystem {
@@ -347,7 +366,7 @@ services.tam-server = {
 A configuration without flakes can import the module from a pinned commit, with flakes enabled in `nix.settings.experimental-features`:
 
 ```nix
-imports = [ (builtins.getFlake "github:ticket-auction-manager/tam-go/<commit>").nixosModules.default ];
+imports = [ (builtins.getFlake "github:jb14813/tam-go/<commit>").nixosModules.default ];
 ```
 
 Compared with `nixos/tam.nix`, the client runs `tam-client` natively instead of the Docker image, finds and pairs with the server from its Settings page instead of a `tam.lan` hosts entry, and keeps the automatic login in its own configuration (`services.displayManager.autoLogin`). Shut Down TAM in the web app stops the service until the next boot or `systemctl start tam-client`. The programs in the Linux archives are static, so they also run by hand on NixOS; `install.sh` stops there, since NixOS keeps `/etc` and the units in its configuration. The flake pins its nixpkgs, because the build needs Go 1.27, which NixOS 26.05 does not have; a machine on a stable release runs the same build. When `go.sum` or `frontend/pnpm-lock.yaml` changes, `nix/package.nix` needs the new `vendorHash` or pnpm `hash`: set it to `lib.fakeHash`, run `nix build`, and copy the hash Nix reports. CI's Nix job fails until then.
@@ -368,7 +387,7 @@ Both daemons answer JSON with the original's field names and `{"detail": "..."}`
 
 | Route | Server | Client |
 |---|---|---|
-| `GET /api` | who am I, authenticated, healthy | who am I; in remote mode the server's answer |
+| `GET /api` | who am I, authenticated, healthy; authenticated clients may receive a recovery_token | who am I; in remote mode the server's answer |
 | `GET/POST /api/settings` | | read, or merge a full or partial object |
 | `GET/POST/DELETE /api/auth` | list, create `{description}`, delete `?key_to_del=` (password) | proxied with the page's `TAM-PWD` header |
 | `GET/POST/DELETE /api/prefixes` | list, upsert, delete `?p=` | same; DELETE answers 404 when nothing matched |
@@ -378,11 +397,14 @@ Both daemons answer JSON with the original's field names and `{"detail": "..."}`
 | `GET /api/reports/byname/{prefix}`, `/bybasket/{prefix}`, `/counts` | report rows | same |
 | `GET /api/search/tickets?first_name&last_name&phone_number`, `POST` | substring search, upsert | same |
 | `GET/POST /api/backuprestore` | export, import | `/local`, `/remote`, and `POST /push/{prefixes\|tickets\|baskets}` |
-| `GET /api/status` | | `{"mode":"standalone"}` or mode, state (`connected`, `reconnecting`, `offline`, `unauthenticated`), server, server_name, pending, failed, last_ok |
+| `POST /api/recovery` | authenticated `{token, data}` contribution requested by heartbeat; `X-TAM-Client-Name` identifies the client | |
+| `GET /api/status` | | `{"mode":"standalone"}` or mode, state (`connected`, `reconnecting`, `offline`, `unauthenticated`, `certificate`), server, server_name, pending, failed, recovering, last_ok |
 | `GET /api/servers` | | servers announcing themselves on the network: name, host, port, tls, version |
 | `POST /api/pair`, `POST /api/unpair` | | `{host, port, tls, password}` pairs and stores the key; unpair takes an optional `{password}` to delete the key on the server |
 | `POST /api/outbox/retry`, `POST /api/outbox/discard` | | the failed list back into the queue, or dropped |
 | `/admin/...` | login, status, keys, backup, password (HTML) | |
+
+Single-row client lookups preserve their JSON shape and include `X-TAM-Found: 1|0`, `X-TAM-Source: server|local`, and `X-TAM-Mode: remote|standalone`. The Drawing page uses these to distinguish an existing blank ticket, a missing shared ticket, and a local fallback.
 
 Writes to the client require `Content-Type: application/json`, and a browser request from another site (`Sec-Fetch-Site: cross-site`) is refused, which replaces the original's per-process client id header.
 
@@ -398,14 +420,14 @@ Writes to the client require `Content-Type: application/json`, and a browser req
 - Access keys are generated with a cryptographic random source; the server never accepts an empty key.
 - The number input for prefix weight only accepts non-negative integers; prefix names are trimmed, at most 100 characters, may not contain `/` or `\` and may not be `.` or `..` (they appear in URLs).
 - Ticket search treats `%` and `_` typed by the user as literal characters instead of SQL wildcards.
-- A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white) or a name the prefix form would refuse today (`A/B`, a name with spaces around it): restores and a client copying its server's data take the rows as they are, so no prefix is cut off from its tickets. The contact preference stays free text as in the original.
+- A backup written by the original app restores even if a prefix carries a colour outside the palette (it is shown as white) or a name the prefix form would refuse today (`A/B`, a name with spaces around it): restores and recovery uploads preserve the original identities, so no prefix is cut off from its tickets. The contact preference stays free text as in the original.
 - The Settings page refuses a remote server entered with a scheme or a path (`http://tam.lan`, `tam.lan/api`): enter the host name or address only.
 - Every link is a full page load (`data-sveltekit-reload`, as in the original), so each prefix starts with a clean form. Marked rows are saved when you leave a form or the Search page, close the tab, or switch away from it: a browser may discard a tab left in the background, and a phone or tablet may stop one, without running the page's unload code. The save outlives the page (`keepalive`). The original saved the forms only as a page was left, with a request the closing page could cancel, and asked before leaving the Search page.
 - The client listens on port 3080 instead of the original's 3000.
 - Both programs run as plain desktop programs rather than containers: on Windows they show a TAM icon in the notification area with Shut Down (and, for the client, Open) entries, the client opens the browser on start and has a **Shut Down TAM** button under `Alt+A`, and Ctrl+C or a closed console window stops either one cleanly.
 - Request bodies are capped at 64 MiB (the original ran Node with no limit); that is far above any realistic backup file. A larger body answers 413.
 - Validation errors answer 400 where FastAPI answered 422. Unknown paths and wrong methods under `/api` answer `{"detail": ...}` as the original did. `HEAD` is accepted on every GET route.
-- `DELETE /api/prefixes` and `DELETE /api/auth` echo the deleted row; a missing row is 404. In remote mode a prefix the server no longer has is still removed from the local mirror.
+- `DELETE /api/prefixes` and `DELETE /api/auth` echo the deleted row; a missing row is 404. In remote mode a prefix the server no longer has is still removed from this client's local prefix configuration.
 - Success messages use the `message` key everywhere (the original used `details` for a local restore and an empty list for a remote one). A reversed range (`/5/1`) is swapped instead of answered empty.
 - Ids accept every spelling the original accepted (`4`, `4.0`, `"4"`); a ticket or basket without an id is rejected instead of being stored as id 0.
 - Both daemons require `Content-Type: application/json` on POST (the original client always sent it; the original server did not check). The push buttons send an empty JSON object for the same reason.
@@ -428,7 +450,7 @@ internal/remote                  HTTP client for tam-server
 internal/server                  tam-server API
 internal/client                  tam-client API and web app serving
 internal/desktop                 browser opening, console title, Ctrl+C handling, Windows notification-area icon
-internal/sync                    connection state, heartbeat, outbox replay, mirror pull (remote mode)
+internal/sync                    connection state, heartbeat, outbox replay and server recovery
 internal/tlscert                 the self-signed certificate of tam-server -tls
 internal/discovery               mDNS announce (server), browse and subnet sweep (client)
 internal/presence                what the server last saw of each client, for the admin page
@@ -461,6 +483,6 @@ Remote mode v2 (2026-09-26, Windows 11): `scripts/compat/run.sh` passed locally,
 
 All systems (2026-09-26, branch `all-systems`): `./build.sh release` built the six targets and their archives on Windows. The Linux archive then ran on two real machines. On an Unraid NAS (a Docker host, Linux 6.6, no systemd) `tam-server` started from the tarball, listed only the LAN address, announced itself, and a Windows client on the same network found it by itself, paired, and synced a ticket; its admin page showed that client as connected with nothing queued, then its last update after a save, then "away for 20 s" once the client had stopped. On an Ubuntu 24.04 server `sudo ./install.sh all` created the `tam` user and both systemd services, the server's password was set on the first visit of its admin page, the Linux client on that machine and a Windows client both appeared on the Clients table as connected with their version, a save from Windows showed as its last update and the Linux client read it back through the same server; `systemd-analyze verify` accepted both units. The Docker image built and answered on the Ubuntu server (`docker compose build` and `docker build`), on the Unraid host (`docker build`; its Compose wants a newer buildx plugin, as noted above) and on Docker Desktop; in WSL (Ubuntu 24.04) the installer, the units and both programs were exercised as well. Everything was removed from both machines afterwards. The unit suite and the compatibility run (24 checks) passed on the final commit. The macOS and arm64 builds were cross-compiled and packaged but not run. The archives were then split per program (`tam-server-...` and `tam-client-...`): on the Ubuntu server the server package and then the client package each installed itself as its service with `sudo ./install.sh` and no argument, with its icon and, for the client, the menu entry, and both Windows packages started here. The `.deb` pair then installed with `apt` on the Ubuntu server, both services active, and `apt remove` took them out leaving the data folders; the `.rpm` pair installed and removed with `dnf` in a Fedora 42 container.
 
-Load test (2026-09-27, `scripts/loadtest`): its first runs found four problems, each now fixed and pinned by a test. A client that saw its server again while saves were still queued sent new saves straight to the server, so an older queued save of the same ticket could land after a newer one and win, and a sheet opened meanwhile showed the server's older rows; now a client works from its own copy and queues new saves behind the old ones until its queue is empty. The refresh after a reconnect could copy the server's older rows over saves made while it downloaded; now it leaves those rows alone, and waits until the queue has been sent. On a Linux server whose disk is slow to flush, 50 clients pairing at once made SQLite give up on a write (`database is locked`), because its busy wait is not first come, first served; now the writes of each program take turns. And the admin page could show a client's queue for up to a heartbeat after it had emptied; now the client sends a heartbeat as soon as its queue is sent.
+Load test (2026-09-27, `scripts/loadtest`): its first runs found four problems, each now fixed and pinned by a test. A client that saw its server again while saves were still queued sent new saves straight to the server, so an older queued save of the same ticket could land after a newer one and win, and a sheet opened meanwhile showed the server's older rows; now a client works from its own copy and queues new saves behind the old ones until its queue is empty. At that time, reconnect downloads could overwrite saves made while the download ran; the fix protected those local writes. The current client no longer downloads event snapshots on reconnect (see server recovery above). On a Linux server whose disk is slow to flush, 50 clients pairing at once made SQLite give up on a write (`database is locked`), because its busy wait is not first come, first served; now the writes of each program take turns. And the admin page could show a client's queue for up to a heartbeat after it had emptied; now the client sends a heartbeat as soon as its queue is sent.
 
-Harder tests (2026-09-27): a review of the pairing code, the relay that drops a client's Wi-Fi silently and delivers late, crashes of clients with saves queued, and fuzz tests of every route found more, each fixed with a test that failed first. Pairing again, as the bar asks when the server refuses a client's key, dropped every save queued meanwhile; now the queue is sent, or set aside in the failed list when the client pairs with another server. A save queued offline was written to the client and to its queue in two transactions, so a client stopping in between kept a save it would never send; now both happen in one. A page reading from a server that went silent waited ten seconds; now four. A save the client gave up on while its Wi-Fi was gone could still reach the server seconds later, after its replay and after newer saves, and undo them; now the client numbers its saves and the server skips a late copy (see API). A range of ids ending at the largest number made the client allocate until it ran out of memory; search missed text after a NUL and failed on very long fragments; the prefix names `.` and `..` were accepted but unreachable; and one prefix name from the original that today's form refuses (`A/B`) made a restore, and every client's copy of its server's data, fail. With the fixes every run passes all its checks (26, or 36 with `-soak`), on Windows 11 (Ryzen 9 7900X3D, NVMe) with 20, 50 and 100 clients, over HTTPS, with the server down for 45 s, natively on the Ubuntu server, and with 100 clients on the Windows machine using the server on the Ubuntu machine over the LAN; the server logged every late copy it skipped (one per save that hung on a dropped link) and no error. A 45-minute soak with 25 clients and 9,000 tickets kept the server at 46 MB and about 470 open handles from the first rounds to the last, the clients at 68 MB falling to 54, and the write-ahead log at 4 MB. Throughput, with every save changing every row of its sheet (a save of unchanged rows writes nothing in SQLite, so the first figures here overstated it): 1,740 saves (43,500 rows) a second from 50 clients on the Windows machine, median 28 ms; on the Ubuntu server's SATA SSD, where each commit waits about 12 ms for the disk, 68 saves (1,700 rows) a second from 100 clients over the LAN. A real event saves a sheet every half minute or so per client, so even the slow disk leaves a large margin. CI runs the unit tests and a 12-client load test with the race detector on every push.
+Harder tests (2026-09-27): a review of the pairing code, the relay that drops a client's Wi-Fi silently and delivers late, crashes of clients with saves queued, and fuzz tests of every route found more, each fixed with a test that failed first. Pairing again, as the bar asks when the server refuses a client's key, dropped every save queued meanwhile; that version sent the queue to the same server and set it aside for another. The current client preserves and resumes the queue across server changes. A save queued offline was written to the client and to its queue in two transactions, so a client stopping in between kept a save it would never send; now both happen in one. A page reading from a server that went silent waited ten seconds; now four. A save the client gave up on while its Wi-Fi was gone could still reach the server seconds later, after its replay and after newer saves, and undo them; now the client numbers its saves and the server skips a late copy (see API). A range of ids ending at the largest number made the client allocate until it ran out of memory; search missed text after a NUL and failed on very long fragments; the prefix names `.` and `..` were accepted but unreachable; and one prefix name from the original that today's form refuses (`A/B`) made restores and the server-copy downloads used at that time fail. With the fixes every run passes all its checks (26, or 36 with `-soak`), on Windows 11 (Ryzen 9 7900X3D, NVMe) with 20, 50 and 100 clients, over HTTPS, with the server down for 45 s, natively on the Ubuntu server, and with 100 clients on the Windows machine using the server on the Ubuntu machine over the LAN; the server logged every late copy it skipped (one per save that hung on a dropped link) and no error. A 45-minute soak with 25 clients and 9,000 tickets kept the server at 46 MB and about 470 open handles from the first rounds to the last, the clients at 68 MB falling to 54, and the write-ahead log at 4 MB. Throughput, with every save changing every row of its sheet (a save of unchanged rows writes nothing in SQLite, so the first figures here overstated it): 1,740 saves (43,500 rows) a second from 50 clients on the Windows machine, median 28 ms; on the Ubuntu server's SATA SSD, where each commit waits about 12 ms for the disk, 68 saves (1,700 rows) a second from 100 clients over the LAN. A real event saves a sheet every half minute or so per client, so even the slow disk leaves a large margin. CI runs the unit tests and a 12-client load test with the race detector on every push.

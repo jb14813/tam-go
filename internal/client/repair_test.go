@@ -85,10 +85,8 @@ func TestPairingTheSameServerAtANewAddress(t *testing.T) {
 	}
 }
 
-// TestPairingAnotherServerKeepsTheQueueAsFailed: saves queued for one
-// server are not sent to another one by themselves, and not dropped either:
-// they wait in the failed list, where Settings offers Retry and Discard.
-func TestPairingAnotherServerKeepsTheQueueAsFailed(t *testing.T) {
+// The event's waiting saves follow its replacement server, regardless of name.
+func TestPairingAnotherServerSendsTheEventQueue(t *testing.T) {
 	f := newFixture(t)
 	first := namedServer(t, newServerStore(t), "first-box")
 	f.pairTo(first.URL)
@@ -101,29 +99,17 @@ func TestPairingAnotherServerKeepsTheQueueAsFailed(t *testing.T) {
 	other := newServerStore(t)
 	second := namedServer(t, other, "second-box")
 	msg := f.pairTo(second.URL)
-	if !strings.Contains(msg, "1 save") {
-		t.Fatalf("the pairing answer must say a queued save was set aside: %s", msg)
-	}
-	f.h.sync.Tick()
-	if p, fl := pending(t, f.st); p != 0 || fl != 1 {
-		t.Fatalf("after pairing with another server: pending %d failed %d, want 0 and 1", p, fl)
-	}
-	if rt, _ := other.Ticket("A", 9); rt != nil {
-		t.Fatalf("a save queued for another server must not be sent by itself: %+v", rt)
-	}
-
-	if code, body := f.do("POST", "/api/outbox/retry", `{}`, nil); code != 200 {
-		t.Fatalf("retry = %d %s", code, body)
+	if p, fl := pending(t, f.st); p != 1 || fl != 0 {
+		t.Fatalf("pairing must preserve pending event saves: %d pending, %d failed; %s", p, fl, msg)
 	}
 	f.h.sync.Tick()
 	if rt, _ := other.Ticket("A", 9); rt == nil || rt.FirstName != "Waiting" {
-		t.Fatalf("a retried save must reach the new server, it has %+v", rt)
+		t.Fatalf("the queued save must reach the replacement automatically, it has %+v", rt)
 	}
 }
 
-// TestUnpairKeepsTheQueueAsFailed: unpairing with saves still queued keeps
-// them in the failed list, to retry or discard after pairing again.
-func TestUnpairKeepsTheQueueAsFailed(t *testing.T) {
+// Standalone work after unpairing must stay newer than the preserved queue.
+func TestUnpairKeepsTheQueueAndLaterStandaloneEdits(t *testing.T) {
 	f := newFixture(t)
 	rst := newServerStore(t)
 	rs := namedServer(t, rst, "tam-box")
@@ -137,14 +123,15 @@ func TestUnpairKeepsTheQueueAsFailed(t *testing.T) {
 	if code != 200 || !strings.Contains(string(body), "1 save") {
 		t.Fatalf("unpair = %d %s, want it to say a save was kept", code, body)
 	}
-	if p, fl := pending(t, f.st); p != 0 || fl != 1 {
-		t.Fatalf("after unpairing: pending %d failed %d, want 0 and 1", p, fl)
+	if p, fl := pending(t, f.st); p != 1 || fl != 0 {
+		t.Fatalf("after unpairing: pending %d failed %d, want 1 and 0", p, fl)
 	}
-
+	if code, body := f.do("POST", "/api/tickets", oneTicket(10, "Newer standalone edit"), nil); code != 200 {
+		t.Fatalf("standalone edit = %d %s", code, body)
+	}
 	f.pairTo(rs.URL)
-	f.do("POST", "/api/outbox/retry", `{}`, nil)
 	f.h.sync.Tick()
-	if rt, _ := rst.Ticket("A", 10); rt == nil || rt.FirstName != "Kept" {
-		t.Fatalf("a save kept at unpairing must reach the server once retried, it has %+v", rt)
+	if rt, _ := rst.Ticket("A", 10); rt == nil || rt.FirstName != "Newer standalone edit" {
+		t.Fatalf("a newer standalone edit must follow the preserved queue, got %+v", rt)
 	}
 }
