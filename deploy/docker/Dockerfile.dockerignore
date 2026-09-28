@@ -1,0 +1,13 @@
+# Kept out of the build context of deploy/docker/Dockerfile (the build runs
+# from the repository root; BuildKit reads this file because it sits next to
+# the Dockerfile under the Dockerfile's name).
+.git
+build
+data
+data-client
+deploy/docker/data
+deploy/docker/client-data
+frontend/node_modules
+frontend/.svelte-kit
+cmd/tam-client/dist
+**/*.log
