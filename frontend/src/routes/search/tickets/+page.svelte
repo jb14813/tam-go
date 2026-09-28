@@ -1,6 +1,6 @@
 <script>
 	import { bS, iS, rBS, tS } from '$lib/client/styles';
-	import { getJSON, saveMarked, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
@@ -57,15 +57,17 @@
 			if (items.length > 0) setTimeout(() => focusIdx(0), 1);
 		},
 		// Resolves to false when the marked rows could not be saved.
-		async save() {
-			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
+		async save(opts = {}) {
+			const problem = await saveMarked('/api/search/tickets', itemsBuffer, {
+				keepalive: !!opts.keepalive
+			});
+			// A save made as the page is hidden or closed shows nothing and leaves
+			// the cursor where it is: the volunteer may come back to the row.
 			if (problem) {
-				alert(problem);
+				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			setTimeout(() => {
-				focusIdx(0);
-			}, 1);
+			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
 			return true;
 		},
 		nextLine() {
@@ -136,15 +138,10 @@
 		'Save?'
 	];
 
-	$effect(() => {
-		const warnOnUnload = (e) => {
-			if (itemsBuffer.length > 0) e.preventDefault();
-		};
-		window.addEventListener('beforeunload', warnOnUnload);
-		return () => {
-			window.removeEventListener('beforeunload', warnOnUnload);
-		};
-	});
+	// Marked rows are saved when the page is hidden, left or closed, as on
+	// the forms. (The original asked before leaving instead; its question
+	// cannot stop a browser discarding a hidden tab, and Leave lost the rows.)
+	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
 </script>
 
 <svelte:head>

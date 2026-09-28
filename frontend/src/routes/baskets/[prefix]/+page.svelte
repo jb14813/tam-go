@@ -1,7 +1,7 @@
 <script>
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, saveMarked, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -65,14 +65,13 @@
 			const problem = await saveMarked('/api/baskets', itemsBuffer, {
 				keepalive: !!opts.keepalive
 			});
+			// A save made as the page is hidden or closed shows nothing and leaves
+			// the cursor where it is: the volunteer may come back to the row.
 			if (problem) {
-				// A save from beforeunload cannot show anything.
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			setTimeout(() => {
-				focusIdx(0);
-			}, 1);
+			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
 			return true;
 		},
 		cancel() {
@@ -149,15 +148,8 @@
 	};
 	const headers = ['Basket ID', 'Description', 'Donors', 'Save?'];
 
-	$effect(() => {
-		const saveOnUnload = () => {
-			if (itemsBuffer.length > 0) functions.save({ keepalive: true });
-		};
-		window.addEventListener('beforeunload', saveOnUnload);
-		return () => {
-			window.removeEventListener('beforeunload', saveOnUnload);
-		};
-	});
+	// Marked rows are saved when the page is hidden, left or closed.
+	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
 </script>
 
 <svelte:head>
