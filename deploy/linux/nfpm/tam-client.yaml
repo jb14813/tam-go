@@ -1,0 +1,59 @@
+# The .deb and .rpm of tam-client, built by nfpm (https://nfpm.goreleaser.com)
+# from build.sh, which fills in @ARCH@, @VERSION@, @PRERELEASE@ and
+# @RELEASE@ and puts the unit, the desktop entry and the scripts for this
+# program under build/pkg/tam-client. posttrans runs on rpm only.
+name: tam-client
+arch: @ARCH@
+platform: linux
+version: @VERSION@
+prerelease: "@PRERELEASE@"
+release: "@RELEASE@"
+section: net
+priority: optional
+maintainer: Ticket Auction Manager <https://github.com/ticket-auction-manager/tam-go>
+vendor: ticket-auction-manager
+homepage: https://github.com/ticket-auction-manager/tam-go
+license: MIT
+description: |
+  Ticket Auction Manager client.
+  The web app for one computer at an event, on its own or paired with a
+  tam-server. Runs as the tam-client service on http://localhost:3080/; a
+  computer used by one person may prefer the application-menu entry, which
+  runs it by hand when the service is off.
+contents:
+  - src: build/linux-@ARCH@/tam-client
+    dst: /usr/bin/tam-client
+    file_info:
+      mode: 0755
+  - src: deploy/linux/tam-client-open
+    dst: /usr/bin/tam-client-open
+    file_info:
+      mode: 0755
+  - src: build/pkg/tam-client/tam-client.service
+    dst: /usr/lib/systemd/system/tam-client.service
+    file_info:
+      mode: 0644
+  - src: build/pkg/tam-client/tam-client.desktop
+    dst: /usr/share/applications/tam-client.desktop
+    file_info:
+      mode: 0644
+  - src: cmd/tam-client/icon.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/tam-client.svg
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/tam-client/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE.md
+    dst: /usr/share/doc/tam-client/LICENSE.md
+    file_info:
+      mode: 0644
+scripts:
+  preinstall: build/pkg/tam-client/preinstall.sh
+  postinstall: build/pkg/tam-client/postinstall.sh
+  preremove: build/pkg/tam-client/preremove.sh
+  postremove: build/pkg/tam-client/postremove.sh
+rpm:
+  scripts:
+    posttrans: build/pkg/tam-client/posttrans.sh
