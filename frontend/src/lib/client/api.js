@@ -100,6 +100,43 @@ export async function saveMarked(
 }
 
 /**
+ * Keeps a form's marked rows when the volunteer leaves the page, and returns
+ * the function that stops listening. A tab that is closed runs its unload
+ * handlers, but one that is only hidden can end without them: a browser may
+ * discard a tab left in the background to free memory, and a phone or tablet
+ * may stop it. So `save({ keepalive: true })` runs when the page is hidden as
+ * well as when it is left or closed; keepalive lets the request outlive the
+ * page. Closing a tab also hides it, so rows already on their way are not
+ * sent a second time.
+ *
+ * `marked()` gives the rows marked now.
+ */
+export function saveOnLeave(marked, save) {
+	let sending = '';
+	const leave = () => {
+		const rows = marked();
+		if (rows.length === 0) return;
+		const now = JSON.stringify(rows);
+		if (now === sending) return;
+		sending = now;
+		Promise.resolve(save({ keepalive: true })).finally(() => {
+			if (sending === now) sending = '';
+		});
+	};
+	const hidden = () => {
+		if (document.visibilityState === 'hidden') leave();
+	};
+	window.addEventListener('beforeunload', leave);
+	window.addEventListener('pagehide', leave);
+	document.addEventListener('visibilitychange', hidden);
+	return () => {
+		window.removeEventListener('beforeunload', leave);
+		window.removeEventListener('pagehide', leave);
+		document.removeEventListener('visibilitychange', hidden);
+	};
+}
+
+/**
  * GET a JSON endpoint for polling: never throws. Returns `{ status, data }`
  * with the HTTP status (0 when the client could not be reached) and the parsed
  * body (null when the body is not JSON).
