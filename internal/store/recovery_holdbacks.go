@@ -59,6 +59,14 @@ func loadRecoveryHoldback(tx *sql.Tx, r RecordRevision) (*RecoveryHoldback, erro
 }
 
 func saveRecoveryHoldback(tx *sql.Tx, held RecoveryHoldback) error {
+	if err := observeLocalHistory(tx, held.Current); err != nil {
+		return err
+	}
+	if held.Prior != nil {
+		if err := observeLocalHistory(tx, held.Prior.Revision); err != nil {
+			return err
+		}
+	}
 	raw, err := json.Marshal(held)
 	if err != nil {
 		return err

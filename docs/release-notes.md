@@ -20,7 +20,7 @@ Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-p
 
 ## Upgrading
 
-The data stays where it is, and the server and the clients do not need to be upgraded at the same time.
+Keep the existing Go data folder. Upgrade the Go server and clients together when moving to the native-only protocol; clients retain pending saves while their server is unsupported.
 
 - Windows, macOS, or a program run by hand: stop it, replace the file with the new one, and start it again.
 - `.deb` or `.rpm`: install the new package the same way as the first one. A running service restarts with the new program, and a service you turned off stays off.
@@ -33,9 +33,9 @@ Upgrading from 1.0.0-rc1 on Linux:
 - rc1's `install.sh` put the units into `/etc/systemd/system`. The new one installs them into `/usr/local/lib/systemd/system` and removes the old copies; a `TAM_PWD` line uncommented in the old unit moves to `/etc/default/tam-server`. An old unit with other changes stays in effect, and `install.sh` says how to move them.
 - The Linux client service now listens on `localhost:3080`, this computer only, like the other systems; the README (Deployment, Linux) shows the drop-in that opens it to the network again.
 
-## Switching from the original (Linux, Docker) version
+## Native backups
 
-The data files are the same: `tam-remote.db` for the server, `tam-local.db` and `settings.json` for the client. Point `TAM_DATA_DIR` at the old data folder (the `/data` of the old containers) or copy those files into the program's `data` folder, and start it; nothing else changes. The original's client can keep talking to this server while clients are switched one at a time.
+This release supports the Go client, Go server and Go-native event backups. The original app's three-list backups and wire protocol are no longer supported. Native backups preserve component ownership, accepted history and unresolved differences. Whole data-folder backups additionally preserve settings, keys and pending queues.
 
 ## Good to know
 

@@ -85,6 +85,7 @@ type Syncer struct {
 
 	mu            sync.Mutex
 	state         State
+	nativeReady   bool      // only an authenticated capability heartbeat enables background delivery
 	label         string    // the server as named in log lines
 	since         time.Time // when the current run of failures began
 	lastOK        time.Time
@@ -229,6 +230,7 @@ func (s *Syncer) NoteFailure(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
+	s.nativeReady = false
 	if errors.Is(err, remote.ErrCertificateChanged) {
 		if s.state != Certificate {
 			log.Printf("server %s: its certificate changed (%v); pair with it again in Settings", s.label, err)
@@ -261,6 +263,7 @@ func (s *Syncer) NoteUnauthorized() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
+	s.nativeReady = false
 	if s.state != Unauthenticated {
 		log.Printf("server %s: rejected this client's key", s.label)
 		s.state = Unauthenticated
@@ -272,6 +275,7 @@ func (s *Syncer) NoteUnauthorized() {
 func (s *Syncer) Reset() {
 	s.mu.Lock()
 	s.state = ""
+	s.nativeReady = false
 	s.since = time.Time{}
 	s.lastOK = time.Time{}
 	s.retries = 0
@@ -287,7 +291,12 @@ func (s *Syncer) Reset() {
 // Enqueue stores a request for the server to take later and wakes the
 // worker.
 func (s *Syncer) Enqueue(method, path string, body []byte) error {
-	if _, err := s.st.EnqueueOutbox(method, path, body); err != nil {
+	defer s.Numbering()()
+	order, err := s.st.NextSave(s.host)
+	if err != nil {
+		return err
+	}
+	if _, err := s.st.SaveQueued(method, path, body, order, func(*store.Store) error { return nil }); err != nil {
 		return err
 	}
 	s.wake()
@@ -413,7 +422,7 @@ func (s *Syncer) Tick() {
 	}
 
 	s.mu.Lock()
-	ready := s.state == Connected && !time.Now().Before(s.retryAt)
+	ready := s.state == Connected && s.nativeReady && !time.Now().Before(s.retryAt)
 	s.mu.Unlock()
 	if !ready {
 		return
@@ -454,11 +463,15 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 		return
 	}
 	headers := map[string]string{"X-TAM-Client-Name": client}
-	if pending, _, err := s.st.OutboxCounts(); err != nil {
+	if pending, failed, err := s.st.OutboxCounts(); err != nil {
 		log.Printf("outbox: %v", err)
 	} else {
 		headers["X-TAM-Pending"] = strconv.Itoa(pending)
+		headers["X-TAM-Failed"] = strconv.Itoa(failed)
 	}
+	s.mu.Lock()
+	headers["X-TAM-Recovering"] = strconv.FormatBool(s.recoveryToken != "")
+	s.mu.Unlock()
 	res, err := rc.WithTimeout(s.t.PingTimeout).Do(http.MethodGet, "/api", headers, nil)
 	switch {
 	case err != nil:
@@ -468,21 +481,21 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 	case !res.OK():
 		s.NoteFailure(fmt.Errorf("server answered %d", res.Status))
 	default:
-		var doc struct {
-			Authenticated bool   `json:"authenticated"`
-			RecoveryToken string `json:"recovery_token"`
-			Conflicts     int    `json:"conflicts"`
-			ReviewToken   string `json:"review_token"`
-		}
-		if json.Unmarshal(res.Body, &doc) == nil && haveKey && !doc.Authenticated {
-			s.NoteUnauthorized()
+		doc, err := res.NativeStatus()
+		if err != nil {
+			if errors.Is(err, remote.ErrUnauthenticated) {
+				s.NoteUnauthorized()
+			} else {
+				s.NoteFailure(err)
+			}
 			return
 		}
 		s.mu.Lock()
+		s.nativeReady = true
 		if haveKey && doc.Authenticated {
 			s.recoveryToken = doc.RecoveryToken
-			s.conflicts = doc.Conflicts
-			s.reviewToken = doc.ReviewToken
+			s.conflicts = *doc.Conflicts
+			s.reviewToken = *doc.ReviewToken
 		}
 		s.mu.Unlock()
 		s.NoteSuccess()
@@ -536,6 +549,12 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 	if o == nil {
 		return false, true
 	}
+	if o.Order.Client == "" || o.Order.Save <= 0 {
+		err := errors.New("queued save has no native client identity or operation number")
+		s.noteAttempt(o.ID, err.Error())
+		s.NoteFailure(err)
+		return false, false
+	}
 	var body any
 	if len(o.Body) > 0 {
 		body = json.RawMessage(o.Body)
@@ -582,15 +601,6 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 		}
 		s.NoteSuccess()
 		log.Printf("server %s: a queued %s %s is older than this client's save %d on the server; kept in the failed list", s.name(), o.Method, o.Path, last)
-	case res.Status == http.StatusNotFound && o.Method == http.MethodDelete:
-		// A prefix already gone from the server, which is what the delete
-		// wanted; a delete made online takes the same answer as done.
-		if err := s.st.AcknowledgeOutbox(o.ID, res.Receipt); err != nil {
-			log.Printf("outbox: %v", err)
-			return false, false
-		}
-		s.NoteSuccess()
-		log.Printf("server %s: a queued %s %s found it gone already", s.name(), o.Method, o.Path)
 	default:
 		reason := detail(res)
 		if err := s.st.FailOutbox(o.ID, reason); err != nil {

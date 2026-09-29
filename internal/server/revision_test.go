@@ -53,7 +53,7 @@ func TestCausalReceiptRecoveryAndConflictReadBarrier(t *testing.T) {
 	if code != http.StatusOK || decode[[]store.Ticket](t, body)[0].FirstName != "Correct buyer" {
 		t.Fatalf("retry undid correction: %d %s", code, body)
 	}
-	unknown := store.RecoverySnapshot{BackupFile: store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: 1, FirstName: "Unknown legacy buyer"}}}}
+	unknown := store.RecoverySnapshot{Format: store.NativeBackupFormat, BackupFile: store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: 1, FirstName: "Unknown legacy buyer"}}}}
 	code, body = replacement.do("POST", "/api/recovery", map[string]any{"token": token, "data": unknown}, map[string]string{"TAM-KEY": replacement.key, "X-TAM-Client-Name": "legacy"})
 	if code != http.StatusOK {
 		t.Fatalf("conflict must be retained: %d %s", code, body)
@@ -105,7 +105,7 @@ func TestNumberedPrefixBackupPreservesLegacyNamesAndRecoveryOrdering(t *testing.
 	for _, deleted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "newer correction", true: "newer deletion"}[deleted], func(t *testing.T) {
 			original := newAPI(t)
-			old := store.NewBackupFile()
+			old := store.RecoverySnapshot{BackupFile: store.NewBackupFile(), Format: store.NativeBackupFormat}
 			old.Prefixes = []store.Prefix{{Prefix: "A/B", Color: "blue", Weight: -3}, {Prefix: " E ", Color: "gray", Weight: -5}}
 			headers := map[string]string{"TAM-KEY": original.key, "X-TAM-Client-Name": "old", "X-TAM-Save": "1", "X-TAM-Receipts": "1"}
 			code, body := original.do("POST", "/api/backuprestore", old, headers)
@@ -129,13 +129,13 @@ func TestNumberedPrefixBackupPreservesLegacyNamesAndRecoveryOrdering(t *testing.
 				t.Fatalf("legacy prefix values changed: %+v", prefixes)
 			}
 			headers["X-TAM-Client-Name"] = "newer"
-			latest := store.RecoverySnapshot{BackupFile: store.NewBackupFile()}
+			latest := store.RecoverySnapshot{BackupFile: store.NewBackupFile(), Format: store.NativeBackupFormat}
 			if deleted {
 				code, body = original.do("DELETE", "/api/prefixes?p="+url.QueryEscape(" E "), nil, headers)
 				latest.DeletedPrefixes = []string{" E "}
 			} else {
 				latest.Prefixes = []store.Prefix{{Prefix: " E ", Color: "red", Weight: 9}}
-				code, body = original.do("POST", "/api/backuprestore", latest.BackupFile, headers)
+				code, body = original.do("POST", "/api/backuprestore", latest, headers)
 			}
 			if code != http.StatusOK {
 				t.Fatalf("newer edit: %d %s", code, body)
@@ -196,7 +196,7 @@ func TestNumberedPrefixBackupPreservesLegacyNamesAndRecoveryOrdering(t *testing.
 
 func TestNumberedBackupRejectsNonPrefixRestore(t *testing.T) {
 	a := newAPI(t)
-	code, body := a.do("POST", "/api/backuprestore", store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: 1}}}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": "desk", "X-TAM-Save": "1"})
+	code, body := a.do("POST", "/api/backuprestore", store.RecoverySnapshot{Format: store.NativeBackupFormat, BackupFile: store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: 1}}}}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": "desk", "X-TAM-Save": "1"})
 	if code != http.StatusUnprocessableEntity {
 		t.Fatalf("unsafe numbered restore accepted: %d %s", code, body)
 	}
@@ -206,6 +206,39 @@ func TestNumberedBackupRejectsNonPrefixRestore(t *testing.T) {
 	}
 	if len(backup.Tickets) != 0 {
 		t.Fatal("rejected restore wrote event data")
+	}
+}
+
+func TestPrefixOperationShapeDoesNotEnableThreeListFileImports(t *testing.T) {
+	for _, test := range []struct {
+		name, client, save, restore string
+		body                        string
+		status                      int
+	}{
+		{"numbered prefix operation", "desk", "1", "", `{"prefixes":[{"prefix":" A/B ","color":"blue","weight":-1}],"tickets":[],"baskets":[]}`, http.StatusOK},
+		{"unnumbered file", "desk", "", "", `{"prefixes":[],"tickets":[],"baskets":[]}`, http.StatusBadRequest},
+		{"operator file without provenance", "desk", "", "native", `{"prefixes":[],"tickets":[],"baskets":[]}`, http.StatusBadRequest},
+		{"unnamed operation", "", "1", "", `{"prefixes":[],"tickets":[],"baskets":[]}`, http.StatusBadRequest},
+		{"numbered ticket file", "desk", "1", "", `{"prefixes":[],"tickets":[{"prefix":"A","t_id":1}],"baskets":[]}`, http.StatusUnprocessableEntity},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := newAPI(t)
+			code, response := a.do("POST", "/api/backuprestore", test.body, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": test.client, "X-TAM-Save": test.save, "X-TAM-Restore": test.restore})
+			if code != test.status {
+				t.Fatalf("response %d %s, want %d", code, response, test.status)
+			}
+			if code == http.StatusOK {
+				var envelope struct {
+					Receipt store.SaveReceipt `json:"receipt"`
+				}
+				if err := json.Unmarshal(response, &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.ValidateSaveReceipt(store.Outbox{Method: "POST", Path: "/api/backuprestore", Body: []byte(test.body), Order: store.Order{Client: test.client, Save: 1}}, &envelope.Receipt); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

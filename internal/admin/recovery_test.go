@@ -39,6 +39,7 @@ func TestAdminCreatedKeyRecovery(t *testing.T) {
 			}
 			req := httptest.NewRequest("GET", "/api", nil)
 			req.Header.Set("TAM-KEY", keys[0].AuthKey)
+			req.Header.Set("X-TAM-Client-Name", "desk")
 			w := httptest.NewRecorder()
 			api.ServeHTTP(w, req)
 			var reply struct {

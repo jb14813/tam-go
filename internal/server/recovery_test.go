@@ -10,7 +10,7 @@ import (
 )
 
 func recoveryToken(t *testing.T, a *api, key string) string {
-	return recoveryTokenForClient(t, a, key, "")
+	return recoveryTokenForClient(t, a, key, "test-client")
 }
 
 func recoveryTokenForClient(t *testing.T, a *api, key, client string) string {
@@ -39,7 +39,7 @@ func TestRecoveryClientsSharingAKeyIncludingLateOfflineClient(t *testing.T) {
 			t.Fatalf("no recovery request for shared-key client %s", client)
 		}
 		data := store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: i + 1, FirstName: client}}}
-		code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": data}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
+		code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": nativeTestSnapshot(data)}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
 		if code != http.StatusOK {
 			t.Fatalf("recover %s: %d %s", client, code, body)
 		}
@@ -57,7 +57,7 @@ func TestRecoveryRequestsAgainAfterLaterLossOfOrdinaryWrites(t *testing.T) {
 	a := newAPI(t)
 	client := "desk"
 	token := recoveryTokenForClient(t, a, a.key, client)
-	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": store.NewBackupFile()}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
+	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": nativeTestSnapshot(store.NewBackupFile())}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
 	if code != http.StatusOK {
 		t.Fatalf("acknowledge empty copy: %d %s", code, body)
 	}
@@ -74,7 +74,7 @@ func TestRecoveryRequestsAgainAfterLaterLossOfOrdinaryWrites(t *testing.T) {
 	if next == "" || next == token {
 		t.Fatalf("later loss did not start a fresh round: %q -> %q", token, next)
 	}
-	code, _ = a.do("POST", "/api/recovery", map[string]any{"token": token, "data": store.NewBackupFile()}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
+	code, _ = a.do("POST", "/api/recovery", map[string]any{"token": token, "data": nativeTestSnapshot(store.NewBackupFile())}, map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": client})
 	if code != http.StatusConflict {
 		t.Fatalf("old generation accepted after later loss: %d", code)
 	}
@@ -107,7 +107,7 @@ func TestRecoveryRequestsSurvivePartialRestart(t *testing.T) {
 		Tickets:  []store.Ticket{{Prefix: "A", TID: 1, FirstName: "first"}},
 		Baskets:  []store.Basket{{Prefix: "A", BID: 1, Description: "first", WinningTicket: 1}},
 	}
-	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": first}, map[string]string{"TAM-KEY": a.key})
+	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": nativeTestSnapshot(first)}, map[string]string{"TAM-KEY": a.key})
 	if code != http.StatusOK {
 		t.Fatalf("recover first: %d %s", code, body)
 	}
@@ -127,7 +127,7 @@ func TestRecoveryRequestsSurvivePartialRestart(t *testing.T) {
 		Tickets:  []store.Ticket{{Prefix: "A", TID: 1, FirstName: "old"}, {Prefix: "B", TID: 2, FirstName: "offline"}},
 		Baskets:  []store.Basket{{Prefix: "A", BID: 1, Description: "old", WinningTicket: 2}, {Prefix: "B", BID: 2, WinningTicket: 2}},
 	}
-	code, body = a.do("POST", "/api/recovery", map[string]any{"token": otherToken, "data": second}, map[string]string{"TAM-KEY": other.AuthKey})
+	code, body = a.do("POST", "/api/recovery", map[string]any{"token": otherToken, "data": nativeTestSnapshot(second)}, map[string]string{"TAM-KEY": other.AuthKey})
 	if code != http.StatusOK {
 		t.Fatalf("recover second: %d %s", code, body)
 	}
@@ -146,7 +146,7 @@ func TestRecoveryRequestsSurvivePartialRestart(t *testing.T) {
 	if got.Tickets[0].FirstName != "new edit" || got.Baskets[0].Description != "first" || got.Baskets[0].WinningTicket != 1 {
 		t.Fatalf("overwrote current event rows: %+v", got)
 	}
-	code, _ = a.do("POST", "/api/recovery", map[string]any{"token": otherToken, "data": second}, map[string]string{"TAM-KEY": other.AuthKey})
+	code, _ = a.do("POST", "/api/recovery", map[string]any{"token": otherToken, "data": nativeTestSnapshot(second)}, map[string]string{"TAM-KEY": other.AuthKey})
 	if code != http.StatusOK {
 		t.Fatalf("acknowledged retry = %d, want idempotent 200", code)
 	}
@@ -172,7 +172,7 @@ func TestRecoveryRejectsUnauthenticatedObsoleteAndInvalidSnapshots(t *testing.T)
 		status           int
 	}{
 		{"anonymous", "", token, store.NewBackupFile(), http.StatusUnauthorized},
-		{"obsolete", a.key, "wrong", store.NewBackupFile(), http.StatusConflict},
+		{"obsolete", a.key, "wrong", nativeTestSnapshot(store.NewBackupFile()), http.StatusConflict},
 		{"invalid", a.key, token, store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: -1}}}, http.StatusUnprocessableEntity},
 		{"missing data", a.key, token, nil, http.StatusUnprocessableEntity},
 	} {
@@ -207,7 +207,7 @@ func TestRecoveryNewKeyJoinsPartlyPopulatedGeneration(t *testing.T) {
 	a := newAPI(t)
 	token := recoveryToken(t, a, a.key)
 	data := store.BackupFile{Tickets: []store.Ticket{{Prefix: "A", TID: 1}}}
-	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": data}, map[string]string{"TAM-KEY": a.key})
+	code, body := a.do("POST", "/api/recovery", map[string]any{"token": token, "data": nativeTestSnapshot(data)}, map[string]string{"TAM-KEY": a.key})
 	if code != http.StatusOK {
 		t.Fatalf("initial contribution: %d %s", code, body)
 	}
@@ -222,4 +222,12 @@ func TestRecoveryNewKeyJoinsPartlyPopulatedGeneration(t *testing.T) {
 	if got := recoveryToken(t, a, key.AuthKey); got == "" {
 		t.Fatal("new key missed existing partly populated recovery")
 	}
+}
+
+func nativeTestSnapshot(bf store.BackupFile) store.RecoverySnapshot {
+	snapshot := store.RecoverySnapshot{BackupFile: bf, Format: store.NativeBackupFormat, BasketComponents: []store.BasketComponents{}}
+	for _, row := range bf.Baskets {
+		snapshot.BasketComponents = append(snapshot.BasketComponents, store.BasketComponents{Prefix: row.Prefix, BID: row.BID, Metadata: true, Drawing: true})
+	}
+	return snapshot
 }

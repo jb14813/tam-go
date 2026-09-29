@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -201,6 +202,8 @@ type clientRow struct {
 	LastSeen   string `json:"last_seen"`   // as formatSeen writes it
 	LastUpdate string `json:"last_update"` // as formatSeen writes it
 	Queued     *int   `json:"queued"`      // nil when the client never sent a heartbeat
+	Failed     *int   `json:"failed"`      // nil when no heartbeat is known
+	Recovering *bool  `json:"recovering"`  // nil when no heartbeat is known
 }
 
 type statusData struct {
@@ -484,7 +487,7 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request, s *session) {
 }
 
 // snapshot returns the registry's records, or nothing without a registry.
-func (h *handler) snapshot() map[string]presence.Record {
+func (h *handler) snapshot() map[presence.Identity]presence.Record {
 	if h.info.Presence == nil {
 		return nil
 	}
@@ -494,23 +497,30 @@ func (h *handler) snapshot() map[string]presence.Record {
 // clientRows joins the keys with what the registry saw of each. The times
 // in memory are exact and win; the persisted ones stand in after a
 // restart until the client shows up again.
-func clientRows(keys []store.AuthKey, live map[string]presence.Record, now time.Time) []clientRow {
+func clientRows(keys []store.AuthKey, live map[presence.Identity]presence.Record, now time.Time) []clientRow {
 	rows := make([]clientRow, 0, len(keys))
 	for _, k := range keys {
-		rec := live[k.AuthKey]
-		seen := pick(rec.Seen, k.LastSeen)
-		row := clientRow{
-			Name:       k.Description,
-			Program:    rec.Client,
-			State:      stateOf(seen, now),
-			LastSeen:   formatAgo(seen, now),
-			LastUpdate: formatAgo(pick(rec.Updated, k.LastUpdate), now),
+		var identities []presence.Identity
+		for id := range live {
+			if id.Key == k.AuthKey {
+				identities = append(identities, id)
+			}
 		}
-		if rec.HasPending {
-			pending := rec.Pending
-			row.Queued = &pending
+		sort.Slice(identities, func(i, j int) bool { return identities[i].Name < identities[j].Name })
+		if len(identities) == 0 {
+			// Persisted key activity cannot prove which workstation is present.
+			seen := pick(time.Time{}, k.LastSeen)
+			rows = append(rows, clientRow{Name: k.Description, State: stateOf(seen, now), LastSeen: formatAgo(seen, now), LastUpdate: formatAgo(pick(time.Time{}, k.LastUpdate), now)})
 		}
-		rows = append(rows, row)
+		for _, id := range identities {
+			rec := live[id]
+			row := clientRow{Name: id.Name, Program: rec.Client, State: stateOf(rec.Seen, now), LastSeen: formatAgo(rec.Seen, now), LastUpdate: formatAgo(rec.Updated, now)}
+			if rec.HasPending {
+				pending, failed, recovering := rec.Pending, rec.Failed, rec.Recovering
+				row.Queued, row.Failed, row.Recovering = &pending, &failed, &recovering
+			}
+			rows = append(rows, row)
+		}
 	}
 	return rows
 }
@@ -727,7 +737,7 @@ func (h *handler) restore(w http.ResponseWriter, r *http.Request, s *session) {
 		h.renderBackup(w, r, s, http.StatusBadRequest, "That is not a backup file: "+err.Error())
 		return
 	}
-	if err := store.ValidateRecoverySnapshot(&bf); err != nil {
+	if err := store.ValidateNativeBackup(&bf); err != nil {
 		h.renderBackup(w, r, s, http.StatusBadRequest, "That backup cannot be restored: "+err.Error())
 		return
 	}

@@ -33,8 +33,8 @@
 			if (!alive || generation !== requestGeneration) return;
 			const rtnData = Object.create(null);
 			prefixes.forEach((p) => (rtnData[p.prefix] = { ...p }));
-			resData.forEach((c) => (rtnData[c.prefix] = { ...rtnData[c.prefix], ...c }));
-			tableData = [...Object.values(rtnData)];
+			resData.filter((c) => !c.is_total).forEach((c) => (rtnData[c.prefix] = { ...rtnData[c.prefix], ...c }));
+			tableData = [...Object.values(rtnData), ...resData.filter((c) => c.is_total)];
 			lastRefreshed = new Date().toLocaleString();
 			loadError = '';
 			loaded = true;
@@ -86,7 +86,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each tableData as line (line.prefix)}
+			{#each tableData as line (JSON.stringify([!!line.is_total, line.prefix]))}
 				<tr class={tS[line.color] || ''}>
 					<td class="border p-0.5">{line.prefix}</td>
 					<td class="border p-0.5">{line.unique_buyers || 0}</td>

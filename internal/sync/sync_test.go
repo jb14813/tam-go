@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/remote"
+	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/version"
 )
@@ -29,6 +31,23 @@ type fakeServer struct {
 func newFakeServer(t *testing.T) *fakeServer {
 	t.Helper()
 	f := &fakeServer{mode: "up"}
+	database, err := db.Open(filepath.Join(t.TempDir(), "fake-server.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if err := db.Migrate(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateServer(database); err != nil {
+		t.Fatal(err)
+	}
+	st := store.New(database)
+	key, err := st.CreateKey("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := server.NewHandler(st, server.FixedPassword("secret"))
 	f.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		mode := f.mode
@@ -47,14 +66,15 @@ func newFakeServer(t *testing.T) *fakeServer {
 			w.Write([]byte(`{"detail":"Invalid Key"}`))
 		case r.URL.Path == "/api":
 			authed := mode != "nokey"
-			json.NewEncoder(w).Encode(map[string]any{"whoami": "TAM Server", "authenticated": authed, "healthy": true})
+			json.NewEncoder(w).Encode(nativeHeartbeat(authed))
 		case r.URL.Path == "/api/backuprestore":
 			w.Write([]byte(`{"prefixes":[{"prefix":"S","color":"red","weight":1}],"tickets":[{"prefix":"S","t_id":1,"first_name":"Sam","last_name":"Server","phone_number":"1","pref":"CALL"}],"baskets":[]}`))
-		case r.URL.Path == "/api/bad":
+		case r.URL.Path == "/api/drawing":
 			w.WriteHeader(400)
 			w.Write([]byte(`{"detail":"nope"}`))
 		default:
-			w.Write([]byte(`[]`))
+			r.Header.Set("TAM-KEY", key.AuthKey)
+			native.ServeHTTP(w, r)
 		}
 	}))
 	t.Cleanup(f.ts.Close)
@@ -140,7 +160,7 @@ func TestStandaloneHasNoState(t *testing.T) {
 func TestDrainOrderAndFailedList(t *testing.T) {
 	f := newFakeServer(t)
 	s, st := newSyncer(t, f.ts.URL)
-	for _, q := range [][2]string{{"POST", "/api/tickets"}, {"POST", "/api/bad"}, {"POST", "/api/baskets"}} {
+	for _, q := range [][2]string{{"POST", "/api/tickets"}, {"POST", "/api/drawing"}, {"POST", "/api/baskets"}} {
 		if err := s.Enqueue(q[0], q[1], []byte(`[]`)); err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +171,7 @@ func TestDrainOrderAndFailedList(t *testing.T) {
 	}
 	seen := f.seen()
 	// The replay is followed at once by a heartbeat saying nothing waits.
-	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api"}
+	want := []string{"GET /api", "POST /api/tickets", "POST /api/drawing", "POST /api/baskets", "GET /api"}
 	if len(seen) != len(want) {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
@@ -161,7 +181,7 @@ func TestDrainOrderAndFailedList(t *testing.T) {
 		}
 	}
 	failed, _ := st.ListFailed()
-	if len(failed) != 1 || failed[0].Path != "/api/bad" || failed[0].LastError != "400: nope" {
+	if len(failed) != 1 || failed[0].Path != "/api/drawing" || failed[0].LastError != "400: nope" {
 		t.Fatalf("failed list = %+v", failed)
 	}
 	status := s.Status()
@@ -323,4 +343,14 @@ func TestHeartbeatRightAfterTheReplay(t *testing.T) {
 	if got := queued(); len(got) != 2 {
 		t.Fatalf("heartbeats said %v queued, want no heartbeat from a tick that sent nothing", got)
 	}
+}
+
+func nativeHeartbeat(authenticated bool) map[string]any {
+	return map[string]any{"whoami": "TAM Server", "authenticated": authenticated, "healthy": true, "backup_metadata": true, "receipts": true, "conflicts": 0, "review_token": ""}
+}
+
+func writeNativeReceipt(w http.ResponseWriter, r *http.Request, data any) {
+	n, _ := strconv.ParseInt(r.Header.Get("X-TAM-Save"), 10, 64)
+	w.Header().Set("X-TAM-Receipts", "1")
+	json.NewEncoder(w).Encode(map[string]any{"data": data, "receipt": store.SaveReceipt{Revisions: []store.RecordRevision{}}, "client": r.Header.Get("X-TAM-Client-Name"), "save": n})
 }

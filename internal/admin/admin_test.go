@@ -872,7 +872,7 @@ func TestStatusListsClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.stamp(stored.AuthKey, base.Add(-40*time.Second), base.Add(-time.Hour))
-	s.reg.Heartbeat(busy.AuthKey, "tam-client/1.2.3", 0)
+	s.reg.Heartbeat(busy.AuthKey, "Busy", "tam-client/1.2.3", 0, 0, false)
 
 	body, _ := s.page("/admin/status")
 	if !strings.Contains(body, `<meta http-equiv="refresh" content="5">`) {
@@ -882,9 +882,9 @@ func TestStatusListsClients(t *testing.T) {
 		t.Fatalf("the table is called Clients:\n%s", body)
 	}
 	for _, want := range []string{
-		row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", "never", "0"),
-		row("Quiet &lt;one&gt;", dash, "never", "never", "never", dash),
-		row("Stored", dash, "away for 40 s", at(base.Add(-40*time.Second))+" (just now)", at(base.Add(-time.Hour))+" (1 h ago)", dash),
+		row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", "never", "0", "0", "false"),
+		row("Quiet &lt;one&gt;", dash, "never", "never", "never", dash, dash, dash),
+		row("Stored", dash, "away for 40 s", at(base.Add(-40*time.Second))+" (just now)", at(base.Add(-time.Hour))+" (1 h ago)", dash, dash, dash),
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("status page lacks the row %s:\n%s", want, body)
@@ -894,28 +894,28 @@ func TestStatusListsClients(t *testing.T) {
 	// An accepted write and a heartbeat with a queue show up, and the
 	// values in memory win over what the database remembers.
 	s.stamp(busy.AuthKey, base.Add(-24*time.Hour), base.Add(-24*time.Hour))
-	s.reg.Updated(busy.AuthKey)
-	s.reg.Heartbeat(busy.AuthKey, "tam-client/1.2.3", 2)
+	s.reg.Updated(busy.AuthKey, "Busy")
+	s.reg.Heartbeat(busy.AuthKey, "Busy", "tam-client/1.2.3", 2, 0, false)
 	body, _ = s.page("/admin/status")
-	if want := row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", at(base)+" (just now)", "2"); !strings.Contains(body, want) {
+	if want := row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", at(base)+" (just now)", "2", "0", "false"); !strings.Contains(body, want) {
 		t.Fatalf("status page lacks the row %s:\n%s", want, body)
 	}
 
 	// Connected means seen within 15 s; after that the client is away.
 	s.h.ss.now = func() time.Time { return base.Add(15 * time.Second) }
-	if body, _ = s.page("/admin/status"); !strings.Contains(body, row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", at(base)+" (just now)", "2")) {
+	if body, _ = s.page("/admin/status"); !strings.Contains(body, row("Busy", "tam-client/1.2.3", "connected", at(base)+" (just now)", at(base)+" (just now)", "2", "0", "false")) {
 		t.Fatalf("at 15 s the client is still connected:\n%s", body)
 	}
 	s.h.ss.now = func() time.Time { return base.Add(16 * time.Second) }
-	if body, _ = s.page("/admin/status"); !strings.Contains(body, row("Busy", "tam-client/1.2.3", "away for 16 s", at(base)+" (just now)", at(base)+" (just now)", "2")) {
+	if body, _ = s.page("/admin/status"); !strings.Contains(body, row("Busy", "tam-client/1.2.3", "away for 16 s", at(base)+" (just now)", at(base)+" (just now)", "2", "0", "false")) {
 		t.Fatalf("at 16 s the client is away:\n%s", body)
 	}
 	s.h.ss.now = func() time.Time { return base.Add(2*time.Minute + 3*time.Second) }
 	body, _ = s.page("/admin/status")
-	if !strings.Contains(body, row("Busy", "tam-client/1.2.3", "away for 2 min 3 s", at(base)+" (2 min ago)", at(base)+" (2 min ago)", "2")) {
+	if !strings.Contains(body, row("Busy", "tam-client/1.2.3", "away for 2 min 3 s", at(base)+" (2 min ago)", at(base)+" (2 min ago)", "2", "0", "false")) {
 		t.Fatalf("after two minutes:\n%s", body)
 	}
-	if !strings.Contains(body, row("Stored", dash, "away for 2 min 43 s", at(base.Add(-40*time.Second))+" (2 min ago)", at(base.Add(-time.Hour))+" (1 h ago)", dash)) {
+	if !strings.Contains(body, row("Stored", dash, "away for 2 min 43 s", at(base.Add(-40*time.Second))+" (2 min ago)", at(base.Add(-time.Hour))+" (1 h ago)", dash, dash, dash)) {
 		t.Fatalf("the stored client after two minutes:\n%s", body)
 	}
 
@@ -986,7 +986,7 @@ func TestStatusWithoutARegistry(t *testing.T) {
 	defer ts.Close()
 	s := &site{t: t, url: ts.URL, c: newBrowser(t)}
 	s.login("secret")
-	if body, _ := s.page("/admin/status"); !strings.Contains(body, row("client", "\u2013", "never", "never", "never", "\u2013")) {
+	if body, _ := s.page("/admin/status"); !strings.Contains(body, row("client", "\u2013", "never", "never", "never", "\u2013", "\u2013", "\u2013")) {
 		t.Fatalf("status without a registry shows what the database has:\n%s", body)
 	}
 }

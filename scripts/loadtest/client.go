@@ -402,16 +402,16 @@ func (l *client) readReports(t *test, ph *phase) {
 	var counts []store.ReportCountLine
 	if _, err := l.call(ph, "counts report", http.MethodGet, "/api/reports/counts", nil, &counts, 0); err == nil {
 		want := t.ev.counts()
-		got := map[string]store.ReportCountLine{}
+		got := map[countKey]store.ReportCountLine{}
 		for _, c := range counts {
-			got[c.Prefix] = c
+			got[countKey{prefix: c.Prefix, total: c.IsTotal}] = c
 		}
 		if len(got) != len(want) {
 			t.problems.add("report", 1, "%s: the counts report has %d lines, the data %d", l.prog.name, len(got), len(want))
 		}
 		for p, w := range want {
 			if got[p] != w {
-				t.problems.add("report", 1, "%s: counts for %s are %+v, the data says %+v", l.prog.name, p, got[p], w)
+				t.problems.add("report", 1, "%s: counts for %+v are %+v, the data says %+v", l.prog.name, p, got[p], w)
 			}
 		}
 	}

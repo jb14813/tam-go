@@ -21,7 +21,7 @@ func TestRemoteImportUsesConnectionSelectedWhileBodyArrives(t *testing.T) {
 			oldStore, _ := remoteFixture(t, f)
 			bf := store.NewBackupFile()
 			bf.Tickets = []store.Ticket{{Prefix: "A", TID: 22, FirstName: "Imported"}}
-			data, err := json.Marshal(bf)
+			data, err := json.Marshal(nativeFixtureBackup(bf))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +92,7 @@ func TestRemoteRestoreFinishesBeforeConnectionChange(t *testing.T) {
 				var release sync.Once
 				inner := server.NewHandler(rst, server.FixedPassword("secret"))
 				rs := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.Method == "POST" && r.URL.Path == "/api/drawing" {
+					if r.Method == "POST" && ((operation == "import" && r.URL.Path == "/api/backuprestore") || (operation == "push" && r.URL.Path == "/api/drawing")) {
 						close(started)
 						<-resume
 					}
@@ -105,7 +105,7 @@ func TestRemoteRestoreFinishesBeforeConnectionChange(t *testing.T) {
 				}
 				bf := store.NewBackupFile()
 				bf.Baskets = []store.Basket{{Prefix: "A", BID: 3, Description: "Prize", WinningTicket: 22}}
-				path, payload := "/api/backuprestore/remote", any(bf)
+				path, payload := "/api/backuprestore/remote", any(nativeFixtureBackup(bf))
 				if operation == "push" {
 					if err := f.st.Import(bf); err != nil {
 						t.Fatal(err)
@@ -117,7 +117,7 @@ func TestRemoteRestoreFinishesBeforeConnectionChange(t *testing.T) {
 				select {
 				case <-started:
 				case <-time.After(3 * time.Second):
-					t.Fatal("restore did not reach its drawing request")
+					t.Fatal("restore did not reach its native request")
 				}
 				changed := make(chan int, 1)
 				go func() {

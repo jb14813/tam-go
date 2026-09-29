@@ -1,6 +1,9 @@
 package client
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -9,6 +12,45 @@ import (
 	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/store"
 )
+
+func TestExistingGoPrefixPushJournalReplaysUnchanged(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "waiting", true: "acknowledgement lost before update"}[accepted], func(t *testing.T) {
+			f := newFixture(t)
+			event := newCausalEventServer(t, nil, nil)
+			event.configure(t, f)
+			backup := store.NewBackupFile()
+			backup.Prefixes = []store.Prefix{{Prefix: " A/B ", Color: "red", Weight: -1}}
+			body, err := json.Marshal(backup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			order, err := f.st.NextSave(f.h.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if accepted {
+				// The prior Go server hashed this prefix operation's three lists.
+				// Keep that persisted digest and receipt through the server update.
+				digest := fmt.Sprintf("%x", sha256.Sum256([]byte("POST /api/backuprestore?\n"+string(body))))
+				if _, _, err := event.st.InOrder(order.Client, order.Save, digest, func(st *store.Store) error { return st.UpsertPrefixes(backup.Prefixes) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := f.st.SaveQueued("POST", "/api/backuprestore", body, order, func(st *store.Store) error { return st.UpsertPrefixes(backup.Prefixes) }); err != nil {
+				t.Fatal(err)
+			}
+			f.h.sync.Tick()
+			if pending, failed := pending(t, f.st); pending != 0 || failed != 0 {
+				t.Fatalf("existing Go prefix operation was not acknowledged: pending=%d failed=%d", pending, failed)
+			}
+			rows, err := event.st.ListPrefixes()
+			if err != nil || len(rows) != 1 || rows[0] != backup.Prefixes[0] {
+				t.Fatalf("prefix identity changed: %+v %v", rows, err)
+			}
+		})
+	}
+}
 
 func TestPushHTTPExplicitChoiceSurvivesRecovery(t *testing.T) {
 	tests := []struct {
@@ -150,12 +192,12 @@ func TestPushHTTPLegacyPrefixesPreserveExactIdentity(t *testing.T) {
 				event.configure(t, a, b)
 				backup := store.NewBackupFile()
 				backup.Prefixes = []store.Prefix{prefix}
-				causalSave(t, b, "/api/backuprestore/local", backup)
+				causalSave(t, b, "/api/backuprestore/local", nativeFixtureBackup(backup))
 				// Push before the first heartbeat: the server has never seen
 				// this exact legacy identity, so form validation cannot help.
 				causalSave(t, b, "/api/backuprestore/push/prefixes", map[string]any{})
 				backup.Prefixes[0].Color, backup.Prefixes[0].Weight = "blue", 2
-				causalSave(t, a, "/api/backuprestore/local", backup)
+				causalSave(t, a, "/api/backuprestore/local", nativeFixtureBackup(backup))
 				causalSave(t, a, "/api/backuprestore/push/prefixes", map[string]any{})
 				causalSave(t, b, "/api/backuprestore/push/prefixes", map[string]any{})
 				causalCaughtUp(t, a, b)
@@ -207,7 +249,7 @@ func TestPushHTTPLegacyPrefixLostAcknowledgmentCannotUndoCorrectionAfterReplacem
 	event.configure(t, a, b)
 	backup := store.NewBackupFile()
 	backup.Prefixes = []store.Prefix{{Prefix: " A/B ", Color: "red", Weight: -1}}
-	causalSave(t, b, "/api/backuprestore/local", backup)
+	causalSave(t, b, "/api/backuprestore/local", nativeFixtureBackup(backup))
 	lose.Store(true)
 	if code, body := b.do("POST", "/api/backuprestore/push/prefixes", map[string]any{}, nil); code < 400 {
 		t.Fatalf("unacknowledged prefix push reported success: %d %s", code, body)
@@ -216,7 +258,7 @@ func TestPushHTTPLegacyPrefixLostAcknowledgmentCannotUndoCorrectionAfterReplacem
 		t.Fatalf("prefix push was not durably queued: pending=%d failed=%d", p, failed)
 	}
 	backup.Prefixes[0].Color = "blue"
-	causalSave(t, a, "/api/backuprestore/local", backup)
+	causalSave(t, a, "/api/backuprestore/local", nativeFixtureBackup(backup))
 	causalSave(t, a, "/api/backuprestore/push/prefixes", map[string]any{})
 	for replacement := 0; replacement < 2; replacement++ {
 		event = event.replacement(t)

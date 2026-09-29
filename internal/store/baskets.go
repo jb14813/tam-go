@@ -68,6 +68,9 @@ func (s *Store) BasketRange(prefix string, from, to int) ([]Basket, error) {
 
 // UpsertBaskets inserts baskets or updates their description and donors.
 func (s *Store) UpsertBaskets(bs []Basket) error {
+	if err := validateBasketIdentities(bs); err != nil {
+		return err
+	}
 	return s.tx(func(tx *sql.Tx) error {
 		if len(bs) == 0 {
 			return nil
@@ -115,6 +118,9 @@ func (s *Store) UpsertBaskets(bs []Basket) error {
 // UpsertWinning sets the winning ticket of each basket, creating the basket
 // when it does not exist yet.
 func (s *Store) UpsertWinning(bs []Basket) error {
+	if err := validateBasketIdentities(bs); err != nil {
+		return err
+	}
 	return s.tx(func(tx *sql.Tx) error {
 		if err := markBasketComponents(tx, bs, false, true); err != nil {
 			return err
@@ -133,6 +139,18 @@ func (s *Store) UpsertWinning(bs []Basket) error {
 		}
 		return nil
 	})
+}
+
+func validateBasketIdentities(bs []Basket) error {
+	for _, basket := range bs {
+		if err := validateIdentity(basket.BID); err != nil {
+			return err
+		}
+		if err := validateIdentity(basket.WinningTicket); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- drawing view ---

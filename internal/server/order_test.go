@@ -48,8 +48,7 @@ func (a *api) phone() string {
 // is answered as done with X-TAM-Stale; any other save at or below the
 // last number is answered 409 with that number (X-TAM-Last-Save), so a
 // client whose numbers went back numbers it anew rather than lose it.
-// Saves without numbers, as the original client sends them, apply as they
-// come.
+// Saves without a stable identity and number are rejected.
 func TestSavesFromAClientApplyInOrder(t *testing.T) {
 	a := newAPI(t)
 	if code, h := a.orderedSave("L1", "7", "seventh"); code != 200 || h.Get("X-TAM-Stale") != "" {
@@ -70,7 +69,7 @@ func TestSavesFromAClientApplyInOrder(t *testing.T) {
 	if code, _ := a.orderedSave("L1", "8", "eighth"); code != 200 || a.phone() != "eighth" {
 		t.Fatalf("a newer save = %d, the ticket reads %q", code, a.phone())
 	}
-	if code, _ := a.orderedSave("", "", "unnumbered"); code != 200 || a.phone() != "unnumbered" {
+	if code, _ := a.orderedSave("", "", "unnumbered"); code != 400 || a.phone() != "eighth" {
 		t.Fatalf("an unnumbered save = %d, the ticket reads %q", code, a.phone())
 	}
 	for _, bad := range []string{"0", "-1", "x"} {
@@ -129,7 +128,7 @@ func TestARepeatedSaveIsNoUpdate(t *testing.T) {
 	if code, _ := a.orderedSave("L1", "4", "older"); code != 409 {
 		t.Fatalf("an older save = %d, want 409", code)
 	}
-	if rec := reg.Snapshot()[a.key]; rec.Updated != applied || rec.Seen != now {
+	if rec := reg.Snapshot()[presence.Identity{Key: a.key, Name: "L1"}]; rec.Updated != applied || rec.Seen != now {
 		t.Fatalf("after a repeat and an older save: %+v, want updated at the applied save and seen now", rec)
 	}
 }

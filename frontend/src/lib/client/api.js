@@ -3,6 +3,27 @@ import { preserveDraft } from './drafts';
 
 export const API_UNREACHABLE = 'Could not reach the TAM client API';
 
+/** JSON numbers outside this range have already lost their exact identity. */
+export function recordNumberError(value, { includeWinner = true } = {}) {
+	for (const row of Array.isArray(value) ? value : [value]) {
+		if (!row || typeof row !== 'object') continue;
+		for (const field of ['t_id', 'b_id', 'winning_ticket']) {
+			if (!(field in row) || (!includeWinner && field === 'winning_ticket')) continue;
+			if (!Number.isSafeInteger(row[field]) || row[field] < 0) {
+				return `Invalid ${field}: ticket and basket numbers must be whole numbers from 0 to ${Number.MAX_SAFE_INTEGER}.`;
+			}
+		}
+	}
+	return '';
+}
+
+export async function readRecords(res) {
+	const data = await res.json();
+	const problem = recordNumberError(data);
+	if (problem) throw new Error(problem);
+	return data;
+}
+
 /**
  * Reads the `detail` message of an API error response (`{detail: "..."}`),
  * falling back to the status text / code when the body is not JSON.
@@ -39,7 +60,7 @@ export async function getJSON(url, { fetch: doFetch = globalThis.fetch, headers 
 		error(503, API_UNREACHABLE);
 	}
 	if (!res.ok) error(res.status, await readDetail(res));
-	return res.json();
+	return readRecords(res);
 }
 
 /** A ticket placeholder has the same JSON shape as a saved blank ticket.
@@ -47,6 +68,8 @@ export async function getJSON(url, { fetch: doFetch = globalThis.fetch, headers 
  * from this workstation's own local entries when the server is unavailable.
  */
 export async function lookupTicket(prefix, id, { fetch: doFetch = globalThis.fetch } = {}) {
+	const problem = recordNumberError({ t_id: id });
+	if (problem) throw new Error(problem);
 	let res;
 	try {
 		res = await doFetch(`/api/tickets/${encodeURIComponent(prefix)}/${id}`);
@@ -55,7 +78,7 @@ export async function lookupTicket(prefix, id, { fetch: doFetch = globalThis.fet
 	}
 	if (!res.ok) error(res.status, await readDetail(res));
 	return {
-		ticket: await res.json(),
+		ticket: await readRecords(res),
 		found: res.headers.get('X-TAM-Found') === '1',
 		source: res.headers.get('X-TAM-Source') === 'server' ? 'server' : 'local',
 		mode: res.headers.get('X-TAM-Mode') === 'standalone' ? 'standalone' : 'remote'
@@ -141,6 +164,9 @@ export async function saveMarked(
 ) {
 	updateDraft();
 	if (rows.length === 0) return '';
+	const payloadRows = rows.map(payload);
+	const problem = recordNumberError(payloadRows);
+	if (problem) return `Nothing was saved: ${problem} Your rows are still on this page.`;
 	const sent = rows.map(saved);
 	const request = {};
 	rows.forEach((row) => latestSaves.set(row, request));
@@ -148,7 +174,7 @@ export async function saveMarked(
 	try {
 		// Both the values and their generation belong to the invocation, even
 		// when another normal save must finish before this one can be sent.
-		const body = JSON.parse(JSON.stringify(rows.map(payload)));
+		const body = JSON.parse(JSON.stringify(payloadRows));
 		const headers = nextEditHeaders();
 		res = await sendMarked(url, body, keepalive, headers);
 	} catch {

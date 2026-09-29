@@ -21,12 +21,11 @@
 	const pageTitle = 'Settings | TAM';
 
 	// --- Server section: pairing, discovered servers and the failed saves ---
-	const NOT_SUPPORTED = 'This client does not support pairing yet';
 	const SERVERS_POLL_MS = 5000;
 	const STATUS_POLL_MS = 5000;
 
 	// A server is set either by pairing, which also names it, or by typing
-	// it into the Remote Mode fields below, the original's way, where the
+	// it into the Remote Mode fields below, where the
 	// key comes from Auth Keys. Only the first is "paired".
 	let configured = $derived(!!data.settings.remote_server);
 	let paired = $derived(configured && !!data.settings.remote_name);
@@ -34,7 +33,7 @@
 	let serverAddress = $derived(`${data.settings.remote_server}:${data.settings.remote_port}`);
 	let pairVerb = $derived(paired ? 'Pair again' : 'Pair');
 	let servers = $state([]);
-	let pairingUnsupported = $state(false);
+	let discoveryError = $state('');
 	// Fields for pairing; a discovered server's Use button fills them, and
 	// while paired they hold the current server, for pairing again.
 	let pair = $state(untrack(() => pairFields(data.settings)));
@@ -70,7 +69,6 @@
 		} catch {
 			return { ok: false, message: API_UNREACHABLE };
 		}
-		if (res.status === 404) return { ok: false, message: NOT_SUPPORTED };
 		if (!res.ok) return { ok: false, message: await readDetail(res) };
 		let answer = {};
 		try {
@@ -204,9 +202,8 @@
 		let stopped = false;
 		let timer;
 		const loop = async () => {
-			const code = await pollStatus();
-			// An older client has no status route: no point asking again this page load.
-			if (stopped || code === 404) return;
+			await pollStatus();
+			if (stopped) return;
 			timer = setTimeout(loop, STATUS_POLL_MS);
 		};
 		loop();
@@ -216,20 +213,21 @@
 		};
 	});
 
-	// The servers found on the network, while no server is set. An older
-	// client answers 404: pairing is not available then.
+	// The servers found on the network, while no server is set.
 	$effect(() => {
-		if (configured || pairingUnsupported) return;
+		if (configured) return;
 		let stopped = false;
 		let timer;
 		const loop = async () => {
 			const { status: code, data: list } = await pollJSON('/api/servers');
 			if (stopped) return;
-			if (code === 404) {
-				pairingUnsupported = true;
-				return;
+			if (code === 200 && Array.isArray(list)) {
+				servers = list;
+				discoveryError = '';
+			} else {
+				servers = [];
+				discoveryError = code === 0 ? API_UNREACHABLE : `TAM server discovery unavailable (HTTP ${code}). Check the client installation.`;
 			}
-			if (code === 200 && Array.isArray(list)) servers = list;
 			timer = setTimeout(loop, SERVERS_POLL_MS);
 		};
 		loop();
@@ -345,10 +343,9 @@
 				{/if}
 				{@render pairForm(pairVerb)}
 			</div>
-		{:else if pairingUnsupported}
-			<div>{NOT_SUPPORTED}</div>
 		{:else}
 			<div>Servers on this network:</div>
+			{#if discoveryError}<p role="alert" class={tS.red}>{discoveryError}</p>{/if}
 			{#each servers as s}
 				<div class="flex flex-row gap-1 items-center">
 					<div>
@@ -358,7 +355,7 @@
 					<button class={bS.gray} disabled={busy || saving} onclick={() => useServer(s)}>Use</button>
 				</div>
 			{:else}
-				<div class="italic">Looking for servers on this network...</div>
+				{#if !discoveryError}<div class="italic">Looking for servers on this network...</div>{/if}
 			{/each}
 			{@render pairForm('Pair')}
 		{/if}

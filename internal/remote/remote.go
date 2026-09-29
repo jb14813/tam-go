@@ -3,12 +3,14 @@ package remote
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,8 +26,8 @@ type Client struct {
 }
 
 // New returns a client for baseURL (for example https://tam.lan:8443). When
-// insecureTLS is set the server certificate is not verified, which matches
-// the original's policy for the self-signed Caddy certificate.
+// insecureTLS is set the server certificate is not verified. Paired clients
+// use NewPinned to verify their trusted server certificate.
 //
 // Connecting is given five seconds, so an unreachable server fails fast; a
 // whole request is given thirty, so a large backup push over slow Wi-Fi is
@@ -36,7 +38,7 @@ func New(baseURL, key string, insecureTLS bool) *Client {
 	tr.TLSHandshakeTimeout = 5 * time.Second
 	tr.ResponseHeaderTimeout = 10 * time.Second
 	if insecureTLS {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // mirrors the original deployment
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // caller explicitly selected unverified TLS
 	}
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"),
@@ -72,15 +74,23 @@ func (r *Response) JSON(v any) error { return json.Unmarshal(r.Body, v) }
 // when not nil, is sent as JSON. A transport failure is returned as an
 // error; any HTTP status is returned as a Response.
 func (c *Client) Do(method, path string, headers map[string]string, body any) (*Response, error) {
+	return c.DoContext(context.Background(), method, path, headers, body)
+}
+
+// DoContext sends a request within the caller's operation deadline. Multiple
+// requests sharing a context consume one budget, including connection setup.
+func (c *Client) DoContext(ctx context.Context, method, path string, headers map[string]string, body any) (*Response, error) {
 	var rdr io.Reader
+	var requestBody []byte
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
+		requestBody = data
 		rdr = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, c.base+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +112,25 @@ func (c *Client) Do(method, path string, headers map[string]string, body any) (*
 		return nil, err
 	}
 	out := &Response{Status: res.StatusCode, Body: data, Header: res.Header.Clone()}
-	if res.Header.Get("X-TAM-Receipts") == "1" {
+	wantsReceipt := headers["X-TAM-Save"] != "" || (headers["X-TAM-Receipts"] == "1" && method == http.MethodPost)
+	if res.Header.Get("X-TAM-Receipts") == "1" || (out.OK() && wantsReceipt) {
 		var envelope struct {
 			Data    json.RawMessage    `json:"data"`
 			Receipt *store.SaveReceipt `json:"receipt"`
+			Client  string             `json:"client"`
+			Save    int64              `json:"save"`
 		}
-		if err := json.Unmarshal(data, &envelope); err != nil || len(envelope.Data) == 0 || envelope.Receipt == nil {
+		if err := json.Unmarshal(data, &envelope); err != nil || len(envelope.Data) == 0 || envelope.Receipt == nil || envelope.Receipt.Revisions == nil {
 			return nil, fmt.Errorf("server sent an invalid save receipt")
+		}
+		if number := headers["X-TAM-Save"]; number != "" {
+			n, err := strconv.ParseInt(number, 10, 64)
+			if err != nil || n <= 0 || envelope.Save != n || envelope.Client != headers["X-TAM-Client-Name"] {
+				return nil, fmt.Errorf("server sent a receipt for a different save")
+			}
+			if err := store.ValidateSaveReceipt(store.Outbox{Method: method, Path: path, Body: requestBody, Order: store.Order{Client: envelope.Client, Save: n}}, envelope.Receipt); err != nil {
+				return nil, fmt.Errorf("server sent an invalid save receipt: %w", err)
+			}
 		}
 		out.Body, out.Receipt = envelope.Data, envelope.Receipt
 	}

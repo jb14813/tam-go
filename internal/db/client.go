@@ -81,7 +81,7 @@ var clientColumns = []struct{ table, column, decl string }{
 }
 
 // MigrateClient creates the client-only tables. It runs after Migrate and
-// is safe to run on every start; the original app ignores these tables.
+// is safe to run on every start.
 func MigrateClient(sqldb *sql.DB) error {
 	for _, stmt := range ClientTables {
 		if _, err := sqldb.Exec(stmt); err != nil {

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestSaveReceiptEnvelopePreservesLegacyResponseData(t *testing.T) {
+func TestSaveReceiptEnvelopePreservesResponseData(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-TAM-Receipts") != "1" {
 			t.Error("receipt not requested")
@@ -21,6 +21,45 @@ func TestSaveReceiptEnvelopePreservesLegacyResponseData(t *testing.T) {
 	}
 	if !response.OK() || response.Receipt == nil || string(response.Body) != `[{"prefix":"A","t_id":42}]` {
 		t.Fatalf("receipt envelope not decoded: %+v", response)
+	}
+}
+
+func TestNumberedReceiptRequiredWithoutResponseHeader(t *testing.T) {
+	for _, body := range []string{
+		`<html>Wrong proxy</html>`, `[]`, `{"data":[],"receipt":{}}`,
+		`{"data":[],"receipt":{"revisions":[]},"client":"other","save":1}`,
+		`{"data":[],"receipt":{"revisions":[]},"client":"desk","save":2}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+			defer server.Close()
+			res, err := New(server.URL, "key", false).Do("POST", "/api/tickets", map[string]string{"X-TAM-Client-Name": "desk", "X-TAM-Save": "1"}, []any{})
+			if err == nil || res != nil {
+				t.Fatalf("invalid numbered acknowledgement accepted: %+v %v", res, err)
+			}
+		})
+	}
+}
+
+func TestMatchingNumberedReceiptAcceptedWithoutResponseHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[],"receipt":{"revisions":[]},"client":"desk","save":1}`))
+	}))
+	defer server.Close()
+	res, err := New(server.URL, "key", false).Do("POST", "/api/tickets", map[string]string{"X-TAM-Client-Name": "desk", "X-TAM-Save": "1"}, []any{})
+	if err != nil || res.Receipt == nil {
+		t.Fatalf("valid envelope rejected: %+v %v", res, err)
+	}
+}
+
+func TestMatchingEnvelopeWithMissingRecordReceiptCannotAcknowledgeWrite(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[],"receipt":{"revisions":[]},"client":"desk","save":1}`))
+	}))
+	defer server.Close()
+	res, err := New(server.URL, "key", false).Do("POST", "/api/tickets", map[string]string{"X-TAM-Client-Name": "desk", "X-TAM-Save": "1"}, []map[string]any{{"prefix": "A", "t_id": 1, "first_name": "Kept"}})
+	if err == nil || res != nil {
+		t.Fatalf("empty receipt acknowledged nonempty request: %+v %v", res, err)
 	}
 }
 

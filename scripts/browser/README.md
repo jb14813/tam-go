@@ -38,6 +38,12 @@ Settings tests delay a real save acknowledgement while typing continues. Print
 tests correct winners through another client and require Print to refresh before
 printing; an unavailable report must show an error instead of printing old rows.
 
+The [data integrity regressions](data-integrity.spec.js) also preserve newer Prefix Settings input during a save,
+keep a prefix named Total separate from the aggregate count, and reject unsafe
+numeric IDs before any part of a request is stored. They check the largest
+supported ticket number, refuse unsafe existing search results and browser
+drafts, and show missing native status/discovery endpoints until polling recovers.
+
 Build the frontend and both Linux programs first, then run on Linux (Node.js 22+):
 
 ```sh

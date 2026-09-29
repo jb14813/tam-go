@@ -199,7 +199,7 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 			return
 		}
 		h.touch(key)
-		h.presence.Seen(key, clientOf(r))
+		h.presence.Seen(key, r.Header.Get("X-TAM-Client-Name"), clientOf(r))
 		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 			if strings.HasPrefix(r.URL.Path, "/api/prefixes") || strings.HasPrefix(r.URL.Path, "/api/tickets") || strings.HasPrefix(r.URL.Path, "/api/baskets") || strings.HasPrefix(r.URL.Path, "/api/drawing") || strings.HasPrefix(r.URL.Path, "/api/reports") {
 				if err := h.st.CheckConflicts(); err != nil {
@@ -219,7 +219,7 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 		}
 		// A repeat of a save already applied (X-TAM-Stale) changed nothing.
 		if sw.status/100 == 2 && sw.Header().Get("X-TAM-Stale") == "" {
-			h.presence.Updated(key)
+			h.presence.Updated(key, r.Header.Get("X-TAM-Client-Name"))
 			h.markUpdated(key)
 		}
 	})
@@ -245,13 +245,9 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
-// keyOf returns the request's access key. The original client sends it as
-// TAM_KEY on its server-backup download, so that spelling counts too.
+// keyOf returns the native protocol's access key.
 func keyOf(r *http.Request) string {
-	if key := r.Header.Get("TAM-KEY"); key != "" {
-		return key
-	}
-	return r.Header.Get("TAM_KEY")
+	return r.Header.Get("TAM-KEY")
 }
 
 // clientOf names the program behind a request: the X-TAM-Client header
@@ -353,13 +349,22 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if authed {
+		if _, err := recoveryClient(r); err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// The client's heartbeat is this route; X-TAM-Pending on it says
 		// how many saves still wait on the client.
 		h.touch(key)
 		if pending, err := strconv.Atoi(r.Header.Get("X-TAM-Pending")); err == nil && pending >= 0 {
-			h.presence.Heartbeat(key, clientOf(r), pending)
+			failed, err := strconv.Atoi(r.Header.Get("X-TAM-Failed"))
+			if err != nil || failed < 0 {
+				failed = 0
+			}
+			recovering, _ := strconv.ParseBool(r.Header.Get("X-TAM-Recovering"))
+			h.presence.Heartbeat(key, r.Header.Get("X-TAM-Client-Name"), clientOf(r), pending, failed, recovering)
 		} else {
-			h.presence.Seen(key, clientOf(r))
+			h.presence.Seen(key, r.Header.Get("X-TAM-Client-Name"), clientOf(r))
 		}
 	}
 	reply := map[string]any{
@@ -369,6 +374,7 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	if authed {
 		client, err := recoveryClient(r)
 		reply["backup_metadata"] = true
+		reply["receipts"] = true
 		if err != nil {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -415,16 +421,14 @@ func (e behindError) Error() string {
 // so with X-TAM-Stale; the client takes it as done. An older save is not
 // applied either, and is answered 409 with the last number applied
 // (X-TAM-Last-Save, and last_save in the body), so a client whose numbers
-// went back numbers it again and resends it. Saves without numbers, as the
-// original client sends them, apply as they come. content is the save as
+// went back numbers it again and resends it. Ordinary saves always require
+// a stable identity and number. content is the save as
 // decoded (nil when the path says it all), for the save's digest.
 func (h *handler) ordered(w http.ResponseWriter, r *http.Request, content any, save func(*store.Store) error) (stale bool, err error) {
 	client, number := r.Header.Get("X-TAM-Client-Name"), r.Header.Get("X-TAM-Save")
-	if client == "" && number == "" {
-		return false, save(h.st)
-	}
 	n, perr := strconv.ParseInt(number, 10, 64)
-	if client == "" || len(client) > 64 || perr != nil || n <= 0 {
+	_, cerr := recoveryClient(r)
+	if cerr != nil || perr != nil || n <= 0 {
 		return false, errOrder
 	}
 	outcome, last, err := h.st.InOrder(client, n, digest(r, content), save)
@@ -493,10 +497,6 @@ func writeStoreError(w http.ResponseWriter, err error) {
 }
 
 func (h *handler) writeResult(w http.ResponseWriter, r *http.Request, data any) {
-	if r.Header.Get("X-TAM-Receipts") != "1" {
-		httpx.WriteJSON(w, http.StatusOK, data)
-		return
-	}
 	n, _ := strconv.ParseInt(r.Header.Get("X-TAM-Save"), 10, 64)
 	receipt, err := h.st.Receipt(store.Order{Client: r.Header.Get("X-TAM-Client-Name"), Save: n})
 	if err != nil {
@@ -504,7 +504,7 @@ func (h *handler) writeResult(w http.ResponseWriter, r *http.Request, data any) 
 		return
 	}
 	w.Header().Set("X-TAM-Receipts", "1")
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": data, "receipt": receipt})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": data, "receipt": receipt, "client": r.Header.Get("X-TAM-Client-Name"), "save": n})
 }
 
 // decodeList reads a JSON list body, validates it and answers the error
@@ -638,7 +638,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 		// not file it as refused.
 		h.writeResult(w, r, store.Prefix{Prefix: name})
 	case gone == nil:
-		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
+		h.writeResult(w, r, store.Prefix{Prefix: name})
 	default:
 		h.writeResult(w, r, gone)
 	}
@@ -799,13 +799,8 @@ func (h *handler) reportCounts(w http.ResponseWriter, r *http.Request) {
 // --- backup and restore ---
 
 func (h *handler) exportBackup(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-TAM-Receipts") == "1" {
-		snapshot, err := h.st.ExportRecovery()
-		respond(w, snapshot, err)
-		return
-	}
-	bf, err := h.st.Export()
-	respond(w, bf, err)
+	snapshot, err := h.st.ExportRecovery()
+	respond(w, snapshot, err)
 }
 
 func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
@@ -814,17 +809,45 @@ func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
+	if r.Header.Get("X-TAM-Restore") == "native" {
+		if err := store.ValidateNativeBackup(&snapshot); err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, err := recoveryClient(r); err != nil || r.Header.Get("X-TAM-Save") != "" {
+			httpx.WriteError(w, http.StatusBadRequest, "native operator restore requires a client identity and no save number")
+			return
+		}
+		if err := h.st.RestoreSnapshot(snapshot); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		receipt, err := h.st.MatchingReceipt(snapshot)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.Header().Set("X-TAM-Receipts", "1")
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"message": "Backup file imported successfully."}, "receipt": receipt})
+		return
+	}
+	if r.Header.Get("X-TAM-Restore") != "" || r.Header.Get("X-TAM-Save") == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "numbered prefix Push or explicit native operator restore is required")
+		return
+	}
+	// A numbered prefix Push is an ordinary durable Go operation. Existing
+	// journals use the three-list shape; file provenance rules do not apply.
+	if err := store.ValidateNumberedRestore(snapshot); err != nil {
+		httpx.WriteError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if err := store.ValidateRecoverySnapshot(&snapshot); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if r.Header.Get("X-TAM-Client-Name") != "" || r.Header.Get("X-TAM-Save") != "" {
-		if err := store.ValidateNumberedRestore(snapshot); err != nil {
-			httpx.WriteError(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-	}
-	if _, ok := h.write(w, r, snapshot, func(st *store.Store) error { return st.RestoreSnapshot(snapshot) }); !ok {
+	// The operation digest remains the prefix payload, independent of backup
+	// format fields, so a receipt persisted before an update still matches.
+	if _, ok := h.write(w, r, snapshot.BackupFile, func(st *store.Store) error { return st.RestoreSnapshot(snapshot) }); !ok {
 		return
 	}
 	h.writeResult(w, r, map[string]string{"message": "Backup file imported successfully."})

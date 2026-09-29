@@ -1,7 +1,7 @@
 <script>
 	import { onMount } from 'svelte';
 	import { previousDrafts, draftProblem, preserveDraft, removeDraftRow } from '../drafts';
-	import { errorMessage, readDetail } from '../api';
+	import { errorMessage, readDetail, readRecords, recordNumberError } from '../api';
 	let { apply } = $props();
 	let drafts = $state([]);
 	let problem = $state('');
@@ -52,9 +52,13 @@
 				if (!valid()) return;
 				current[id] = { pending: true, draft: value };
 				try {
+					// Invalid unsent winner input can still be reviewed and corrected;
+					// only the record identity is needed to compare or load its draft.
+					const invalid = recordNumberError(row, { includeWinner: false });
+					if (invalid) throw new Error(invalid);
 					const res = await fetch(`/api/${kindOf(row)}/${encodeURIComponent(row.prefix)}/${row.t_id ?? row.b_id}`);
 					if (!res.ok) throw new Error(await readDetail(res));
-					const saved = await res.json();
+					const saved = await readRecords(res);
 					if (!valid()) return;
 					current[id] = { row: saved, draft: value, source: res.headers.get('X-TAM-Source') === 'server' ? 'Shared server' : 'This client (shared server values may be unavailable)' };
 				} catch (e) {
@@ -66,6 +70,8 @@
 	}
 	function useRow(draft, index) {
 		const row = { ...draft.rows[index] };
+		const invalid = recordNumberError(row, { includeWinner: false });
+		if (invalid) { problem = invalid; return; }
 		if (!apply(row)) return;
 		++reviewSequence;
 		// Transfer only this explicitly selected row after its new browser copy

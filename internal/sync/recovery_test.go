@@ -13,7 +13,7 @@ import (
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
-func TestOlderRecoveryServerRejectsReofferWithoutBlockingQueue(t *testing.T) {
+func TestStaleRecoveryGenerationRejectsReofferWithoutBlockingQueue(t *testing.T) {
 	for _, repeatHeartbeat := range []bool{false, true} {
 		t.Run(fmt.Sprintf("repeat-heartbeat-%t", repeatHeartbeat), func(t *testing.T) {
 			var uploads, goodSaves atomic.Int32
@@ -21,7 +21,7 @@ func TestOlderRecoveryServerRejectsReofferWithoutBlockingQueue(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/api":
-					doc := map[string]any{"authenticated": true}
+					doc := nativeHeartbeat(true)
 					if uploads.Load() == 0 || repeatHeartbeat {
 						doc["recovery_token"] = "old-generation"
 					}
@@ -31,12 +31,12 @@ func TestOlderRecoveryServerRejectsReofferWithoutBlockingQueue(t *testing.T) {
 						w.WriteHeader(http.StatusConflict)
 						return
 					}
-					w.Write([]byte(`{"recovered":true}`))
+					writeNativeReceipt(w, r, map[string]bool{"recovered": true})
 				case "/api/tickets":
 					w.WriteHeader(http.StatusBadRequest)
 				case "/api/prefixes":
 					goodSaves.Add(1)
-					w.Write([]byte(`[]`))
+					writeNativeReceipt(w, r, []any{})
 				}
 			}))
 			defer server.Close()
@@ -56,23 +56,23 @@ func TestOlderRecoveryServerRejectsReofferWithoutBlockingQueue(t *testing.T) {
 				t.Fatalf("wanted initial upload plus one rejected reoffer, got %d", uploads.Load())
 			}
 			// The blocked token must survive a daemon restart and repeated
-			// old-server heartbeats without starving unrelated ordinary saves.
+			// stale-generation heartbeats without starving unrelated ordinary saves.
 			s = New(st, s.cfg, s.client, s.t)
-			if _, err := st.EnqueueOutbox("POST", "/api/prefixes", []byte(`[]`)); err != nil {
+			if err := s.Enqueue("POST", "/api/prefixes", []byte(`[]`)); err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < 3; i++ {
 				s.Tick()
 			}
 			if uploads.Load() != 2 || goodSaves.Load() != 1 {
-				t.Fatalf("old server looped or stranded queue: uploads=%d good=%d", uploads.Load(), goodSaves.Load())
+				t.Fatalf("stale generation looped or stranded queue: uploads=%d good=%d", uploads.Load(), goodSaves.Load())
 			}
 			if p, f := pendingFailed(t, st); p != 0 || f != 1 {
 				t.Fatalf("queue state %d %d", p, f)
 			}
 			retained, err := st.ExportRecoveryForSync()
 			if err != nil || len(retained.Tickets) != 1 || retained.Tickets[0] != accepted {
-				t.Fatalf("unsupported server lost deferred predecessor: %+v %v", retained, err)
+				t.Fatalf("rejected generation lost deferred predecessor: %+v %v", retained, err)
 			}
 		})
 	}
@@ -83,13 +83,15 @@ func TestStatusShowsRecoveryUntilUploadAcknowledged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api" {
-			w.Write([]byte(`{"authenticated":true,"recovery_token":"recover"}`))
+			doc := nativeHeartbeat(true)
+			doc["recovery_token"] = "recover"
+			json.NewEncoder(w).Encode(doc)
 			return
 		}
 		if r.URL.Path == "/api/recovery" {
 			close(started)
 			<-release
-			w.Write([]byte(`{"recovered":true}`))
+			writeNativeReceipt(w, r, map[string]bool{"recovered": true})
 		}
 	}))
 	defer server.Close()
@@ -137,7 +139,7 @@ func TestRecoveryUploadsLocalCopyBeforeQueue(t *testing.T) {
 		switch r.URL.Path {
 		case "/api":
 			heartbeatClient = r.Header.Get("X-TAM-Client-Name")
-			doc := map[string]any{"authenticated": true}
+			doc := nativeHeartbeat(true)
 			if requested {
 				doc["recovery_token"] = "recover-this-event"
 			}
@@ -158,11 +160,11 @@ func TestRecoveryUploadsLocalCopyBeforeQueue(t *testing.T) {
 			}
 			recovered = req.Data
 			requested = false
-			w.Write([]byte(`{"recovered":true}`))
+			writeNativeReceipt(w, r, map[string]bool{"recovered": true})
 		case "/api/backuprestore":
 			json.NewEncoder(w).Encode(store.NewBackupFile())
 		default:
-			w.Write([]byte(`[]`))
+			writeNativeReceipt(w, r, []any{})
 		}
 	}))
 	defer server.Close()
@@ -209,7 +211,9 @@ func TestFailedRecoveryKeepsLocalCopyAndQueue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api" {
-			w.Write([]byte(`{"authenticated":true,"recovery_token":"retry"}`))
+			doc := nativeHeartbeat(true)
+			doc["recovery_token"] = "retry"
+			json.NewEncoder(w).Encode(doc)
 			return
 		}
 		if r.URL.Path != "/api/recovery" {

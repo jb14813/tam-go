@@ -128,7 +128,7 @@ func TestCausalHTTPRecoveryBlocksPushAndRestore(t *testing.T) {
 			<-started
 			answer := make(chan int, 1)
 			go func() {
-				code, _ := f.do("POST", endpoint, store.NewBackupFile(), nil)
+				code, _ := f.do("POST", endpoint, nativeFixtureBackup(store.NewBackupFile()), nil)
 				answer <- code
 			}()
 			select {

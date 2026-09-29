@@ -109,18 +109,18 @@ func TestIndependentRenumberedAckUpdatesNewerPendingPrior(t *testing.T) {
 	}
 }
 
-func TestIndependentLegacyRestoreSupersedesSameValueRefusal(t *testing.T) {
+func TestIndependentNativeUnversionedRestoreSupersedesSameValueRefusal(t *testing.T) {
 	client := newOutboxStore(t)
 	row := Ticket{Prefix: "A", TID: 1, FirstName: "Deliberately restored"}
 	id := queueRecoveryEdit(t, client, Order{"client", 1}, "/api/tickets", []Ticket{row}, func(s *Store) error { return s.UpsertTickets([]Ticket{row}) })
 	must(t, client.FailOutbox(id, "refused"))
-	legacy := RecoverySnapshot{BackupFile: NewBackupFile()}
-	legacy.Tickets = []Ticket{row}
-	must(t, client.ImportClientBackup(legacy))
+	backup := RecoverySnapshot{BackupFile: NewBackupFile(), BasketComponents: []BasketComponents{}}
+	backup.Tickets = []Ticket{row}
+	must(t, client.ImportClientBackup(backup))
 	snapshot, err := client.ExportRecoveryForSync()
 	must(t, err)
 	if len(snapshot.Tickets) != 1 || snapshot.Tickets[0] != row {
-		t.Fatalf("explicit legacy restore still withheld by old refusal: %+v", snapshot)
+		t.Fatalf("explicit native restore still withheld by old refusal: %+v", snapshot)
 	}
 }
 

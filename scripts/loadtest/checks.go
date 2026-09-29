@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,11 +281,6 @@ func (t *test) checkClients() {
 // checkPresence reads the Clients table of the server's admin page.
 func (t *test) checkPresence() {
 	st, _, err := t.admin.status()
-	if errors.Is(err, errNoTable) {
-		t.skip("the admin page's Clients table lists every client as connected and caught up", "%v", err)
-		t.skip("the admin page counts every prefix, ticket and basket", "%v", err)
-		return
-	}
 	if err != nil {
 		t.record("the admin page's Clients table lists every client as connected and caught up", false, "%v", err)
 		return
@@ -299,7 +293,7 @@ func (t *test) checkPresence() {
 		if l.LastUpdate != "" && l.LastUpdate != "never" {
 			updated++
 		}
-		if l.Queued != nil && *l.Queued == 0 {
+		if l.Queued != nil && *l.Queued == 0 && l.Failed != nil && *l.Failed == 0 && l.Recovering != nil && !*l.Recovering {
 			caughtUp++
 		}
 	}
@@ -465,10 +459,6 @@ func (t *test) checkLogs() {
 	t.record("no errors in what the programs wrote", bad == 0, "%d programs, %d lines, %d errors%s", len(files), lines, bad, examples(first))
 }
 
-// errNoTable is a server whose status page answers HTML only, such as one
-// from before the page could be read as JSON: there is no table to check.
-var errNoTable = errors.New("this server's status page answers HTML only")
-
 // adminPage is the server's admin page, logged in as the tests's browser.
 type adminPage struct {
 	url, password string
@@ -489,6 +479,8 @@ type adminStatus struct {
 		LastSeen   string `json:"last_seen"`
 		LastUpdate string `json:"last_update"`
 		Queued     *int   `json:"queued"`
+		Failed     *int   `json:"failed"`
+		Recovering *bool  `json:"recovering"`
 	} `json:"clients"`
 }
 
@@ -549,7 +541,7 @@ func (a *adminPage) status() (adminStatus, time.Duration, error) {
 		took := time.Since(start)
 		if res.StatusCode == http.StatusOK && !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
 			res.Body.Close()
-			return st, took, errNoTable
+			return st, took, fmt.Errorf("the native server status page did not return JSON")
 		}
 		if res.StatusCode == http.StatusUnauthorized {
 			res.Body.Close()
@@ -580,9 +572,6 @@ func (a *adminPage) watch(t *test, stop <-chan struct{}) {
 		_, took, err := a.status()
 		if err != nil && !t.server.up.Load() {
 			continue // it went down during the request
-		}
-		if errors.Is(err, errNoTable) {
-			err = nil // the page answered; it only has no table to read
 		}
 		t.current().rec.add("admin status page", took, err, 0, false)
 	}

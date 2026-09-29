@@ -72,16 +72,16 @@ func TestRecoveryBasketsInitialWinnerIsOwnedOnlyWhenAccepted(t *testing.T) {
 	}
 }
 
-func TestRecoveryTracksOriginalApplicationBasketUpdates(t *testing.T) {
+func TestRecoveryTracksExplicitBasketColumnUpdates(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		drawingFirst bool
 		update       string
 		winner       int
 	}{
-		{"original winner", false, `UPDATE baskets SET winning_ticket = 42 WHERE prefix = 'A' AND b_id = 1`, 42},
-		{"original winner clear", false, `UPDATE baskets SET winning_ticket = 0 WHERE prefix = 'A' AND b_id = 1`, 0},
-		{"original metadata clear", true, `UPDATE baskets SET description = '', donors = '' WHERE prefix = 'A' AND b_id = 1`, 42},
+		{"explicit winner", false, `UPDATE baskets SET winning_ticket = 42 WHERE prefix = 'A' AND b_id = 1`, 42},
+		{"explicit winner clear", false, `UPDATE baskets SET winning_ticket = 0 WHERE prefix = 'A' AND b_id = 1`, 0},
+		{"explicit metadata clear", true, `UPDATE baskets SET description = '', donors = '' WHERE prefix = 'A' AND b_id = 1`, 42},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "client.db")
@@ -94,7 +94,7 @@ func TestRecoveryTracksOriginalApplicationBasketUpdates(t *testing.T) {
 			} else {
 				must(t, source.UpsertBaskets([]Basket{{Prefix: "A", BID: 1}}))
 			}
-			// The original app writes its shared baskets table directly.
+			// Native candidate application updates these component columns.
 			_, err = sqldb.Exec(tc.update)
 			must(t, err)
 			must(t, sqldb.Close())
@@ -106,7 +106,7 @@ func TestRecoveryTracksOriginalApplicationBasketUpdates(t *testing.T) {
 			snapshot, err := source.ExportRecovery()
 			must(t, err)
 			if !snapshot.BasketComponents[0].Metadata || !snapshot.BasketComponents[0].Drawing {
-				t.Fatalf("original update lost ownership after reopen: %+v", snapshot.BasketComponents)
+				t.Fatalf("explicit update lost ownership after reopen: %+v", snapshot.BasketComponents)
 			}
 			server, _ := recoveryStore(t)
 			key, token := requestedKey(t, server)
@@ -114,7 +114,7 @@ func TestRecoveryTracksOriginalApplicationBasketUpdates(t *testing.T) {
 			got, err := server.Basket("A", 1)
 			must(t, err)
 			if got.Description != "" || got.Donors != "" || got.WinningTicket != tc.winner {
-				t.Fatalf("original update lost in recovery: %+v", got)
+				t.Fatalf("explicit update lost in recovery: %+v", got)
 			}
 		})
 	}

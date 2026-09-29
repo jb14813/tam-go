@@ -66,9 +66,9 @@ Push and restore also wait for that client's recovery upload to finish. **Retry*
 
 **Discard** stops automatic delivery of refused saves. It does not erase their local entries or turn them into accepted recovery data. The last retained accepted value remains available for server reconstruction, even after the visible failed queue is cleared. A later deliberate save or server restore is a new choice. Native client backups preserve this distinction without carrying the delivery queue itself. Older clients did not retain overwritten accepted payloads; an upgrade cannot reconstruct a payload that was already lost, and will not guess one from its hash.
 
-Components with pending saves wait for ordered replay instead of offering a competing older copy during recovery. If a replacement server refuses that replay, the client offers its retained accepted predecessor in a follow-up recovery contribution. This retry survives client restarts and lost replies and applies only to the same authenticated recovery generation. Updated Go client and server versions are required for this follow-up; an older server's refusal of a repeat upload does not block the remaining queue, and the predecessor stays in the native backup for later recovery.
+Components with pending saves wait for ordered replay instead of offering a competing older copy during recovery. If a replacement server refuses that replay, the client offers its retained accepted predecessor in a follow-up recovery contribution. This retry survives client restarts and lost replies and applies only to the same authenticated recovery generation. Use updated Go clients and server together. A stale recovery generation cannot accept the follow-up; retained predecessors remain in the native backup.
 
-The original three-list JSON files still import. They contain no component ownership: a basket in such a file is treated as a complete basket, including its winning ticket. Native files containing the additional metadata require an updated Go server for remote restore; the client will not silently discard that information for an older server. Keep the full native file for future restores even if a legacy application can read its three original lists.
+Only Go-native backups import. New downloads identify their format explicitly, including empty backups. Earlier Go files with native ownership or history metadata remain recognizable; an ambiguous three-list file without native metadata is rejected. Validation happens before any records change. Restore never resolves alternatives merely because the backup contains them.
 
 Automatic recovery supplements backups. A destroyed client disk, an offline client, or data entered/restored only on the server cannot be reconstructed from clients that never retained those values. Back up the server and client data folders, and keep the event's paper records.
 
@@ -76,9 +76,9 @@ If `settings.json` is missing or unreadable, a valid `settings.json.bak` supplie
 
 Normal program shutdown stops accepting requests and allows active HTTP saves up to three seconds to finish before closing the database. A forced process kill, power loss or a request still unfinished at that deadline can interrupt an unacknowledged save; the durable journal protects requests already recorded by the client.
 
-## Existing databases and compatibility
+## Existing Go databases
 
-The updated client still works with the original server API, and legacy backup restore remains supported. Automatic server reconstruction and recovery receipts require the updated Go client and server together.
+Use the Go client and Go server together. Unsupported or malformed server responses cannot acknowledge saves: pending requests remain in the journal until a valid native receipt is retained. The original application's client, server API and three-list backup import are no longer supported.
 
 Existing databases are preserved. Earlier Go releases could cache other clients' rows without recording who entered them, and older basket rows lack component ownership. The upgrade neither guesses their author from blank fields nor deletes them. Such legacy basket rows are conservatively treated as owning both components. New remote reads do not add other clients' ticket or basket rows.
 

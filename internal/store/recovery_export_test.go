@@ -239,17 +239,17 @@ func TestClientBackupRestoresExactComponentProvenance(t *testing.T) {
 	if !reflect.DeepEqual(afterDrawing, file.Revisions[0]) {
 		t.Fatalf("restored drawing inherited unrelated local ancestry: %+v", afterDrawing)
 	}
-	legacy := RecoverySnapshot{BackupFile: NewBackupFile()}
-	legacy.Baskets = []Basket{{Prefix: "A", BID: 1, WinningTicket: 42}}
-	must(t, target.ImportClientBackup(legacy))
+	unversioned := RecoverySnapshot{BackupFile: NewBackupFile(), BasketComponents: []BasketComponents{{Prefix: "A", BID: 1, Metadata: true, Drawing: true}}}
+	unversioned.Baskets = []Basket{{Prefix: "A", BID: 1, WinningTicket: 42}}
+	must(t, target.ImportClientBackup(unversioned))
 	after, err = target.ExportRecovery()
 	must(t, err)
 	if len(after.Revisions) != 2 {
-		t.Fatal("legacy import did not record its independent component choices")
+		t.Fatal("unversioned native import did not record its independent component choices")
 	}
 	for _, r := range after.Revisions {
 		if len(r.Operations) != 1 || len(r.Heads) != 1 || reflect.DeepEqual(r, beforeMetadata) || reflect.DeepEqual(r, afterDrawing) {
-			t.Fatal("legacy file inherited earlier local or source ancestry")
+			t.Fatal("unversioned native file inherited earlier local or source ancestry")
 		}
 	}
 }

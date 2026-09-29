@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ type api struct {
 	st    *store.Store
 	sqldb *sql.DB
 	key   string
+	save  atomic.Uint64
 }
 
 func newAPI(t *testing.T, opts ...Option) *api {
@@ -104,6 +107,9 @@ func (a *api) do(method, path string, body any, headers map[string]string) (int,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if headers["TAM-KEY"] != "" {
+		req.Header.Set("X-TAM-Client-Name", "test-client")
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -117,7 +123,23 @@ func (a *api) do(method, path string, body any, headers map[string]string) (int,
 }
 
 func (a *api) keyed(method, path string, body any) (int, []byte) {
-	return a.do(method, path, body, map[string]string{"TAM-KEY": a.key})
+	headers := map[string]string{"TAM-KEY": a.key, "X-TAM-Client-Name": "test-client"}
+	if method == "POST" && path == "/api/backuprestore" {
+		headers["X-TAM-Restore"] = "native"
+	} else if method == "POST" || method == "DELETE" {
+		headers["X-TAM-Save"] = strconv.FormatUint(a.save.Add(1), 10)
+	}
+	code, data := a.do(method, path, body, headers)
+	if code >= 200 && code < 300 && headers["X-TAM-Save"] != "" {
+		var reply struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(data, &reply); err != nil || len(reply.Data) == 0 {
+			a.t.Fatalf("missing native write envelope: %s (%v)", data, err)
+		}
+		data = reply.Data
+	}
+	return code, data
 }
 
 func (a *api) pw(method, path string, body any) (int, []byte) {
@@ -359,20 +381,20 @@ func TestPrefixes(t *testing.T) {
 	if code != 200 || decode[store.Prefix](t, body).Color != "red" {
 		t.Fatalf("delete should echo the deleted row: %d %s", code, body)
 	}
-	if code, _ = a.keyed("DELETE", "/api/prefixes?p=A", nil); code != 404 {
-		t.Fatalf("delete missing: %d, want 404", code)
+	if code, _ = a.keyed("DELETE", "/api/prefixes?p=A", nil); code != 200 {
+		t.Fatalf("idempotent delete: %d, want 200", code)
 	}
 	if code, _ = a.keyed("DELETE", "/api/prefixes", nil); code != 400 {
 		t.Fatalf("delete without p: %d, want 400", code)
 	}
 
-	// The original accepted numeric strings and integral floats.
-	if code, _ = a.keyed("POST", "/api/prefixes", `[{"prefix":"S","color":"red","weight":"3"},{"prefix":"F","color":"red","weight":4.0}]`); code != 200 {
-		t.Fatalf("numeric string weight: %d", code)
+	// Coerced weights are rejected before any prefix in the batch is written.
+	if code, _ = a.keyed("POST", "/api/prefixes", `[{"prefix":"S","color":"red","weight":"3"},{"prefix":"F","color":"red","weight":4.0}]`); code != 400 {
+		t.Fatalf("coerced numeric weights: %d", code)
 	}
 	_, body = a.keyed("GET", "/api/prefixes", nil)
-	if ps = decode[[]store.Prefix](t, body); len(ps) != 3 {
-		t.Fatalf("after numeric string post: %v", ps)
+	if ps = decode[[]store.Prefix](t, body); len(ps) != 1 {
+		t.Fatalf("rejected weights changed prefixes: %v", ps)
 	}
 	// A JSON null body is an empty list, never a null answer.
 	if code, body = a.keyed("POST", "/api/prefixes", `null`); code != 200 || strings.TrimSpace(string(body)) != "[]" {
@@ -394,8 +416,8 @@ func TestErrorsAreJSON(t *testing.T) {
 	if code, body := a.keyed("POST", "/api/tickets", `[{"prefix":"A","first_name":"no id"}]`); code != 400 || !strings.Contains(string(body), "t_id is required") {
 		t.Fatalf("missing t_id = %d %s", code, body)
 	}
-	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":"12","pref":"CALL"}]`); code != 200 {
-		t.Fatalf("string t_id from the original client = %d, want 200", code)
+	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":"12","pref":"CALL"}]`); code != 400 {
+		t.Fatalf("string t_id = %d, want 400", code)
 	}
 }
 
@@ -553,7 +575,7 @@ func TestBackupRoundTrip(t *testing.T) {
 	a.keyed("POST", "/api/baskets", []store.Basket{{Prefix: "A", BID: 1, Description: "D"}})
 
 	_, body := a.keyed("GET", "/api/backuprestore", nil)
-	bf := decode[store.BackupFile](t, body)
+	bf := decode[store.RecoverySnapshot](t, body)
 	if len(bf.Prefixes) != 1 || len(bf.Tickets) != 1 || len(bf.Baskets) != 1 {
 		t.Fatalf("export = %+v", bf)
 	}
@@ -593,17 +615,14 @@ func TestOversizedBodyIs413(t *testing.T) {
 	}
 }
 
-// TestKeyAcceptedUnderTheOriginalClientsSpelling: the original client sends
-// the key as TAM_KEY on its server-backup download, so that spelling counts
-// too, on the data routes and on the root route's authenticated flag.
-func TestKeyAcceptedUnderTheOriginalClientsSpelling(t *testing.T) {
+func TestOriginalKeyHeaderIsNotAccepted(t *testing.T) {
 	a := newAPI(t)
 	underscore := map[string]string{"TAM_KEY": a.key}
-	if code, body := a.do("GET", "/api/backuprestore", nil, underscore); code != 200 {
+	if code, body := a.do("GET", "/api/backuprestore", nil, underscore); code != 401 {
 		t.Fatalf("backup with TAM_KEY = %d %s", code, body)
 	}
 	_, body := a.do("GET", "/api", nil, underscore)
-	if root := decode[map[string]any](t, body); root["authenticated"] != true {
+	if root := decode[map[string]any](t, body); root["authenticated"] != false {
 		t.Fatalf("root with TAM_KEY = %s", body)
 	}
 	if code, _ := a.do("GET", "/api/backuprestore", nil, map[string]string{"TAM_KEY": "WRONG"}); code != 401 {
@@ -636,7 +655,7 @@ func TestPresenceFollowsKeyedRequests(t *testing.T) {
 	}
 
 	a.do("GET", "/api/prefixes", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Client": "tam-client/1.2.3"})
-	rec := reg.Snapshot()[a.key]
+	rec := reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]
 	if rec.Seen != now || rec.Client != "tam-client/1.2.3" || rec.HasPending || !rec.Updated.IsZero() {
 		t.Fatalf("after a keyed read: %+v", rec)
 	}
@@ -653,45 +672,45 @@ func TestPresenceFollowsKeyedRequests(t *testing.T) {
 		t.Fatalf("post = %d", code)
 	}
 	updated := now
-	if rec = reg.Snapshot()[a.key]; rec.Updated != updated || rec.Seen != now {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Updated != updated || rec.Seen != now {
 		t.Fatalf("after an accepted write: %+v", rec)
 	}
 	now = now.Add(time.Second)
 	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"","t_id":1}]`); code != 400 {
 		t.Fatalf("invalid post = %d", code)
 	}
-	if rec = reg.Snapshot()[a.key]; rec.Updated != updated || rec.Seen != now {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Updated != updated || rec.Seen != now {
 		t.Fatalf("after a refused write: %+v, want seen now and updated unchanged", rec)
 	}
 	now = now.Add(time.Second)
-	if code, _ := a.keyed("DELETE", "/api/prefixes?p=NOPE", nil); code != 404 {
+	if code, _ := a.keyed("DELETE", "/api/prefixes?p=NOPE", nil); code != 200 {
 		t.Fatalf("delete of a missing prefix = %d", code)
 	}
-	if rec = reg.Snapshot()[a.key]; rec.Updated != updated || rec.Seen != now {
-		t.Fatalf("after a delete that found nothing: %+v, want seen now and updated unchanged", rec)
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Updated != now || rec.Seen != now {
+		t.Fatalf("after an accepted idempotent delete: %+v, want seen and updated now", rec)
 	}
 	a.keyed("POST", "/api/prefixes", `[{"prefix":"A","color":"red","weight":1}]`)
 	now = now.Add(time.Second)
 	if code, _ := a.keyed("DELETE", "/api/prefixes?p=A", nil); code != 200 {
 		t.Fatalf("delete = %d", code)
 	}
-	if rec = reg.Snapshot()[a.key]; rec.Updated != now {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Updated != now {
 		t.Fatalf("after an accepted delete: %+v, want updated now", rec)
 	}
 
 	// Without X-TAM-Client the program is the User-Agent's first word, and
 	// "unknown" without that either. Plain requests never invent a count.
 	a.do("GET", "/api/tickets", nil, map[string]string{"TAM-KEY": a.key, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
-	if rec = reg.Snapshot()[a.key]; rec.Client != "Mozilla/5.0" {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Client != "Mozilla/5.0" {
 		t.Fatalf("client from the User-Agent = %q, want Mozilla/5.0", rec.Client)
 	}
 	a.do("GET", "/api/tickets", nil, map[string]string{"TAM-KEY": a.key, "User-Agent": ""})
-	if rec = reg.Snapshot()[a.key]; rec.Client != "unknown" {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Client != "unknown" {
 		t.Fatalf("client without any header = %q, want unknown", rec.Client)
 	}
 	long := strings.Repeat("x", 200)
 	a.do("GET", "/api/tickets", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Client": long})
-	if rec = reg.Snapshot()[a.key]; len(rec.Client) != maxClientLen || !strings.HasPrefix(long, rec.Client) {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; len(rec.Client) != maxClientLen || !strings.HasPrefix(long, rec.Client) {
 		t.Fatalf("an over-long client name must be cut to %d characters, got %d", maxClientLen, len(rec.Client))
 	}
 	if rec.HasPending {
@@ -707,13 +726,13 @@ func TestHeartbeatRecordsTheQueuedSaves(t *testing.T) {
 	a := newAPI(t, WithPresence(reg))
 
 	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Client": "tam-client/1.2.3", "X-TAM-Pending": "2"})
-	rec := reg.Snapshot()[a.key]
+	rec := reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]
 	if rec.Seen != now || !rec.HasPending || rec.Pending != 2 || rec.Client != "tam-client/1.2.3" || !rec.Updated.IsZero() {
 		t.Fatalf("after a heartbeat with two queued: %+v", rec)
 	}
 	now = now.Add(5 * time.Second)
 	a.do("GET", "/api/", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Client": "tam-client/1.2.3", "X-TAM-Pending": "0"})
-	if rec = reg.Snapshot()[a.key]; rec.Seen != now || !rec.HasPending || rec.Pending != 0 {
+	if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Seen != now || !rec.HasPending || rec.Pending != 0 {
 		t.Fatalf("after a heartbeat with nothing queued: %+v", rec)
 	}
 
@@ -723,17 +742,17 @@ func TestHeartbeatRecordsTheQueuedSaves(t *testing.T) {
 	for _, bad := range []string{"-1", "x", "1.5", ""} {
 		now = now.Add(5 * time.Second)
 		a.do("GET", "/api", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Client": "tam-client/1.2.3", "X-TAM-Pending": bad})
-		if rec = reg.Snapshot()[a.key]; rec.Seen != now || !rec.HasPending || rec.Pending != 1 {
+		if rec = reg.Snapshot()[presence.Identity{Key: a.key, Name: "test-client"}]; rec.Seen != now || !rec.HasPending || rec.Pending != 1 {
 			t.Fatalf("after a heartbeat with X-TAM-Pending %q: %+v", bad, rec)
 		}
 	}
 
-	// The original client sends neither header: it is seen under its
-	// User-Agent and never gets a count.
+	// A named request without queue headers records the User-Agent
+	// without inventing a queue count.
 	otherReg := presence.New(func() time.Time { return now })
 	other := newAPI(t, WithPresence(otherReg))
 	other.do("GET", "/api", nil, map[string]string{"TAM-KEY": other.key})
-	if rec = otherReg.Snapshot()[other.key]; rec.Seen != now || rec.HasPending || rec.Client != "Go-http-client/1.1" {
+	if rec = otherReg.Snapshot()[presence.Identity{Key: other.key, Name: "test-client"}]; rec.Seen != now || rec.HasPending || rec.Client != "Go-http-client/1.1" {
 		t.Fatalf("a heartbeat without the headers: %+v", rec)
 	}
 
@@ -752,14 +771,14 @@ func TestDeletingAKeyForgetsItsPresence(t *testing.T) {
 	k := decode[store.AuthKey](t, body)
 	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": k.AuthKey, "X-TAM-Pending": "1"})
 	a.do("GET", "/api", nil, map[string]string{"TAM-KEY": a.key, "X-TAM-Pending": "1"})
-	if _, ok := reg.Snapshot()[k.AuthKey]; !ok {
+	if _, ok := reg.Snapshot()[presence.Identity{Key: k.AuthKey, Name: "test-client"}]; !ok {
 		t.Fatal("the new key must be seen")
 	}
 	if code, _ := a.pw("DELETE", "/api/auth?key_to_del="+k.AuthKey, nil); code != 200 {
 		t.Fatalf("delete = %d", code)
 	}
 	snap := reg.Snapshot()
-	if _, ok := snap[k.AuthKey]; ok || len(snap) != 1 {
+	if _, ok := snap[presence.Identity{Key: k.AuthKey, Name: "test-client"}]; ok || len(snap) != 1 {
 		t.Fatalf("a deleted key must be forgotten and the others kept: %v", snap)
 	}
 }

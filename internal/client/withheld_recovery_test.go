@@ -154,7 +154,7 @@ func TestNativeWithheldBackupRefusesOlderRemote(t *testing.T) {
 	}))
 	u, _ := url.Parse(old.URL)
 	causalSave(t, f, "/api/settings", map[string]any{"remote_server": u.Hostname(), "remote_port": u.Port(), "remote_key": "old-key"})
-	if code, body := f.do("POST", "/api/backuprestore/remote", file, nil); code != http.StatusConflict {
+	if code, body := f.do("POST", "/api/backuprestore/remote", file, nil); code != http.StatusBadGateway {
 		t.Fatalf("older server accepted native withheld metadata: %d %s", code, body)
 	}
 	if posts.Load() != 0 {

@@ -8,9 +8,8 @@ import (
 )
 
 // MigrateServer applies the schema additions only tam-server needs, after
-// Migrate: save ordering, key activity (see migrateKeyActivity), and event
-// recovery. The original app never reads these tables, so a database shared
-// with the original server keeps working. It is safe to run on every start.
+// Migrate: save ordering, key activity, and event recovery. It is safe to run
+// on every start.
 func MigrateServer(sqldb *sql.DB) error {
 	// client_saves holds, per client, the number and digest of the last save
 	// applied from it, so a copy of an older save the network delivers late
@@ -34,8 +33,7 @@ func MigrateServer(sqldb *sql.DB) error {
 	if err := migrateKeyActivity(sqldb); err != nil {
 		return err
 	}
-	// Recovery is server-only metadata; the original event and auth-key
-	// tables keep their shared schema. Each client has its own receipt,
+	// Recovery is server-only metadata. Each client has its own receipt,
 	// including when several clients use the same access key.
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS causal_review (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL)`,
@@ -74,17 +72,9 @@ func MigrateServer(sqldb *sql.DB) error {
 // of its last accepted write.
 var keyActivity = []string{"last_seen", "last_update"}
 
-// originalKeyColumns are the columns of auth_keys in the original app.
-var originalKeyColumns = []string{"auth_key", "description"}
-
-// migrateKeyActivity keeps what tam-server records about each access key in
-// auth_key_activity, a table of its own, and auth_keys with exactly the
-// original's two columns. The original server reads auth_keys with SELECT *
-// into a model of two fields and inserts two values, so any column added
-// there makes it fail on every key route. An earlier tam-server did add its
-// columns there; they move over here with their values. Rows of keys that
-// are gone are dropped: the original server deletes keys without knowing
-// of this table.
+// migrateKeyActivity preserves activity recorded by earlier Go versions in
+// auth_keys. Only the two known timestamp columns belong to this upgrade;
+// other columns are neither moved nor removed.
 func migrateKeyActivity(sqldb *sql.DB) error {
 	if _, err := sqldb.Exec(`CREATE TABLE IF NOT EXISTS auth_key_activity (auth_key TEXT PRIMARY KEY)`); err != nil {
 		return fmt.Errorf("apply server schema: %w", err)
@@ -95,7 +85,7 @@ func migrateKeyActivity(sqldb *sql.DB) error {
 	}
 	var added []string
 	for _, column := range inKeys {
-		if !slices.Contains(originalKeyColumns, column) {
+		if slices.Contains(keyActivity, column) {
 			added = append(added, column)
 		}
 	}
@@ -103,7 +93,7 @@ func migrateKeyActivity(sqldb *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	for _, column := range append(slices.Clone(keyActivity), added...) {
+	for _, column := range keyActivity {
 		if slices.Contains(have, column) {
 			continue
 		}

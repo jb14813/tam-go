@@ -9,9 +9,60 @@ import (
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/config"
+	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
+
+func TestDirectSaveDeadlineIncludesHandshakeAndNumberingRetry(t *testing.T) {
+	f := newFixture(t)
+	hang := make(chan struct{})
+	var attempts atomic.Int32
+	event := newCausalEventServer(t, nil, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api" {
+				time.Sleep(1500 * time.Millisecond)
+				inner.ServeHTTP(w, r)
+				return
+			}
+			if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" {
+				if attempts.Add(1) == 1 {
+					time.Sleep(1500 * time.Millisecond)
+					httpx.WriteJSON(w, http.StatusConflict, map[string]any{"last_save": 100})
+					return
+				}
+				<-hang
+				return
+			}
+			inner.ServeHTTP(w, r)
+		})
+	})
+	t.Cleanup(func() { close(hang) })
+	event.configure(t, f)
+	started := time.Now()
+	code, body := f.do("POST", "/api/tickets", oneTicket(9, "Retained through timeout"), nil)
+	elapsed := time.Since(started)
+	if code != http.StatusOK {
+		t.Fatalf("save was not retained: %d %s", code, body)
+	}
+	if elapsed > writeTimeout+750*time.Millisecond {
+		t.Errorf("direct save took %s; handshake, retry and stalled save must share %s", elapsed, writeTimeout)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("fixture did not exercise a numbering retry: %d attempts", attempts.Load())
+	}
+	if p, failed := pending(t, f.st); p != 1 || failed != 0 {
+		t.Fatalf("timeout lost journal: pending=%d failed=%d", p, failed)
+	}
+	request, err := f.st.NextOutbox()
+	if err != nil || request == nil || request.Order.Save != 101 {
+		t.Fatalf("retry identity was not preserved: %+v %v", request, err)
+	}
+	row, err := f.st.Ticket("A", 9)
+	if err != nil || row == nil || row.FirstName != "Retained through timeout" {
+		t.Fatalf("timeout lost entered value: %+v %v", row, err)
+	}
+}
 
 // TestReadsDoNotWaitForASilentServer: when the Wi-Fi drops without a word,
 // the server neither answers nor refuses. A page reading from it must give

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -16,11 +17,31 @@ type BasketComponents struct {
 	Drawing  bool   `json:"drawing"`
 }
 
-// RecoverySnapshot extends only the recovery exchange. Ordinary backups
-// remain BackupFile and keep the original API's exact format.
+func (c *BasketComponents) UnmarshalJSON(b []byte) error {
+	type fields BasketComponents
+	var value fields
+	raw := struct {
+		*fields
+		BID *Int `json:"b_id"`
+	}{fields: &value}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw.BID == nil {
+		return errors.New("basket components: b_id is required")
+	}
+	value.BID = int(*raw.BID)
+	*c = BasketComponents(value)
+	return nil
+}
+
+const NativeBackupFormat = "tam-native-v1"
+
+// RecoverySnapshot is the native backup and recovery document.
 type RecoverySnapshot struct {
 	BackupFile
-	BasketComponents []BasketComponents `json:"basket_components,omitempty"`
+	Format           string             `json:"format,omitempty"`
+	BasketComponents []BasketComponents `json:"basket_components"`
 	Revisions        []RecordRevision   `json:"revisions,omitempty"`
 	Conflicts        []RecordConflict   `json:"conflicts,omitempty"`
 	DeletedPrefixes  []string           `json:"deleted_prefixes,omitempty"`
@@ -44,7 +65,7 @@ const markBasketComponentSQL = `INSERT INTO basket_components (prefix, b_id, met
 			metadata = max(basket_components.metadata, ?), drawing = max(basket_components.drawing, ?)`
 
 func basketComponentArgs(b Basket, metadata, drawing bool) []any {
-	// The original baskets endpoint accepts an initial nonzero winner, but
+	// The baskets endpoint accepts an initial nonzero winner, but
 	// ignores an incoming winner when it updates an existing basket. Only
 	// the insert branch owns that additional accepted drawing component.
 	insertDrawing := drawing || (metadata && b.WinningTicket != 0)
@@ -60,7 +81,7 @@ func markBasketComponents(tx *sql.Tx, bs []Basket, metadata, drawing bool) error
 // ExportRecovery reads the rows and their provenance in one database
 // transaction, including when a concurrent backup import is writing.
 func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
-	var snapshot RecoverySnapshot
+	snapshot := RecoverySnapshot{Format: NativeBackupFormat}
 	err := s.tx(func(tx *sql.Tx) error {
 		view := s.view(tx)
 		var err error
@@ -92,8 +113,7 @@ func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
 		if err != nil {
 			return err
 		}
-		// Old applications may have changed shared columns directly. Never
-		// export a receipt attached to a different value.
+		// Never export a receipt attached to a different stored value.
 		for _, revision := range all {
 			raw, exists, err := currentValue(tx, revision.Kind, revision.Prefix, revision.ID)
 			if err != nil {
@@ -115,8 +135,24 @@ func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
 	return snapshot, err
 }
 
-// ValidateRecoverySnapshot validates event rows and their component map.
-// A legacy sender without that map supplies complete baskets, as before.
+// ValidateNativeBackup validates an external file before any restore writes.
+// Prior Go exports are recognized by their ownership or causal metadata; an
+// ambiguous three-list file cannot establish native provenance.
+func ValidateNativeBackup(snapshot *RecoverySnapshot) error {
+	if snapshot.Format != "" && snapshot.Format != NativeBackupFormat {
+		return fmt.Errorf("unsupported backup format %q", snapshot.Format)
+	}
+	if snapshot.Format == "" && snapshot.BasketComponents == nil && len(snapshot.Revisions) == 0 && len(snapshot.Conflicts) == 0 && len(snapshot.DeletedPrefixes) == 0 && len(snapshot.WithheldRecords) == 0 {
+		return errors.New("a Go-native backup with ownership or history metadata is required")
+	}
+	if len(snapshot.Baskets) > 0 && snapshot.BasketComponents == nil {
+		return errors.New("native backup requires basket_components for every basket")
+	}
+	return ValidateRecoverySnapshot(snapshot)
+}
+
+// ValidateRecoverySnapshot validates internally constructed event snapshots.
+// External import boundaries additionally require ValidateNativeBackup.
 func ValidateRecoverySnapshot(snapshot *RecoverySnapshot) error {
 	if err := ValidateBackup(&snapshot.BackupFile); err != nil {
 		return err

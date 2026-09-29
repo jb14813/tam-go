@@ -58,6 +58,11 @@ func (s *Store) TicketRange(prefix string, from, to int) ([]Ticket, error) {
 
 // UpsertTickets inserts or updates tickets in one transaction.
 func (s *Store) UpsertTickets(ts []Ticket) error {
+	for _, ticket := range ts {
+		if err := validateIdentity(ticket.TID); err != nil {
+			return err
+		}
+	}
 	return s.tx(func(tx *sql.Tx) error {
 		for _, t := range ts {
 			apply, err := s.prepareRecord(tx, "ticket", t.Prefix, t.TID, t)

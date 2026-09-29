@@ -125,7 +125,7 @@ func checkShutdown(t *testing.T, binary, program string, finish bool) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(8 * time.Second))
 	body := `[{"prefix":"A","t_id":44,"first_name":"Finished during shutdown"}]`
-	fmt.Fprintf(conn, "POST /api/tickets HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %d\r\nTAM-KEY: %s\r\nExpect: 100-continue\r\n\r\n", len(body), key)
+	fmt.Fprintf(conn, "POST /api/tickets HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %d\r\nTAM-KEY: %s\r\nX-TAM-Client-Name: shutdown-test\r\nX-TAM-Save: 1\r\nExpect: 100-continue\r\n\r\n", len(body), key)
 	reader := bufio.NewReader(conn)
 	res, err := http.ReadResponse(reader, nil)
 	if err != nil {

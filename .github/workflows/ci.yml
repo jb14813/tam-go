@@ -211,56 +211,6 @@ jobs:
             scripts/browser/test-results/
           if-no-files-found: ignore
 
-  compat:
-    name: Compatibility with the original tam
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 12
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Build the web app
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-
-      - name: Original server with the Go client, then the Go server with both clients
-        run: bash scripts/compat/run.sh 2>&1 | tee "$RUNNER_TEMP/compatibility.txt"
-
-      - name: Printed results on the run page
-        if: always()
-        run: |
-          {
-            echo '### Compatibility with the original tam'
-            echo '```'
-            cat "$RUNNER_TEMP/compatibility.txt" 2>/dev/null || echo "(the run did not start)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Keep the printed results with the run
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: compatibility
-          path: |
-            ${{ runner.temp }}/compatibility.txt
-          if-no-files-found: ignore
-
   load:
     name: Race detector and load test
     runs-on: ubuntu-latest

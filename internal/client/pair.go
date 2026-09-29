@@ -178,6 +178,19 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadGateway, "The server did not return an access key")
 		return
 	}
+	client, err := h.st.ClientName(h.host)
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	if res, err := rc.WithKey(key.AuthKey).Handshake(client); err != nil || !res.OK() {
+		if err != nil {
+			h.unreachableAt(w, hostPort, err)
+		} else {
+			forward(w, res)
+		}
+		return
+	}
 
 	kept := ""
 	// The event queue follows the connection; a different address or server

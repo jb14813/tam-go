@@ -15,6 +15,13 @@ var Colors = []string{"white", "blue", "yellow", "green", "orange", "purple", "r
 // characters, not bytes.
 const maxPrefixLen = 100
 
+func validateIdentity(id int) error {
+	if id < 0 || int64(id) > SafeIntegerMax {
+		return fmt.Errorf("id must be between 0 and %d", SafeIntegerMax)
+	}
+	return nil
+}
+
 func validColor(c string) bool {
 	for _, x := range Colors {
 		if x == c {
@@ -80,8 +87,8 @@ func ValidatePrefixChanges(ps, existing []Prefix) error {
 		if !validColor(ps[i].Color) {
 			return fmt.Errorf("prefix %d (%s): color %q is not one of %s", i+1, name, ps[i].Color, strings.Join(Colors, ", "))
 		}
-		if ps[i].Weight < 0 {
-			return fmt.Errorf("prefix %d (%s): weight must be zero or more", i+1, name)
+		if ps[i].Weight < 0 || int64(ps[i].Weight) > SafeIntegerMax {
+			return fmt.Errorf("prefix %d (%s): weight must be between 0 and %d", i+1, name, SafeIntegerMax)
 		}
 	}
 	return nil
@@ -96,8 +103,8 @@ func ValidateTickets(ts []Ticket) error {
 		if strings.TrimSpace(ts[i].Prefix) == "" {
 			return fmt.Errorf("ticket %d: prefix must not be empty", i+1)
 		}
-		if ts[i].TID < 0 {
-			return fmt.Errorf("ticket %d (%s/%d): id must be zero or more", i+1, ts[i].Prefix, ts[i].TID)
+		if err := validateIdentity(ts[i].TID); err != nil {
+			return fmt.Errorf("ticket %d (%s/%d): %w", i+1, ts[i].Prefix, ts[i].TID, err)
 		}
 		ts[i].Pref = strings.TrimSpace(ts[i].Pref)
 	}
@@ -111,11 +118,11 @@ func ValidateBaskets(bs []Basket) error {
 		if strings.TrimSpace(bs[i].Prefix) == "" {
 			return fmt.Errorf("basket %d: prefix must not be empty", i+1)
 		}
-		if bs[i].BID < 0 {
-			return fmt.Errorf("basket %d (%s/%d): id must be zero or more", i+1, bs[i].Prefix, bs[i].BID)
+		if err := validateIdentity(bs[i].BID); err != nil {
+			return fmt.Errorf("basket %d (%s/%d): %w", i+1, bs[i].Prefix, bs[i].BID, err)
 		}
-		if bs[i].WinningTicket < 0 {
-			return fmt.Errorf("basket %d (%s/%d): winning ticket must be zero or more", i+1, bs[i].Prefix, bs[i].BID)
+		if err := validateIdentity(bs[i].WinningTicket); err != nil {
+			return fmt.Errorf("basket %d (%s/%d): winning ticket %w", i+1, bs[i].Prefix, bs[i].BID, err)
 		}
 	}
 	return nil
@@ -144,6 +151,9 @@ func ValidateBackup(bf *BackupFile) error {
 		if bf.Prefixes[i].Prefix == "" {
 			return fmt.Errorf("prefix %d: prefix name must not be empty", i+1)
 		}
+		if int64(bf.Prefixes[i].Weight) < -SafeIntegerMax || int64(bf.Prefixes[i].Weight) > SafeIntegerMax {
+			return fmt.Errorf("prefix %d: weight is outside the exact integer range", i+1)
+		}
 		if !validColor(bf.Prefixes[i].Color) {
 			bf.Prefixes[i].Color = "white"
 		}
@@ -152,16 +162,16 @@ func ValidateBackup(bf *BackupFile) error {
 		switch {
 		case b.Prefix == "":
 			return fmt.Errorf("basket %d: prefix must not be empty", i+1)
-		case b.BID < 0 || b.WinningTicket < 0:
-			return fmt.Errorf("basket %d (%s/%d): ids must be zero or more", i+1, b.Prefix, b.BID)
+		case validateIdentity(b.BID) != nil || validateIdentity(b.WinningTicket) != nil:
+			return fmt.Errorf("basket %d (%s/%d): ids must be between 0 and %d", i+1, b.Prefix, b.BID, SafeIntegerMax)
 		}
 	}
 	for i, t := range bf.Tickets {
 		switch {
 		case t.Prefix == "":
 			return fmt.Errorf("ticket %d: prefix must not be empty", i+1)
-		case t.TID < 0:
-			return fmt.Errorf("ticket %d (%s/%d): id must be zero or more", i+1, t.Prefix, t.TID)
+		case validateIdentity(t.TID) != nil:
+			return fmt.Errorf("ticket %d (%s/%d): id must be between 0 and %d", i+1, t.Prefix, t.TID, SafeIntegerMax)
 		}
 	}
 	return nil

@@ -2,16 +2,15 @@ package store
 
 // ExportClientBackup includes the ownership metadata needed to restore a
 // workstation without inventing entries for forms it never filled in. The
-// original three lists remain present for older readers.
+// event rows remain accompanied by native ownership and history metadata.
 func (s *Store) ExportClientBackup() (RecoverySnapshot, error) {
 	return s.ExportRecovery()
 }
 
 // ImportClientBackup restores only the components actually present in a
-// workstation's backup. A legacy file without ownership metadata is a full
-// backup; its empty fields remain explicit values, as in the original app.
+// workstation's native backup.
 func (s *Store) ImportClientBackup(snapshot RecoverySnapshot) error {
-	if err := ValidateRecoverySnapshot(&snapshot); err != nil {
+	if err := ValidateNativeBackup(&snapshot); err != nil {
 		return err
 	}
 	components, err := recoveryComponents(snapshot)
@@ -91,7 +90,7 @@ func (s *Store) ImportClientBackup(snapshot RecoverySnapshot) error {
 			if preserved[recordKey(r.Kind, r.Prefix, r.ID)] {
 				continue
 			}
-			// A legacy file supplies no shared ancestry. Give this deliberate
+			// A native unversioned row supplies no shared ancestry. Give this deliberate
 			// import a fresh independent identity, so an old failed request
 			// cannot claim its value merely because their payloads match.
 			actor, number, err := view.nextDot(view.in)

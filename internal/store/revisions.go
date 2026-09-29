@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,24 @@ type RecordRevision struct {
 	ReviewedOperations map[string][]string `json:"reviewed_operations,omitempty"`
 }
 
+func (r *RecordRevision) UnmarshalJSON(b []byte) error {
+	type fields RecordRevision
+	var value fields
+	raw := struct {
+		*fields
+		ID *Int `json:"id"`
+	}{fields: &value}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw.ID == nil {
+		return errors.New("revision: id is required")
+	}
+	value.ID = int(*raw.ID)
+	*r = RecordRevision(value)
+	return nil
+}
+
 type RecordCandidate struct {
 	Revision RecordRevision  `json:"revision"`
 	Value    json.RawMessage `json:"value"`
@@ -37,6 +56,24 @@ type RecordConflict struct {
 	Prefix     string            `json:"prefix"`
 	ID         int               `json:"id"`
 	Candidates []RecordCandidate `json:"candidates"`
+}
+
+func (c *RecordConflict) UnmarshalJSON(b []byte) error {
+	type fields RecordConflict
+	var value fields
+	raw := struct {
+		*fields
+		ID *Int `json:"id"`
+	}{fields: &value}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw.ID == nil {
+		return errors.New("conflict: id is required")
+	}
+	value.ID = int(*raw.ID)
+	*c = RecordConflict(value)
+	return nil
 }
 
 type SaveReceipt struct {
@@ -349,12 +386,48 @@ func loadRevision(tx *sql.Tx, kind, prefix string, id int, hash string) (RecordR
 	return r, nil
 }
 func saveRevision(tx *sql.Tx, r RecordRevision) error {
+	if err := observeLocalHistory(tx, r); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(`INSERT INTO record_revisions(kind,prefix,record_id,revision) VALUES(?,?,?,?) ON CONFLICT(kind,prefix,record_id) DO UPDATE SET revision=excluded.revision`, r.Kind, r.Prefix, r.ID, string(raw))
 	return err
+}
+
+// Imported history may come from a newer copy of this same database. Never
+// allocate an operation number already used by that actor, even for another row.
+func observeLocalHistory(tx *sql.Tx, r RecordRevision) error {
+	var actor string
+	err := tx.QueryRow(`SELECT actor FROM causal_identity WHERE id=1`).Scan(&actor)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if n := r.Vector[actor]; n > 0 {
+		if _, err = tx.Exec(`UPDATE causal_identity SET counter=max(counter,?) WHERE id=1`, n); err != nil {
+			return err
+		}
+	}
+	// Paired and offline client saves have a separate actor and allocator.
+	// Server-only databases have no save_order table.
+	var hasClientOrder bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='save_order')`).Scan(&hasClientOrder); err != nil || !hasClientOrder {
+		return err
+	}
+	var client string
+	if err := tx.QueryRow(`SELECT client FROM save_order WHERE id=1`).Scan(&client); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if n := r.Vector["client:"+client]; n > 0 {
+		_, err := tx.Exec(`UPDATE save_order SET last_save=max(last_save,?) WHERE id=1`, n)
+		return err
+	}
+	return nil
 }
 
 func currentValue(tx *sql.Tx, kind, prefix string, id int) ([]byte, bool, error) {
@@ -618,8 +691,27 @@ func (s *Store) RestoreSnapshot(snapshot RecoverySnapshot) error {
 		if err != nil {
 			return err
 		}
+		unresolved := map[string]bool{}
+		for _, conflict := range snapshot.Conflicts {
+			unresolved[recordKey(conflict.Kind, conflict.Prefix, conflict.ID)] = true
+		}
 		for _, candidate := range candidates {
 			r := candidate.Revision
+			r.Operations = maps.Clone(r.Operations)
+			if unresolved[recordKey(r.Kind, r.Prefix, r.ID)] {
+				// The file explicitly retains alternatives. Reinstating its value
+				// and provenance must not invent a review of those alternatives.
+				if err := applyCandidate(tx, candidate); err != nil {
+					return err
+				}
+				if err := saveRevision(tx, r); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`DELETE FROM record_conflicts WHERE kind=? AND prefix=? AND record_id=?`, r.Kind, r.Prefix, r.ID); err != nil {
+					return err
+				}
+				continue
+			}
 			old, exists, err := currentValue(tx, r.Kind, r.Prefix, r.ID)
 			if err != nil {
 				return err
@@ -660,6 +752,9 @@ func (s *Store) RestoreSnapshot(snapshot RecoverySnapshot) error {
 						}
 					}
 				}
+			}
+			if err := observeLocalHistory(tx, r); err != nil {
+				return err
 			}
 			actor, n, err := s.nextDot(tx)
 			if err != nil {
@@ -763,6 +858,9 @@ func (s *Store) CheckConflicts() error {
 	return nil
 }
 func addCandidate(tx *sql.Tx, c RecordCandidate) error {
+	if err := observeLocalHistory(tx, c.Revision); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -951,7 +1049,7 @@ func validateRevision(r RecordRevision) error {
 	if r.Kind != "ticket" && r.Kind != "metadata" && r.Kind != "drawing" && r.Kind != "prefix" {
 		return fmt.Errorf("unknown revision kind %q", r.Kind)
 	}
-	if strings.TrimSpace(r.Prefix) == "" || r.ID < 0 || len(r.Hash) != 64 {
+	if strings.TrimSpace(r.Prefix) == "" || r.ID < 0 || int64(r.ID) > SafeIntegerMax || len(r.Hash) != 64 {
 		return errors.New("invalid record revision")
 	}
 	for actor, n := range r.Vector {

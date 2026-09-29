@@ -59,7 +59,7 @@ func (s *Syncer) recover(rc *remote.Client) bool {
 		return false
 	}
 	if res.Status == http.StatusConflict {
-		// A stale generation or an older server may reject a repeat upload.
+		// A stale generation may reject a repeat upload.
 		// Suppress that exact token durably and keep ordinary replay moving.
 		if err := s.st.RejectRecoveryContribution(target, token); err != nil {
 			s.NoteFailure(fmt.Errorf("retain rejected recovery generation: %w", err))
@@ -104,7 +104,12 @@ func (s *Syncer) refreshReviewed(rc *remote.Client) bool {
 		s.NoteFailure(fmt.Errorf("export receipt request: %w", err))
 		return false
 	}
-	res, err := rc.WithTimeout(2*time.Minute).Do(http.MethodPost, "/api/recovery/receipts", map[string]string{"X-TAM-Receipts": "1"}, snapshot)
+	client, err := s.st.ClientName(s.host)
+	if err != nil {
+		s.NoteFailure(err)
+		return false
+	}
+	res, err := rc.WithTimeout(2*time.Minute).Do(http.MethodPost, "/api/recovery/receipts", map[string]string{"X-TAM-Receipts": "1", "X-TAM-Client-Name": client}, snapshot)
 	if err != nil {
 		s.NoteFailure(err)
 		return false

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 // rangeLimit caps how many ids one range request may cover, as the pages do.
 const rangeLimit = 300
 
-// writeTimeout bounds a save sent to the server from a page. A save that
+// writeTimeout bounds the handshake, save and numbering retries together. A save that
 // takes longer is queued and replayed, so the page never waits for a dead
 // connection to time out.
 const writeTimeout = 5 * time.Second
@@ -231,8 +232,13 @@ func rangeOr[T any](h *handler, w http.ResponseWriter, r *http.Request, rc *remo
 // the client's saves in line and the way to the server (Syncer.Numbering,
 // Syncer.Sending).
 func (h *handler) sendNumbered(rc *remote.Client, method, path string, order *store.Order, body any, intent int64) (*remote.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	if res, err := rc.HandshakeContext(ctx, order.Client); err != nil || !res.OK() {
+		return res, err
+	}
 	for attempt := 1; ; attempt++ {
-		res, err := rc.WithTimeout(writeTimeout).Do(method, path, tamsync.OrderHeaders(*order), body)
+		res, err := rc.DoContext(ctx, method, path, tamsync.OrderHeaders(*order), body)
 		last, behind := tamsync.LastSave(res)
 		if err != nil || !behind || attempt == 3 {
 			return res, err
@@ -379,7 +385,12 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.online() {
-		res, err := rc.WithTimeout(3 * time.Second).Get("/api")
+		client, err := h.st.ClientName(h.host)
+		if err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
+		res, err := rc.WithTimeout(3 * time.Second).Handshake(client)
 		if h.observe(err, res) && res.OK() {
 			var doc map[string]any
 			if res.JSON(&doc) == nil {
@@ -547,7 +558,7 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 				queue = false
 				if res.OK() {
 					remoteHadIt = true
-				} else if res.Status != http.StatusNotFound {
+				} else {
 					if err := h.st.RejectIntent(intent, fmt.Sprintf("server rejected delete: %d %s", res.Status, res.Body)); err != nil {
 						httpx.WriteInternal(w, err)
 						return
@@ -792,7 +803,7 @@ func decodeBackup(w http.ResponseWriter, r *http.Request) (store.RecoverySnapsho
 		httpx.WriteDecodeError(w, err)
 		return bf, false
 	}
-	if err := store.ValidateRecoverySnapshot(&bf); err != nil {
+	if err := store.ValidateNativeBackup(&bf); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return bf, false
 	}
@@ -805,7 +816,7 @@ func (h *handler) importLocal(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
-	if err := store.ValidateRecoverySnapshot(&bf); err != nil {
+	if err := store.ValidateNativeBackup(&bf); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -836,7 +847,7 @@ func (h *handler) exportRemote(w http.ResponseWriter, r *http.Request) {
 		forward(w, res)
 		return
 	}
-	if err := res.JSON(&bf); err != nil {
+	if err := res.JSON(&bf); err != nil || store.ValidateNativeBackup(&bf) != nil {
 		httpx.WriteError(w, http.StatusBadGateway, "Remote server sent an invalid backup")
 		return
 	}
@@ -860,24 +871,14 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.sync.Sending()()
-	var res *remote.Response
-	var err error
-	if bf.BasketComponents != nil || len(bf.Revisions) > 0 || len(bf.Conflicts) > 0 || len(bf.DeletedPrefixes) > 0 || len(bf.WithheldRecords) > 0 {
-		// An older server ignores extra backup fields. Do not let it silently
-		// turn a partial workstation backup into a complete basket overwrite.
-		res, err = rc.Get("/api")
-		if err == nil && res.OK() {
-			var capabilities struct {
-				BackupMetadata bool `json:"backup_metadata"`
-			}
-			if res.JSON(&capabilities) != nil || !capabilities.BackupMetadata {
-				httpx.WriteError(w, http.StatusConflict, "This backup includes ownership and save history that this server cannot restore safely. Update the server before restoring this file.")
-				return
-			}
-			res, err = rc.Post("/api/backuprestore", bf)
-		}
-	} else {
-		res, err = restoreInto(rc, bf.BackupFile)
+	client, err := h.st.ClientName(h.host)
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	res, err := rc.Handshake(client)
+	if err == nil && res.OK() {
+		res, err = rc.Do(http.MethodPost, "/api/backuprestore", map[string]string{"X-TAM-Client-Name": client, "X-TAM-Restore": "native", "X-TAM-Receipts": "1"}, bf)
 	}
 	if err != nil {
 		h.unreachable(w, err)
@@ -888,19 +889,6 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Backup file imported successfully."})
-}
-
-// restoreInto sends a backup to the server, then the winning tickets a
-// second time through the drawing route. The original server's restore
-// leaves the winning ticket of a basket it already has untouched, and the
-// drawing route is what sets it on every server, so the restore comes out
-// complete on both.
-func restoreInto(rc *remote.Client, bf store.BackupFile) (*remote.Response, error) {
-	res, err := rc.Post("/api/backuprestore", bf)
-	if err != nil || !res.OK() || len(bf.Baskets) == 0 {
-		return res, err
-	}
-	return rc.Post("/api/drawing", bf.Baskets)
 }
 
 // push sends one local table to the server. The page sends an empty JSON
@@ -989,9 +977,9 @@ func prefixPushParts(rows []store.Prefix) ([]pushPart, error) {
 	// A restored prefix is an existing identity, even when the remote
 	// database has never seen it. The backup endpoint preserves legacy
 	// names and weights that the new-prefix form intentionally rejects.
-	backup := store.NewBackupFile()
+	backup := store.RecoverySnapshot{BackupFile: store.NewBackupFile(), BasketComponents: []store.BasketComponents{}}
 	backup.Prefixes = rows
-	if err := store.ValidateBackup(&backup); err != nil {
+	if err := store.ValidateNativeBackup(&backup); err != nil {
 		return nil, err
 	}
 	body, err := json.Marshal(backup)

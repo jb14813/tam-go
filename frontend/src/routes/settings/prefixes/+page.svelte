@@ -9,15 +9,14 @@
 
 	const pageTitle = 'Prefixes | TAM';
 
-	// Local copy of the loaded prefixes (intentionally captured once; the page reloads after changes).
+	// Reconcile acknowledged changes without replacing newer form input.
 	let prefixes = $state(untrack(() => [...data.prefixes]));
 	let editPrefix = $state({ prefix: '', color: 'white', weight: 1 });
 	let status = $state('');
+	let saving = $state(false);
+	let statusColor = $state('red');
 
-	// Back to the prefix name when a name is refused. After a save the page
-	// reloads, and the name field's autofocus puts the cursor there instead:
-	// SvelteKit sets the focus itself once a page has loaded, on the element
-	// with autofocus or else on the page, so focusing earlier does not hold.
+	// Put the cursor back at the name only when no newer input would be interrupted.
 	const selectPrefixInput = () => {
 		const form_prefix = document.getElementById('form_prefix');
 		if (form_prefix) {
@@ -27,6 +26,9 @@
 	};
 
 	async function addChange() {
+		if (saving) return;
+		statusColor = 'red';
+		const submitted = { ...editPrefix };
 		const entered = String(editPrefix.prefix ?? '');
 		// An existing prefix is an identity, including any restored whitespace.
 		const name = prefixes.some((p) => p.prefix === entered) ? entered : entered.trim();
@@ -35,42 +37,55 @@
 			selectPrefixInput();
 			return;
 		}
+		if (!Number.isSafeInteger(submitted.weight) || submitted.weight < 0) {
+			status = 'Weight must be a whole number from 0 to 9007199254740991.';
+			return;
+		}
 		const body = [
 			{
 				prefix: name,
-				color: editPrefix.color,
-				weight: Math.trunc(Number(editPrefix.weight) || 0)
+				color: submitted.color,
+				weight: submitted.weight
 			}
 		];
 		let res;
+		saving = true;
 		try {
 			res = await postJSON('/api/prefixes', body);
+			if (res.ok) {
+				const index = prefixes.findIndex((p) => p.prefix === name);
+				if (index < 0) prefixes.push(body[0]);
+				else prefixes[index] = body[0];
+				const unchanged = Object.keys(submitted).every((key) => editPrefix[key] === submitted[key]);
+				if (unchanged) {
+					editPrefix = { prefix: '', color: 'white', weight: 1 };
+					selectPrefixInput();
+				}
+				status = unchanged ? 'Prefix saved.' : 'Prefix saved. Newer edits still need saving.';
+				statusColor = 'green';
+			} else status = await readDetail(res);
 		} catch {
 			status = 'Could not reach the TAM client API';
-			return;
-		}
-		if (res.ok) {
-			window.location.reload();
-		} else {
-			status = await readDetail(res);
-		}
+		} finally { saving = false; }
 	}
 
 	async function deletePrefix(prefix) {
+		if (saving) return;
+		statusColor = 'red';
 		let res;
+		saving = true;
 		try {
 			res = await fetch(`/api/prefixes?p=${encodeURIComponent(prefix.prefix)}`, {
 				method: 'DELETE'
 			});
+			if (res.ok) {
+				prefixes = prefixes.filter((p) => p.prefix !== prefix.prefix);
+				status = 'Prefix deleted.';
+				statusColor = 'green';
+			} else status = await readDetail(res);
 		} catch {
 			status = 'Could not reach the TAM client API';
-			return;
-		}
-		if (res.ok) {
-			window.location.reload();
-		} else {
-			status = await readDetail(res);
-		}
+		} finally { saving = false; }
 	}
 </script>
 
@@ -115,12 +130,12 @@
 		</div>
 		<div class="flex flex-col gap-1">
 			<div>Actions</div>
-			<button class={bS[editPrefix.color]} onclick={addChange}>Add/Change</button>
+			<button class={bS[editPrefix.color]} disabled={saving} onclick={addChange}>Add/Change</button>
 		</div>
 	</div>
 	{#if status}
 		<div class="py-1">
-			<p class={tS.red}>{status}</p>
+			<p role="status" class={tS[statusColor]}>{status}</p>
 		</div>
 	{/if}
 	<div class="flex flex-row gap-1 py-1 items-center">
@@ -176,7 +191,7 @@
 							<button class={bS[prefix.color]} onclick={() => (editPrefix = { ...prefix })}
 								>Edit</button
 							>
-							<button class={bS[prefix.color]} onclick={() => deletePrefix(prefix)}>Delete</button>
+							<button class={bS[prefix.color]} disabled={saving} onclick={() => deletePrefix(prefix)}>Delete</button>
 						</div>
 					</td>
 				</tr>

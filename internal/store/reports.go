@@ -63,7 +63,7 @@ func (s *Store) ReportCounts() ([]ReportCountLine, error) {
 	if !s.readGuarded {
 		return reviewedRead(s, func(v *Store) ([]ReportCountLine, error) { return v.ReportCounts() })
 	}
-	rows, err := s.query(`SELECT prefix, unique_buyers, total_buys FROM report_counts`)
+	rows, err := s.query(`SELECT prefix, is_total, unique_buyers, total_buys FROM report_counts ORDER BY is_total, prefix`)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (s *Store) ReportCounts() ([]ReportCountLine, error) {
 		var l ReportCountLine
 		var prefix sql.NullString
 		var unique, total sql.NullInt64
-		if err := rows.Scan(&prefix, &unique, &total); err != nil {
+		if err := rows.Scan(&prefix, &l.IsTotal, &unique, &total); err != nil {
 			return nil, err
 		}
 		l.Prefix, l.UniqueBuyers, l.TotalBuys = nstr(prefix), nint(unique), nint(total)

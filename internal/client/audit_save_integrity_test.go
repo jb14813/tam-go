@@ -90,7 +90,7 @@ func TestAuditRestoreWaitsForOlderQueuedSave(t *testing.T) {
 			}
 			bf := store.NewBackupFile()
 			bf.Tickets = oneTicket(9, "Restored correction")
-			payload := any(bf)
+			payload := any(nativeFixtureBackup(bf))
 			if strings.HasPrefix(target, "push/") {
 				payload = map[string]any{}
 			}
@@ -154,7 +154,7 @@ func TestAuditRejectedIntentWithFailedCleanupNeverReplays(t *testing.T) {
 			httpx.WriteError(w, http.StatusUnprocessableEntity, "Rejected by server")
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"authenticated": true})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"whoami": "TAM Server", "authenticated": true, "healthy": true, "backup_metadata": true, "receipts": true, "conflicts": 0, "review_token": ""})
 	}))
 	u, _ := url.Parse(rs.URL)
 	s := config.Defaults()
