@@ -238,7 +238,6 @@ test('keyboard preference and duplicate edits survive a renderer crash as unsent
 
 for (const kind of ['tickets', 'baskets', 'search/tickets']) {
 	test(`${kind}: a refused save stops navigation and keeps a reviewable browser draft`, async ({ page, request, event }) => {
-		page.on('dialog', (d) => d.accept());
 		// Chromium can send unload keepalive requests outside Playwright's
 		// routing interception. Inject this one HTTP refusal at fetch so it
 		// applies equally before and during reload; all reads stay real HTTP.
@@ -258,7 +257,19 @@ for (const kind of ['tickets', 'baskets', 'search/tickets']) {
 		} else await openForm(page, event.b, kind, 1);
 		await expect(page.locator('tbody input').first()).toBeVisible();
 		await page.locator('tbody input').first().fill('Unsent correction');
-		await page.getByRole('link', { name: 'Main Menu', exact: true }).click();
+		const formURL = page.url();
+		// The input already has this value while the asynchronous save is pending.
+		// Wait for its refusal and completed dialog handling before starting reload.
+		const refused = page.waitForEvent('dialog').then(async (dialog) => {
+			expect(dialog.type()).toBe('alert');
+			expect(dialog.message()).toBe('Nothing was saved: Save refused for regression test. Your rows are still on this page.');
+			await dialog.accept();
+		});
+		await Promise.all([
+			refused,
+			page.getByRole('link', { name: 'Main Menu', exact: true }).click()
+		]);
+		await expect(page).toHaveURL(formURL);
 		await expect(page.locator('tbody input').first()).toHaveValue('Unsent correction');
 		await page.reload();
 		await expect(page.getByRole('region', { name: 'Unsent edits', exact: true })).toBeVisible();
