@@ -90,6 +90,14 @@ ignored `build/validation/remaining-review/`, `build/adversarial-lifecycle/` and
 Windows, macOS and Linux ARM tests, Nix/NixOS and release/package checks; its
 result belongs to the exact pushed commit and is recorded on the Actions run.
 
+CI follow-up corrected two test-harness timing assumptions. Browser refusal
+tests now await the completed alert before reloading (30 repeated cases passed).
+The short concurrent-write load check now permits a known accepted baseline
+only until that ticket receives an acknowledged burst write. A Windows run's
+reported ticket matched that untouched baseline exactly. Regressions still
+reject mixed-field records, ignored acknowledged writes and preexisting corrupt
+rows, including when slower requests leave most targets untouched.
+
 To reproduce from a checkout, build the embedded frontend before the Go
 programs. The compatibility runner also needs the original application's
 dependencies; see its script and the browser instructions for prerequisites.

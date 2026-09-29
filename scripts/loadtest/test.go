@@ -654,6 +654,14 @@ func (t *test) storm() {
 	}
 	var mu sync.Mutex
 	written := map[store.Ticket]bool{}
+	baseline := map[key]store.Ticket{}
+	for _, k := range keys {
+		if row, _, ok := t.ev.ticketNow(k); ok {
+			// A short storm may never reach this target. Only the known
+			// accepted model row is valid, not an unchecked server read.
+			baseline[k], written[row] = row, true
+		}
+	}
 	stop := time.Now().Add(t.o.storm)
 	t.each(func(l *client) {
 		for seq := 0; time.Now().Before(stop); seq++ {
@@ -662,6 +670,9 @@ func (t *test) storm() {
 				PhoneNumber: fmt.Sprintf("555-%03d-%06d", l.n, seq), Pref: prefs[1+seq%2]}
 			if _, err := l.call(ph, "save a ticket everyone saves", http.MethodPost, "/api/tickets", []store.Ticket{tk}, nil, 1); err == nil {
 				mu.Lock()
+				// Once a storm write succeeds, retaining the old value would
+				// be a lost save, so its baseline must no longer pass.
+				delete(written, baseline[k])
 				written[tk] = true
 				mu.Unlock()
 			}
