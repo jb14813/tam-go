@@ -486,14 +486,11 @@ func (h *handler) proxyAuth(w http.ResponseWriter, r *http.Request) {
 func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 	// A delayed configuration response cannot replace a newer local save.
 	defer h.sync.Numbering()()
-	cache := func(rows []store.Prefix) error {
-		return h.st.WithoutRevisions(func(st *store.Store) error { return st.UpsertPrefixes(rows) })
-	}
-	listOr(h, w, h.remote(h.settings()), "/api/prefixes", cache, h.st.ListPrefixes)
+	listOr(h, w, h.remote(h.settings()), "/api/prefixes", h.st.CachePrefixes, h.st.ClientPrefixes)
 }
 
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	existing, err := h.st.ListPrefixes()
+	existing, err := h.st.ClientPrefixes()
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
@@ -757,20 +754,20 @@ func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) reportByName(w http.ResponseWriter, r *http.Request) {
 	prefix := r.PathValue("prefix")
-	listOr(h, w, h.remote(h.settings()), "/api/reports/byname/"+url.PathEscape(prefix), nil, func() ([]store.ReportByNameLine, error) {
+	eventReport(h, w, h.remote(h.settings()), "/api/reports/byname/"+url.PathEscape(prefix), func() ([]store.ReportByNameLine, error) {
 		return h.st.ReportByName(prefix)
 	})
 }
 
 func (h *handler) reportByBasket(w http.ResponseWriter, r *http.Request) {
 	prefix := r.PathValue("prefix")
-	listOr(h, w, h.remote(h.settings()), "/api/reports/bybasket/"+url.PathEscape(prefix), nil, func() ([]store.ReportByBasketLine, error) {
+	eventReport(h, w, h.remote(h.settings()), "/api/reports/bybasket/"+url.PathEscape(prefix), func() ([]store.ReportByBasketLine, error) {
 		return h.st.ReportByBasket(prefix)
 	})
 }
 
 func (h *handler) reportCounts(w http.ResponseWriter, r *http.Request) {
-	listOr(h, w, h.remote(h.settings()), "/api/reports/counts", nil, h.st.ReportCounts)
+	eventReport(h, w, h.remote(h.settings()), "/api/reports/counts", h.st.ReportCounts)
 }
 
 // --- backup and restore ---
@@ -865,7 +862,7 @@ func (h *handler) importRemote(w http.ResponseWriter, r *http.Request) {
 	defer h.sync.Sending()()
 	var res *remote.Response
 	var err error
-	if bf.BasketComponents != nil || len(bf.Revisions) > 0 || len(bf.Conflicts) > 0 || len(bf.DeletedPrefixes) > 0 {
+	if bf.BasketComponents != nil || len(bf.Revisions) > 0 || len(bf.Conflicts) > 0 || len(bf.DeletedPrefixes) > 0 || len(bf.WithheldRecords) > 0 {
 		// An older server ignores extra backup fields. Do not let it silently
 		// turn a partial workstation backup into a complete basket overwrite.
 		res, err = rc.Get("/api")

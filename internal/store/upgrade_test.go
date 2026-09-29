@@ -57,7 +57,7 @@ func TestQueueFromAnEarlierVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SaveQueued("POST", "/api/tickets", []byte("[2]"), next, func(*Store) error { return nil }); err != nil {
+	if _, err := s.SaveQueued("POST", "/api/tickets", []byte("[]"), next, func(*Store) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n, _, _ := s.OutboxCounts(); n != 2 {

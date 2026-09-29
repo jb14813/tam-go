@@ -42,6 +42,9 @@ func (s *Store) ImportClientBackup(snapshot RecoverySnapshot) error {
 					return err
 				}
 			}
+			if err := clearRecoveryHoldback(view.in, r); err != nil {
+				return err
+			}
 		}
 		if err := view.UpsertPrefixes(snapshot.Prefixes); err != nil {
 			return err
@@ -69,6 +72,45 @@ func (s *Store) ImportClientBackup(snapshot RecoverySnapshot) error {
 				return err
 			}
 		}
-		return view.ApplyReceipt(SaveReceipt{Revisions: snapshot.Revisions, Conflicts: snapshot.Conflicts})
+		if err := view.ApplyReceipt(SaveReceipt{Revisions: snapshot.Revisions, Conflicts: snapshot.Conflicts}); err != nil {
+			return err
+		}
+		preserved := map[string]bool{}
+		for _, r := range snapshot.Revisions {
+			preserved[recordKey(r.Kind, r.Prefix, r.ID)] = true
+		}
+		for _, conflict := range snapshot.Conflicts {
+			preserved[recordKey(conflict.Kind, conflict.Prefix, conflict.ID)] = true
+		}
+		for _, held := range snapshot.WithheldRecords {
+			r := held.Current
+			preserved[recordKey(r.Kind, r.Prefix, r.ID)] = true
+		}
+		for _, candidate := range candidates {
+			r := candidate.Revision
+			if preserved[recordKey(r.Kind, r.Prefix, r.ID)] {
+				continue
+			}
+			// A legacy file supplies no shared ancestry. Give this deliberate
+			// import a fresh independent identity, so an old failed request
+			// cannot claim its value merely because their payloads match.
+			actor, number, err := view.nextDot(view.in)
+			if err != nil {
+				return err
+			}
+			dot := operationKey(actor, number)
+			r.Vector = map[string]int64{actor: number}
+			r.Operations = map[string]string{dot: r.Hash}
+			r.Heads = []string{dot}
+			if err := saveRevision(view.in, r); err != nil {
+				return err
+			}
+		}
+		for _, holdback := range snapshot.WithheldRecords {
+			if err := saveRecoveryHoldback(view.in, holdback); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

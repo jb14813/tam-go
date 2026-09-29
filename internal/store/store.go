@@ -169,6 +169,10 @@ func (s *Store) DeletePrefix(name string) (*Prefix, error) {
 		if !apply {
 			return nil
 		}
+		cached, err := deleteCachedPrefix(tx, name)
+		if err != nil {
+			return err
+		}
 		// An absent row still records the user's deletion: a later client's
 		// saved copy must not put its menu prefix back during recovery.
 		err = tx.QueryRow(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, name).Scan(&p.Prefix, &color, &weight)
@@ -176,6 +180,12 @@ func (s *Store) DeletePrefix(name string) (*Prefix, error) {
 			return err
 		}
 		found = err == nil
+		if !found && cached != nil {
+			p.Prefix = cached.Prefix
+			color = sql.NullString{String: cached.Color, Valid: true}
+			weight = sql.NullInt64{Int64: int64(cached.Weight), Valid: true}
+			found = true
+		}
 		return recoveryPrefixDeleted(tx, name, found)
 	})
 	if err != nil {

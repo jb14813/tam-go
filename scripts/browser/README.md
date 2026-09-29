@@ -23,6 +23,21 @@ Drawing page to refresh that contact information. Request interception is used
 to control timing in these fault tests; the application and HTTP programs are
 real.
 
+The draft regressions reject saves during navigation, hide and close forms,
+reload unsent input for explicit review, and exercise invalid winning numbers
+and multiple tabs. Pager tests edit a row while the next range is loading and
+require the visible range to stay aligned with the displayed rows. Report tests
+disconnect the real shared server link, check printable errors instead of
+partial local reports, and delay counts refreshes to check retry ordering.
+Native backup tests download and upload through the browser and require the
+downloaded document to preserve the API response.
+
+Further review tests discard draft rows while comparisons are visible, overlap
+comparison requests, and crash a Chromium renderer after keyboard-only edits.
+Settings tests delay a real save acknowledgement while typing continues. Print
+tests correct winners through another client and require Print to refresh before
+printing; an unavailable report must show an error instead of printing old rows.
+
 Build the frontend and both Linux programs first, then run on Linux (Node.js 22+):
 
 ```sh

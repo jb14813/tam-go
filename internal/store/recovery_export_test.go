@@ -244,8 +244,13 @@ func TestClientBackupRestoresExactComponentProvenance(t *testing.T) {
 	must(t, target.ImportClientBackup(legacy))
 	after, err = target.ExportRecovery()
 	must(t, err)
-	if len(after.Revisions) != 0 {
-		t.Fatal("legacy file inherited modern local provenance")
+	if len(after.Revisions) != 2 {
+		t.Fatal("legacy import did not record its independent component choices")
+	}
+	for _, r := range after.Revisions {
+		if len(r.Operations) != 1 || len(r.Heads) != 1 || reflect.DeepEqual(r, beforeMetadata) || reflect.DeepEqual(r, afterDrawing) {
+			t.Fatal("legacy file inherited earlier local or source ancestry")
+		}
 	}
 }
 

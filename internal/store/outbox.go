@@ -32,7 +32,8 @@ const outboxCols = `id, created_at, method, path, body, attempts, last_error, cl
 func (s *Store) SaveQueued(method, path string, body []byte, order Order, write func(*Store) error) (int64, error) {
 	var id int64
 	err := s.tx(func(tx *sql.Tx) error {
-		if err := (&Store{db: s.db, in: tx}).WithLocalOperation(order, write); err != nil {
+		request := &Outbox{Method: method, Path: path, Body: body, Order: order}
+		if err := s.view(tx).retainQueuedRecovery(request, write); err != nil {
 			return err
 		}
 		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, client, save_number) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -118,8 +119,10 @@ func (s *Store) FailOutbox(id int64, errText string) error {
 			errText, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM outbox WHERE id = ?`, id)
-		return err
+		if _, err := tx.Exec(`DELETE FROM outbox WHERE id = ?`, id); err != nil {
+			return err
+		}
+		return markRecoveryReoffer(tx)
 	})
 }
 
@@ -136,8 +139,13 @@ func (s *Store) FailAllOutbox(errText string) (int, error) {
 		}
 		moved, _ := res.RowsAffected()
 		n = int(moved)
-		_, err = tx.Exec(`DELETE FROM outbox`)
-		return err
+		if _, err = tx.Exec(`DELETE FROM outbox`); err != nil {
+			return err
+		}
+		if n > 0 {
+			return markRecoveryReoffer(tx)
+		}
+		return nil
 	})
 	return n, err
 }
@@ -170,6 +178,9 @@ func (s *Store) OutboxWaiting() (bool, error) {
 func (s *Store) RetryFailed(host string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
+		if err := s.view(tx).preserveJournalHoldbacks(); err != nil {
+			return err
+		}
 		// Rejections whose cleanup failed stay visible and never replay until
 		// the operator explicitly retries them.
 		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number, local_applied, rejected)
@@ -227,6 +238,9 @@ func (s *Store) RetryFailed(host string) (int, error) {
 func (s *Store) DiscardFailed() (int, error) {
 	var n int64
 	err := s.tx(func(tx *sql.Tx) error {
+		if err := s.view(tx).preserveJournalHoldbacks(); err != nil {
+			return err
+		}
 		for _, q := range []string{`DELETE FROM outbox_failed`, `DELETE FROM outbox WHERE rejected <> ''`} {
 			res, err := tx.Exec(q)
 			if err != nil {

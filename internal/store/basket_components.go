@@ -24,6 +24,7 @@ type RecoverySnapshot struct {
 	Revisions        []RecordRevision   `json:"revisions,omitempty"`
 	Conflicts        []RecordConflict   `json:"conflicts,omitempty"`
 	DeletedPrefixes  []string           `json:"deleted_prefixes,omitempty"`
+	WithheldRecords  []RecoveryHoldback `json:"withheld_records,omitempty"`
 }
 
 type basketID struct {
@@ -106,7 +107,10 @@ func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
 			}
 		}
 		snapshot.Conflicts, err = view.Conflicts()
-		return err
+		if err != nil {
+			return err
+		}
+		return exportRecoveryHoldbacks(tx, &snapshot)
 	})
 	return snapshot, err
 }
@@ -118,7 +122,10 @@ func ValidateRecoverySnapshot(snapshot *RecoverySnapshot) error {
 		return err
 	}
 	_, err := snapshotCandidates(*snapshot)
-	return err
+	if err != nil {
+		return err
+	}
+	return validateRecoveryHoldbacks(snapshot)
 }
 
 func recoveryComponents(snapshot RecoverySnapshot) (map[basketID]BasketComponents, error) {

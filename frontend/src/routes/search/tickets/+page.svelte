@@ -4,6 +4,8 @@
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
+	import UnsentEdits from '$lib/client/components/UnsentEdits.svelte';
+	import { preserveDraft } from '$lib/client/drafts';
 
 	let { data } = $props();
 	let { prefix, prefixes } = $derived(data);
@@ -36,6 +38,12 @@
 	// Whether a search has run, for what the empty table says.
 	let searched = $state(false);
 	let loadSequence = 0;
+	function applyDraft(row) {
+		if (itemsBuffer.length) { alert('Save the current edits before using a draft.'); return false; }
+		items = [{ ...row, changed: true }];
+		searched = true;
+		return true;
+	}
 	const functions = {
 		async search() {
 			const request = ++loadSequence;
@@ -147,11 +155,14 @@
 	// the forms. (The original asked before leaving instead; its question
 	// cannot stop a browser discarding a hidden tab, and Leave lost the rows.)
 	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
+	$effect(() => { preserveDraft(itemsBuffer); });
 </script>
 
 <svelte:head>
 	<title>{pageTitle}</title>
 </svelte:head>
+
+<UnsentEdits apply={applyDraft} />
 
 <table class="w-full box-border border-separate p-1">
 	<thead class="sticky top-1 bg-white">

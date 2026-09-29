@@ -8,6 +8,28 @@ import (
 // ClientTables are the tables only tam-client has: the outbox of saves that
 // have not reached the server yet, and the ones the server rejected.
 var ClientTables = []string{
+	// A refused replay can expose an accepted predecessor after the initial
+	// recovery upload. Keep that generation's reoffer durable across restarts.
+	`CREATE TABLE IF NOT EXISTS client_recovery_contribution (id INTEGER PRIMARY KEY CHECK(id=1), target TEXT NOT NULL, token TEXT NOT NULL, epoch INTEGER NOT NULL, needed INTEGER NOT NULL, rejected INTEGER NOT NULL DEFAULT 0)`,
+	// A queued edit may replace the only complete accepted local value. Keep
+	// that predecessor and the exact withheld operation independently of the
+	// delivery journal, including after a volunteer discards a refused save.
+	`CREATE TABLE IF NOT EXISTS recovery_holdbacks (kind TEXT NOT NULL, prefix TEXT NOT NULL, record_id INTEGER NOT NULL, holdback TEXT NOT NULL, PRIMARY KEY(kind,prefix,record_id))`,
+	// Shared menu configuration is a read cache, never an authored recovery
+	// contribution. The marker distinguishes a fetched empty menu from a
+	// client that has never fetched configuration and should use its own rows.
+	`CREATE TABLE IF NOT EXISTS prefix_menu_cache (prefix TEXT PRIMARY KEY, color TEXT, weight INTEGER)`,
+	`CREATE TABLE IF NOT EXISTS prefix_menu_state (id INTEGER PRIMARY KEY CHECK(id = 1))`,
+	`CREATE TRIGGER IF NOT EXISTS prefix_menu_insert AFTER INSERT ON prefixes
+		WHEN EXISTS (SELECT 1 FROM prefix_menu_state) BEGIN
+		INSERT INTO prefix_menu_cache(prefix,color,weight) VALUES(NEW.prefix,NEW.color,NEW.weight)
+		ON CONFLICT(prefix) DO UPDATE SET color=excluded.color,weight=excluded.weight; END`,
+	`CREATE TRIGGER IF NOT EXISTS prefix_menu_update AFTER UPDATE ON prefixes
+		WHEN EXISTS (SELECT 1 FROM prefix_menu_state) BEGIN
+		INSERT INTO prefix_menu_cache(prefix,color,weight) VALUES(NEW.prefix,NEW.color,NEW.weight)
+		ON CONFLICT(prefix) DO UPDATE SET color=excluded.color,weight=excluded.weight; END`,
+	`CREATE TRIGGER IF NOT EXISTS prefix_menu_delete AFTER DELETE ON prefixes BEGIN
+		DELETE FROM prefix_menu_cache WHERE prefix=OLD.prefix; END`,
 	`CREATE TABLE IF NOT EXISTS outbox (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		created_at TEXT NOT NULL,

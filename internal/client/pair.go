@@ -155,9 +155,6 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		name = root.Name
 	}
 
-	prev := h.settings()
-	same := prev.RemoteURL() != "" &&
-		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
 	res, err = rc.Do(http.MethodPost, "/api/auth", map[string]string{"TAM-PW": req.Password}, map[string]string{"description": h.host})
 	if err != nil {
 		h.unreachableAt(w, hostPort, err)
@@ -182,15 +179,18 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep a local backup before changing the connection.
 	kept := ""
-	if !same {
-		kept = h.keepLocalData(name)
-	}
-
 	// The event queue follows the connection; a different address or server
 	// name does not make the volunteer's pending edits a different dataset.
 	if err := h.sync.Reconfigure(func() error {
+		// Reconfigure holds Numbering and Sending: finish any preceding save
+		// before taking the backup and keep that snapshot with this switch.
+		prev := h.settings()
+		same := prev.RemoteURL() != "" &&
+			(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
+		if !same {
+			kept = h.keepLocalData(name)
+		}
 		_, err := h.cfg.Update(func(cur config.Settings) (config.Settings, error) {
 			cur.RemoteServer, cur.RemotePort, cur.RemoteTLS = req.Host, req.Port, req.TLS
 			cur.RemoteKey, cur.RemoteName, cur.RemoteFingerprint = key.AuthKey, name, fingerprint
@@ -214,17 +214,23 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 // before pairing with another server. The entries also remain in its local
 // database. Backup and Restore can load the file or send it to the server.
 // It returns the sentence the pairing's message adds, or "" for no data.
+// The caller holds the client's Numbering lock.
 func (h *handler) keepLocalData(server string) string {
-	bf, err := h.st.Export()
+	if err := h.st.MaterializeIntents(); err != nil {
+		log.Printf("pair: retaining this client's pending data: %v", err)
+		return fmt.Sprintf(" This client's data could not be backed up before pairing (%v); its saved entries and pending requests remain in its data folder.", err)
+	}
+	bf, err := h.st.ExportClientBackup()
 	if err != nil {
 		log.Printf("pair: keeping this client's data: %v", err)
-		return ""
+		return fmt.Sprintf(" This client's data could not be backed up before pairing (%v); it remains in this client's local database.", err)
 	}
-	if len(bf.Prefixes)+len(bf.Tickets)+len(bf.Baskets) == 0 {
+	if len(bf.Prefixes)+len(bf.Tickets)+len(bf.Baskets)+len(bf.DeletedPrefixes)+len(bf.Conflicts)+len(bf.Revisions) == 0 {
 		return ""
 	}
 	name := "before-pairing-" + time.Now().Format("20060102-150405") + ".json"
-	data, err := json.MarshalIndent(bf, "", "  ")
+	// Keep conflict payloads in their native encoding, as API downloads do.
+	data, err := json.Marshal(bf)
 	if err == nil {
 		err = os.WriteFile(filepath.Join(h.dataDir, name), data, 0o600)
 	}

@@ -20,6 +20,22 @@ func (s *Store) ExportRecoveryForSync() (RecoverySnapshot, error) {
 		if err != nil {
 			return err
 		}
+		for i := range snapshot.WithheldRecords {
+			held := &snapshot.WithheldRecords[i]
+			pending, err := journalOwnsRevision(tx, held.Current, true)
+			if err != nil {
+				return err
+			}
+			if pending {
+				// Its ordered replay may already be an ancestor of another
+				// client's correction. Offering an independent pre-Push copy
+				// before that replay would manufacture a recovery conflict.
+				held.Prior = nil
+			}
+		}
+		if err := applyRecoveryHoldbacks(&snapshot); err != nil {
+			return err
+		}
 		rows, err := tx.Query(`SELECT ` + outboxCols + `, rejected <> '' FROM outbox UNION ALL SELECT ` + outboxCols + `, 1 FROM outbox_failed`)
 		if err != nil {
 			return err
@@ -77,7 +93,7 @@ func (s *Store) ExportRecoveryForSync() (RecoverySnapshot, error) {
 				if request.Order.Client != "" && request.Order.Save > 0 && len(r.Operations) > 0 {
 					actor := "client:" + request.Order.Client
 					dot := operationKey(actor, request.Order.Save)
-					if len(r.Heads) > 0 && r.Operations[dot] == edit.hash && !containsHash(r.Heads, dot) {
+					if len(r.Heads) > 0 && !containsHash(r.Heads, dot) {
 						// A later standalone or copied-client save can have another
 						// actor. Its explicit head supersedes this failed operation.
 						continue
@@ -114,6 +130,7 @@ func (s recoveryOutboxScanner) Scan(dest ...any) error {
 type recoveryIntentEdit struct {
 	key, hash    string
 	insertWinner bool
+	candidate    RecordCandidate
 }
 
 // Request values, rather than just row IDs, keep an older failed request from
@@ -122,7 +139,8 @@ func recoveryIntentEdits(o *Outbox) ([]recoveryIntentEdit, error) {
 	var edits []recoveryIntentEdit
 	add := func(kind, prefix string, id int, value any, insertWinner bool) {
 		raw, _ := json.Marshal(value)
-		edits = append(edits, recoveryIntentEdit{recordKey(kind, prefix, id), valueHash(raw), insertWinner})
+		r := RecordRevision{Kind: kind, Prefix: prefix, ID: id, Hash: valueHash(raw)}
+		edits = append(edits, recoveryIntentEdit{recordKey(kind, prefix, id), r.Hash, insertWinner, RecordCandidate{Revision: r, Value: raw}})
 	}
 	u, err := url.Parse(o.Path)
 	if err != nil {

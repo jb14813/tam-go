@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"ticket-auction-manager/tam-go/internal/store"
@@ -146,8 +147,12 @@ func TestRecoveryRequestsSurvivePartialRestart(t *testing.T) {
 		t.Fatalf("overwrote current event rows: %+v", got)
 	}
 	code, _ = a.do("POST", "/api/recovery", map[string]any{"token": otherToken, "data": second}, map[string]string{"TAM-KEY": other.AuthKey})
-	if code != http.StatusConflict {
-		t.Fatalf("acknowledged retry = %d, want 409", code)
+	if code != http.StatusOK {
+		t.Fatalf("acknowledged retry = %d, want idempotent 200", code)
+	}
+	afterRetry, err := a.st.Export()
+	if err != nil || !reflect.DeepEqual(got, afterRetry) {
+		t.Fatalf("repeated contribution changed the recovered event: %+v, %v", afterRetry, err)
 	}
 	a.url = newTestServer(t, NewHandler(a.st, FixedPassword("secret"))).URL
 	if recoveryToken(t, a, a.key) != "" || recoveryToken(t, a, other.AuthKey) != "" {

@@ -2,14 +2,81 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"ticket-auction-manager/tam-go/internal/store"
 )
+
+func TestOlderRecoveryServerRejectsReofferWithoutBlockingQueue(t *testing.T) {
+	for _, repeatHeartbeat := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repeat-heartbeat-%t", repeatHeartbeat), func(t *testing.T) {
+			var uploads, goodSaves atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api":
+					doc := map[string]any{"authenticated": true}
+					if uploads.Load() == 0 || repeatHeartbeat {
+						doc["recovery_token"] = "old-generation"
+					}
+					json.NewEncoder(w).Encode(doc)
+				case "/api/recovery":
+					if uploads.Add(1) > 1 {
+						w.WriteHeader(http.StatusConflict)
+						return
+					}
+					w.Write([]byte(`{"recovered":true}`))
+				case "/api/tickets":
+					w.WriteHeader(http.StatusBadRequest)
+				case "/api/prefixes":
+					goodSaves.Add(1)
+					w.Write([]byte(`[]`))
+				}
+			}))
+			defer server.Close()
+			s, st := newSyncer(t, server.URL)
+			accepted := store.Ticket{Prefix: "A", TID: 1, FirstName: "Accepted"}
+			if err := st.UpsertTickets([]store.Ticket{accepted}); err != nil {
+				t.Fatal(err)
+			}
+			rejected := accepted
+			rejected.FirstName = "Refused"
+			body, _ := json.Marshal([]store.Ticket{rejected})
+			if _, err := st.SaveQueued("POST", "/api/tickets", body, store.Order{Client: "owner", Save: 1}, func(st *store.Store) error { return st.UpsertTickets([]store.Ticket{rejected}) }); err != nil {
+				t.Fatal(err)
+			}
+			s.Tick()
+			if uploads.Load() != 2 {
+				t.Fatalf("wanted initial upload plus one rejected reoffer, got %d", uploads.Load())
+			}
+			// The blocked token must survive a daemon restart and repeated
+			// old-server heartbeats without starving unrelated ordinary saves.
+			s = New(st, s.cfg, s.client, s.t)
+			if _, err := st.EnqueueOutbox("POST", "/api/prefixes", []byte(`[]`)); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 3; i++ {
+				s.Tick()
+			}
+			if uploads.Load() != 2 || goodSaves.Load() != 1 {
+				t.Fatalf("old server looped or stranded queue: uploads=%d good=%d", uploads.Load(), goodSaves.Load())
+			}
+			if p, f := pendingFailed(t, st); p != 0 || f != 1 {
+				t.Fatalf("queue state %d %d", p, f)
+			}
+			retained, err := st.ExportRecoveryForSync()
+			if err != nil || len(retained.Tickets) != 1 || retained.Tickets[0] != accepted {
+				t.Fatalf("unsupported server lost deferred predecessor: %+v %v", retained, err)
+			}
+		})
+	}
+}
 
 func TestStatusShowsRecoveryUntilUploadAcknowledged(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})

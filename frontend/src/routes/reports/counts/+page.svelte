@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import { tS, bS } from '$lib/client/styles';
+	import { API_UNREACHABLE, errorMessage, readDetail } from '$lib/client/api';
 
 	let { data } = $props();
 	let { prefixes } = $derived(data);
@@ -9,28 +10,41 @@
 	let currentTimeout = $state();
 	let lastRefreshed = $state('');
 	let interval = $state('0');
+	let loadError = $state('');
+	let loaded = $state(false);
 
 	// alive is cleared when the page goes away so a refresh that was in
 	// flight cannot schedule the next one.
 	let alive = true;
+	let requestGeneration = 0;
 	const loadCounts = async () => {
-		const rtnData = {};
-		let res;
+		const generation = ++requestGeneration;
+		clearTimeout(currentTimeout);
 		try {
-			res = await fetch('/api/reports/counts');
-		} catch {
-			return;
-		}
-		if (!alive) return;
-		if (res.ok) {
-			prefixes.forEach((p) => (rtnData[p.prefix] = { ...p }));
+			let res;
+			try {
+				res = await fetch('/api/reports/counts');
+			} catch {
+				throw new Error(`${API_UNREACHABLE}. Refresh to try again.`);
+			}
+			if (!res.ok) throw new Error(await readDetail(res));
 			const resData = await res.json();
+			if (!Array.isArray(resData)) throw new Error('Invalid ticket counts received. Refresh to try again.');
+			if (!alive || generation !== requestGeneration) return;
+			const rtnData = Object.create(null);
+			prefixes.forEach((p) => (rtnData[p.prefix] = { ...p }));
 			resData.forEach((c) => (rtnData[c.prefix] = { ...rtnData[c.prefix], ...c }));
 			tableData = [...Object.values(rtnData)];
-			const now = new Date();
-			lastRefreshed = now.toLocaleString();
-			clearTimeout(currentTimeout);
-			if (interval > 0) {
+			lastRefreshed = new Date().toLocaleString();
+			loadError = '';
+			loaded = true;
+		} catch (error) {
+			if (!alive || generation !== requestGeneration) return;
+			tableData = [];
+			loaded = false;
+			loadError = errorMessage(error);
+		} finally {
+			if (alive && generation === requestGeneration && interval > 0) {
 				currentTimeout = setTimeout(loadCounts, interval);
 			}
 		}
@@ -43,6 +57,7 @@
 		untrack(() => loadCounts());
 		return () => {
 			alive = false;
+			requestGeneration++;
 			clearTimeout(currentTimeout);
 		};
 	});
@@ -55,6 +70,13 @@
 <div id="app-container" class="p-1">
 	<HeaderBar></HeaderBar>
 	<h1 class="text-xl font-bold">{pageTitle}</h1>
+	{#if loadError}
+		<p role="alert" class="border border-red-700 bg-red-50 text-red-900 p-2 my-2">{loadError}</p>
+	{:else if !loaded}
+		<p>Loading ticket counts…</p>
+	{/if}
+	{#if loaded}
+	<p class="text-xs">Report snapshot: {lastRefreshed}</p>
 	<table class="border-separate box-border w-full">
 		<thead>
 			<tr>
@@ -73,7 +95,8 @@
 			{/each}
 		</tbody>
 	</table>
-	<div class="flex flex-row gap-1 py-1 items-center">
+	{/if}
+	<div class="flex flex-row gap-1 py-1 items-center print:hidden">
 		<select id="interval_select" class="border p-1" bind:value={interval}>
 			<option value="0">No Interval</option>
 			<option value="30000">30 sec</option>
@@ -83,6 +106,6 @@
 		<button class={bS.gray} onclick={() => loadCounts()}
 			>Refresh{interval > 0 ? ` Every ${interval / 60000} Min` : ''}</button
 		>
-		<div>Last refreshed: {lastRefreshed}</div>
+		<div>Last successful refresh: {lastRefreshed || 'None'}</div>
 	</div>
 </div>

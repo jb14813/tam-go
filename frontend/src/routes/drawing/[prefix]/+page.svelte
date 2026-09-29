@@ -2,7 +2,9 @@
 	import { onMount } from 'svelte';
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, lookupTicket, saveMarked, saveOnLeave, unchangedRows, errorMessage, API_UNREACHABLE } from '$lib/client/api';
+	import { getJSON, lookupTicket, saveMarked, saveOnLeave, unchangedRows, pageRange, errorMessage, API_UNREACHABLE } from '$lib/client/api';
+	import UnsentEdits from '$lib/client/components/UnsentEdits.svelte';
+	import { preserveDraft } from '$lib/client/drafts';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -81,33 +83,42 @@
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
 	let loadSequence = 0;
+	let loadedRange;
+	function restorePager() { if (loadedRange) [pager.idFrom, pager.idTo] = loadedRange; }
+	function applyDraft(row) {
+		if (itemsBuffer.length) { alert('Save or cancel the current edits before using a draft.'); return false; }
+		items = [{ ...row, winning_ticket: row.winning_ticket ?? undefined, changed: true }];
+		loadedRange = [row.b_id, row.b_id];
+		restorePager();
+		showWinner(items[0]);
+		return true;
+	}
 	const functions = {
 		// Saves the marked rows, then loads the pager's range, or `range` when given.
 		async getPage(range) {
 			const request = ++loadSequence;
+			const wanted = pageRange(range || [pager.idFrom, pager.idTo]);
+			if (!wanted) { alert('Enter whole numbers for the first and last row.'); restorePager(); return; }
 			// Rows that could not be saved stay on the page, with the message why.
-			if (!(await this.save()) || itemsBuffer.length || request !== loadSequence) return;
+			if (!(await this.save()) || itemsBuffer.length || request !== loadSequence) {
+				if (request === loadSequence) restorePager();
+				return;
+			}
 			const unchanged = unchangedRows(items, (line) => line.winning_ticket);
-			if (range) [pager.idFrom, pager.idTo] = range;
-			if (pager.idFrom > pager.idTo) {
-				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
-			}
-			if (pager.idTo - pager.idFrom > 300) {
-				pager.idTo = pager.idFrom + 300;
-			}
-			// Numbers start at 0: a row below it could not be saved.
-			if (pager.idFrom < 0) pager.idFrom = 0;
-			if (pager.idTo < 0) pager.idTo = 0;
 			let resData;
 			try {
 				resData = await getJSON(
-					`/api/drawing/${encodeURIComponent(prefix.prefix)}/${pager.idFrom}/${pager.idTo}`
+					`/api/drawing/${encodeURIComponent(prefix.prefix)}/${wanted[0]}/${wanted[1]}`
 				);
 			} catch (e) {
+				if (request === loadSequence) restorePager();
 				alert(`Error loading rows: ${errorMessage(e)}`);
 				return;
 			}
-			if (request !== loadSequence || !unchanged(items)) return;
+			if (request !== loadSequence) return;
+			if (!unchanged(items)) { restorePager(); return; }
+			loadedRange = wanted;
+			restorePager();
 			resData.map((i) => (i.changed = false));
 			items = [...resData];
 			for (const item of items) showWinner(item);
@@ -115,6 +126,11 @@
 		},
 		// Resolves to false when the marked rows could not be saved.
 		async save(opts = {}) {
+			const invalid = itemsBuffer.find((line) => !Number.isSafeInteger(line.winning_ticket) || line.winning_ticket < 0);
+			if (invalid) {
+				if (!opts.keepalive) alert(`Basket ${invalid.b_id}: enter a whole winning ticket number, or 0 to clear it. Nothing was saved; all edits are still on this page.`);
+				return false;
+			}
 			const problem = await saveMarked('/api/drawing', itemsBuffer, {
 				keepalive: !!opts.keepalive,
 				// A drawing line stores its winning ticket; the winner's name
@@ -142,11 +158,13 @@
 		},
 		prevPage() {
 			// Stops at 0, keeping the page's size: 1-10 goes to 0-9.
-			const from = Math.max(0, pager.idFrom - itemsLength);
-			this.getPage([from, from + (pager.idTo - pager.idFrom)]);
+			const [start, end] = loadedRange || [pager.idFrom, pager.idTo];
+			const from = Math.max(0, start - itemsLength);
+			this.getPage([from, from + (end - start)]);
 		},
 		nextPage() {
-			this.getPage([pager.idFrom + itemsLength, pager.idTo + itemsLength]);
+			const [start, end] = loadedRange || [pager.idFrom, pager.idTo];
+			this.getPage([start + itemsLength, end + itemsLength]);
 		},
 		nextLine() {
 			if (items[nextIdx]) {
@@ -213,6 +231,7 @@
 
 	// Marked rows are saved when the page is hidden, left or closed.
 	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
+	$effect(() => { preserveDraft(itemsBuffer); });
 	onMount(() => {
 		active = true;
 		const retry = setInterval(() => {
@@ -234,6 +253,9 @@
 <svelte:head>
 	<title>{pageTitle}</title>
 </svelte:head>
+
+<UnsentEdits apply={applyDraft} />
+<p class="px-2">Enter a whole winning ticket number. Enter 0 to leave a basket undrawn or clear its winner; a blank field is not saved.</p>
 
 <table class="w-full box-border border-separate p-1">
 	<thead class="sticky top-1 bg-white">

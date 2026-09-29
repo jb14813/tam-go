@@ -1,4 +1,6 @@
 <script>
+	import { onDestroy, tick } from 'svelte';
+	import { getJSON, errorMessage } from '$lib/client/api';
 	import { prefixPage } from '$lib/client/paths';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import { bAS, bS } from '$lib/client/styles';
@@ -9,16 +11,40 @@
 
 	let pageTitle = $derived(`${prefix.prefix} Winners by Basket | TAM`);
 	let filterTitle = $state('All Winners');
+	let refreshed = $state(null);
+	let printing = $state(false);
+	let alive = true;
+	onDestroy(() => { alive = false; });
+	let currentReport = $derived(refreshed?.prefix === prefix.prefix ? refreshed : null);
+	let allLines = $derived(currentReport ? currentReport.rows : data.reportLines);
+	let reportError = $derived(currentReport?.error || '');
+	let snapshotAt = $derived(currentReport ? currentReport.at : data.generatedAt);
+
+	async function printReport() {
+		if (printing) return;
+		printing = true;
+		const requestedPrefix = prefix.prefix;
+		try {
+			const rows = await getJSON(`/api/reports/bybasket/${encodeURIComponent(requestedPrefix)}`);
+			if (!Array.isArray(rows)) throw new Error('Invalid report received. Refresh to try again.');
+			if (!alive || requestedPrefix !== prefix.prefix) return;
+			refreshed = { prefix: requestedPrefix, rows, at: new Date().toISOString(), error: '' };
+			await tick();
+			if (alive && requestedPrefix === prefix.prefix) window.print();
+		} catch (e) {
+			if (alive && requestedPrefix === prefix.prefix) refreshed = { prefix: requestedPrefix, rows: [], at: null, error: errorMessage(e) };
+		} finally { printing = false; }
+	}
 
 	const headers = ['Basket ID', 'Description', 'Winning Ticket', 'Winner Name', 'Phone Number'];
 
 	let reportLines = $derived.by(() => {
 		if (currentFilter == 'CALL') {
-			return data.reportLines.filter((l) => l.pref == 'CALL');
+			return allLines.filter((l) => l.pref == 'CALL');
 		} else if (currentFilter == 'TEXT') {
-			return data.reportLines.filter((l) => l.pref == 'TEXT');
+			return allLines.filter((l) => l.pref == 'TEXT');
 		} else {
-			return data.reportLines;
+			return allLines;
 		}
 	});
 </script>
@@ -65,7 +91,7 @@
 						>
 					</div>
 					<div class="flex flex-row gap-1">
-						<button class={bS[prefix.color]} onclick={() => window.print()}>Print</button>
+						<button class={bS[prefix.color]} disabled={printing} onclick={printReport}>{printing ? 'Refreshing…' : 'Print'}</button>
 					</div>
 				</div>
 			</td>
@@ -76,6 +102,10 @@
 		<tr>
 			<th colspan="50"><h2 class="italic text-left">{filterTitle}</h2></th>
 		</tr>
+		<tr><td colspan="50" class="text-xs text-left">
+			{#if reportError}<p role="alert" class="border border-red-700 p-2">{reportError}</p>
+			{:else if snapshotAt}Report snapshot: {new Date(snapshotAt).toLocaleString()}{/if}
+		</td></tr>
 		<tr class="text-sm">
 			{#each headers as header (header)}
 				<th class="text-left border p-0.5">{header}</th>

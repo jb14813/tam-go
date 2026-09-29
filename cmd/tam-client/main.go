@@ -78,9 +78,11 @@ func main() {
 		srv      *http.Server
 		stopOnce sync.Once
 	)
+	shutdownDone := make(chan struct{})
 	stop := func() {
 		stopOnce.Do(func() {
 			go func() {
+				defer close(shutdownDone)
 				// Let the "shutting down" answer reach the page first.
 				time.Sleep(300 * time.Millisecond)
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -142,6 +144,10 @@ func main() {
 	} else {
 		<-done
 	}
+	// Serve returns when Shutdown closes the listener, before active saves
+	// finish. Keep the database and syncer alive through the bounded drain.
+	stop()
+	<-shutdownDone
 	stopSync()
 	select {
 	case <-syncStopped:

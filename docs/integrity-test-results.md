@@ -1,5 +1,9 @@
 # Data-integrity audit and verification
 
+This is the historical report for `c7b85a7`. The later
+[adversarial follow-up](adversarial-test-results.md) covers additional failures
+and corrections found after its successful CI run.
+
 This report covers the follow-up to `b10a925` on `fix/event-recovery`, tested
 September 28-29, 2026. Upstream `dev` through `20c4cfc` is included through
 merge `20557ac`. The [previous report](recovery-test-results.md) describes the
@@ -122,9 +126,11 @@ The load tests interrupt and restart an existing server database. Empty-server
 reconstruction and repeated replacement are separately covered by the HTTP
 integration tests; passing load tests alone would not establish that behavior.
 
-Cross-compilation does not establish native runtime behavior. Native Windows,
-macOS and ARM execution, Nix/NixOS and package installation were not rerun in
-this local audit. No new GitHub CI result is claimed before pushing the branch.
+Cross-compilation does not establish native runtime behavior. After this local
+audit, [CI run 36542173244](https://github.com/jb14813/tam-go/actions/runs/36542173244)
+passed all nine jobs for `c7b85a73598f7b7895ec3fc2b52d243537e3d81a`, including
+native Windows, macOS and ARM execution, Nix/NixOS and package installation.
+Those results do not cover the later follow-up changes.
 
 Clients cannot contribute while offline, and do not retain other clients'
 records merely by reading them. A reachable server cannot certify that an

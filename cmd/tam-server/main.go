@@ -136,9 +136,11 @@ func main() {
 		srv      *http.Server
 		stopOnce sync.Once
 	)
+	shutdownDone := make(chan struct{})
 	stop := func() {
 		stopOnce.Do(func() {
 			go func() {
+				defer close(shutdownDone)
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				srv.Shutdown(ctx)
@@ -236,6 +238,10 @@ func main() {
 	} else {
 		<-done
 	}
+	// Serve returns when Shutdown closes the listener, before active saves
+	// finish. Keep the database open until the bounded drain has completed.
+	stop()
+	<-shutdownDone
 	if serveErr != nil {
 		log.Fatal(serveErr)
 	}

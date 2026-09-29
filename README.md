@@ -27,6 +27,7 @@ Features:
   - **Basket Form**: Optionally, basket/item descriptions can be added as well as who the donor(s) are for each one. The descriptions appear on the reports later on.
   - **Drawing Form**: Enter a winning ticket number to look up its buyer, including tickets entered on another client through the shared server. The form shows the buyer or explains that the ticket is missing or the shared lookup is unavailable. Shared lookups refresh while the page is open so queued entries and corrected contact details appear after synchronization. Zero clears the winner.
 - **Reports**: Reports are automatically generated with one click to avoid line shifts or other issues which may arise during compilation.
+  - Remote reports require the shared server and this client's recovery and save queue to be clear. An outage shows an error instead of a partial local event report. Standalone reports use this client's records.
   - **By Name Report**: This report orders the lines by the last name of each winner, then first name, phone number, and finally basket number.
   - **By Basket Report**: Orders winners by basket number.
   - **Counts Report**: Displays counts of ticket sales by prefix as well as totals.

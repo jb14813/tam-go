@@ -63,13 +63,23 @@ func (s *Store) RetainIntent(id int64, write func(*Store) error) error {
 
 func (s *Store) retainIntent(id int64, complete bool, write func(*Store) error, receipts ...*SaveReceipt) error {
 	return s.tx(func(tx *sql.Tx) error {
-		var applied bool
-		var order Order
-		if err := tx.QueryRow(`SELECT local_applied, client, save_number FROM outbox WHERE id = ?`, id).Scan(&applied, &order.Client, &order.Save); err != nil {
+		request, err := scanOutbox(tx.QueryRow(`SELECT `+outboxCols+` FROM outbox WHERE id = ?`, id))
+		if err != nil {
 			return err
 		}
-		if !applied {
-			if err := (&Store{db: s.db, in: tx}).WithLocalOperation(order, write); err != nil {
+		if !request.LocalApplied {
+			var err error
+			if complete {
+				err = s.view(tx).WithLocalOperation(request.Order, write)
+			} else {
+				err = s.view(tx).retainQueuedRecovery(request, write)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if complete {
+			if err := acknowledgeRecoveryHoldback(tx, request, receipts...); err != nil {
 				return err
 			}
 		}
@@ -84,7 +94,7 @@ func (s *Store) retainIntent(id int64, complete bool, write func(*Store) error, 
 		if complete {
 			statement = `DELETE FROM outbox WHERE id = ?`
 		}
-		_, err := tx.Exec(statement, id)
+		_, err = tx.Exec(statement, id)
 		return err
 	})
 }
@@ -93,12 +103,19 @@ func (s *Store) retainIntent(id int64, complete bool, write func(*Store) error, 
 // an already locally applied save. A crash commits both changes or neither.
 func (s *Store) AcknowledgeOutbox(id int64, receipt *SaveReceipt) error {
 	return s.tx(func(tx *sql.Tx) error {
+		request, err := scanOutbox(tx.QueryRow(`SELECT `+outboxCols+` FROM outbox WHERE id = ?`, id))
+		if err != nil {
+			return err
+		}
 		if receipt != nil {
 			if err := s.view(tx).ApplyReceipt(*receipt); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(`DELETE FROM outbox WHERE id = ?`, id)
+		if err := acknowledgeRecoveryHoldback(tx, request, receipt); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM outbox WHERE id = ?`, id)
 		return err
 	})
 }
@@ -150,7 +167,7 @@ func (s *Store) MaterializeIntents() error {
 		}
 		view := &Store{db: s.db, in: tx}
 		for _, o := range intents {
-			if err := view.WithLocalOperation(o.Order, func(st *Store) error { return st.applyIntent(o) }); err != nil {
+			if err := view.retainQueuedRecovery(o, func(st *Store) error { return st.applyIntent(o) }); err != nil {
 				return fmt.Errorf("retain save %d: %w", o.Order.Save, err)
 			}
 			if _, err := tx.Exec(`UPDATE outbox SET local_applied = 1 WHERE id = ?`, o.ID); err != nil {

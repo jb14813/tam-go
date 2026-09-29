@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit';
+import { preserveDraft } from './drafts';
 
 export const API_UNREACHABLE = 'Could not reach the TAM client API';
 
@@ -85,6 +86,7 @@ export const SAVE_UNREACHABLE =
 
 const latestSaves = new WeakMap();
 const normalSaveQueues = new Map();
+let updateDraft = () => true;
 let editSession;
 let editSequence = 0;
 
@@ -137,6 +139,7 @@ export async function saveMarked(
 	rows,
 	{ keepalive = false, saved = (r) => JSON.stringify(r), payload = (r) => r } = {}
 ) {
+	updateDraft();
 	if (rows.length === 0) return '';
 	const sent = rows.map(saved);
 	const request = {};
@@ -161,6 +164,7 @@ export async function saveMarked(
 	rows.forEach((r, i) => {
 		if (latestSaves.get(r) === request && saved(r) === sent[i]) r.changed = false;
 	});
+	updateDraft();
 	return '';
 }
 
@@ -178,15 +182,38 @@ export async function saveMarked(
  */
 export function saveOnLeave(marked, save) {
 	let sending = '';
-	const leave = () => {
+	const preserve = () => preserveDraft(marked());
+	updateDraft = preserve;
+	const leave = (event) => {
 		const rows = marked();
 		if (rows.length === 0) return;
+		const retained = preserve();
+		if (!retained && event?.type === 'beforeunload') {
+			event.preventDefault();
+			event.returnValue = '';
+		}
 		const now = JSON.stringify(rows);
 		if (now === sending) return;
 		sending = now;
 		Promise.resolve(save({ keepalive: true })).finally(() => {
+			preserve();
 			if (sending === now) sending = '';
 		});
+	};
+	let navigating = false;
+	const navigate = async (event) => {
+		const link = event.target.closest?.('a[href]');
+		if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.download || (link.target && link.target !== '_self')) return;
+		const destination = new URL(link.href, location.href);
+		if (destination.origin !== location.origin || (destination.pathname === location.pathname && destination.hash)) return;
+		if (!marked().length) return;
+		event.preventDefault();
+		if (navigating) return;
+		navigating = true;
+		try {
+			preserve();
+			if (await save() && !marked().length) location.assign(destination.href);
+		} finally { navigating = false; }
 	};
 	const hidden = () => {
 		if (document.visibilityState === 'hidden') leave();
@@ -194,11 +221,22 @@ export function saveOnLeave(marked, save) {
 	window.addEventListener('beforeunload', leave);
 	window.addEventListener('pagehide', leave);
 	document.addEventListener('visibilitychange', hidden);
+	document.addEventListener('click', navigate);
 	return () => {
+		if (updateDraft === preserve) updateDraft = () => true;
 		window.removeEventListener('beforeunload', leave);
 		window.removeEventListener('pagehide', leave);
 		document.removeEventListener('visibilitychange', hidden);
+		document.removeEventListener('click', navigate);
 	};
+}
+
+/** Normalize a requested sheet without changing the currently displayed range. */
+export function pageRange(range) {
+	if (!range.every(Number.isSafeInteger)) return null;
+	let [from, to] = range.map((id) => Math.max(0, id));
+	if (from > to) [from, to] = [to, from];
+	return [from, Math.min(to, from + 300)];
 }
 
 /**

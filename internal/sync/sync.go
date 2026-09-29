@@ -429,6 +429,11 @@ func (s *Syncer) Tick() {
 		return
 	}
 	if handled > 0 {
+		// A definitive refusal may have exposed the last accepted local
+		// value, omitted while this component still had an ordered replay.
+		if !s.recover(rc) {
+			return
+		}
 		// The server's admin page shows what each client has queued, from
 		// the heartbeat: say at once that the queue is empty, not at the
 		// next heartbeat.

@@ -90,6 +90,12 @@ func (s *Store) WithLocalOperation(order Order, write func(*Store) error) error 
 // values. Link its replacement identity only when the old operation is still
 // a current head; later local edits must remain untouched.
 func renumberLocalOperation(tx *sql.Tx, request *Outbox, next Order) error {
+	// An online intent has not changed this client's entries yet. A copied
+	// counter can reuse an accepted head with the same payload; renumbering
+	// the new request must not relabel that older accepted history.
+	if !request.LocalApplied {
+		return nil
+	}
 	old := request.Order
 	if old.Client == "" || old.Save <= 0 || next.Client == "" || next.Save <= 0 || old == next {
 		return nil
@@ -138,6 +144,16 @@ func renumberLocalOperation(tx *sql.Tx, request *Outbox, next Order) error {
 		sort.Strings(r.Heads)
 		if err := saveRevision(tx, r); err != nil {
 			return err
+		}
+		held, err := loadRecoveryHoldback(tx, r)
+		if err != nil {
+			return err
+		}
+		if held != nil && held.Current.Hash == r.Hash && containsHash(held.Current.Heads, oldDot) {
+			held.Current = r
+			if err := saveRecoveryHoldback(tx, *held); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -533,7 +549,7 @@ func (s *Store) ApplyReceipt(receipt SaveReceipt) error {
 		}
 		for _, conflict := range receipt.Conflicts {
 			for _, candidate := range conflict.Candidates {
-				if err := validateCandidate(candidate); err != nil {
+				if err := validateCandidate(&candidate); err != nil {
 					return err
 				}
 				if err := mergeRecovered(tx, candidate, func() error { return applyCandidate(tx, candidate) }); err != nil {
@@ -678,7 +694,7 @@ func (s *Store) RestoreSnapshot(snapshot RecoverySnapshot) error {
 }
 
 func ValidateNumberedRestore(snapshot RecoverySnapshot) error {
-	if len(snapshot.Tickets) > 0 || len(snapshot.Baskets) > 0 || len(snapshot.BasketComponents) > 0 || len(snapshot.Revisions) > 0 || len(snapshot.Conflicts) > 0 || len(snapshot.DeletedPrefixes) > 0 {
+	if len(snapshot.Tickets) > 0 || len(snapshot.Baskets) > 0 || len(snapshot.BasketComponents) > 0 || len(snapshot.Revisions) > 0 || len(snapshot.Conflicts) > 0 || len(snapshot.DeletedPrefixes) > 0 || len(snapshot.WithheldRecords) > 0 {
 		return errors.New("numbered backup requests support prefix Push only; use an unnumbered request for an operator backup restore")
 	}
 	return nil
@@ -991,14 +1007,17 @@ func validateRevision(r RecordRevision) error {
 	return nil
 }
 
-func validateCandidate(c RecordCandidate) error {
+// validateCandidate restores the record's original typed JSON encoding before
+// comparing its digest. Whitespace, object order and equivalent string escapes
+// are transport details; the digest and all reviewed candidate identities still
+// belong to the same exact typed value. Retain that canonical payload so later
+// comparisons, review keys and database writes cannot depend on the transport.
+func validateCandidate(c *RecordCandidate) error {
 	r := c.Revision
 	if err := validateRevision(r); err != nil {
 		return err
 	}
-	if valueHash(c.Value) != r.Hash {
-		return errors.New("candidate payload hash mismatch")
-	}
+	var canonical any
 	switch r.Kind {
 	case "ticket":
 		var value Ticket
@@ -1008,13 +1027,16 @@ func validateCandidate(c RecordCandidate) error {
 		if value.Prefix != r.Prefix || value.TID != r.ID {
 			return errors.New("ticket candidate identity mismatch")
 		}
-		return ValidateTickets([]Ticket{value})
+		if err := ValidateTickets([]Ticket{value}); err != nil {
+			return err
+		}
+		canonical = value
 	case "prefix":
 		if r.ID != 0 {
 			return errors.New("invalid prefix candidate id")
 		}
 		if strings.TrimSpace(string(c.Value)) == "null" {
-			return nil
+			break
 		}
 		var value Prefix
 		if err := json.Unmarshal(c.Value, &value); err != nil {
@@ -1023,7 +1045,7 @@ func validateCandidate(c RecordCandidate) error {
 		if value.Prefix != r.Prefix {
 			return errors.New("prefix candidate identity mismatch")
 		}
-		return nil
+		canonical = value
 	case "metadata":
 		var value []string
 		if err := json.Unmarshal(c.Value, &value); err != nil {
@@ -1032,6 +1054,7 @@ func validateCandidate(c RecordCandidate) error {
 		if len(value) != 2 {
 			return errors.New("metadata candidate must contain description and donors")
 		}
+		canonical = value
 	case "drawing":
 		if strings.TrimSpace(string(c.Value)) == "null" {
 			return errors.New("drawing candidate cannot be null")
@@ -1040,8 +1063,19 @@ func validateCandidate(c RecordCandidate) error {
 		if err := json.Unmarshal(c.Value, &value); err != nil {
 			return err
 		}
-		return ValidateBaskets([]Basket{{Prefix: r.Prefix, BID: r.ID, WinningTicket: value}})
+		if err := ValidateBaskets([]Basket{{Prefix: r.Prefix, BID: r.ID, WinningTicket: value}}); err != nil {
+			return err
+		}
+		canonical = value
 	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return err
+	}
+	if valueHash(raw) != r.Hash {
+		return errors.New("candidate payload hash mismatch")
+	}
+	c.Value = raw
 	return nil
 }
 
@@ -1240,7 +1274,8 @@ func snapshotCandidates(snapshot RecoverySnapshot) ([]RecordCandidate, error) {
 		if len(conflict.Candidates) < 2 {
 			return nil, errors.New("conflict needs at least two candidates")
 		}
-		for _, c := range conflict.Candidates {
+		for i := range conflict.Candidates {
+			c := &conflict.Candidates[i]
 			if err := validateCandidate(c); err != nil {
 				return nil, err
 			}

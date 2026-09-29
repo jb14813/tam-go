@@ -216,8 +216,9 @@ func TestRecoveryRollsBackRowsAndAcknowledgement(t *testing.T) {
 	_, err = s.db.Exec(`DROP TRIGGER reject_recovery`)
 	must(t, err)
 	must(t, s.Recover(key, "", token, data))
-	if err := s.Recover(key, "", token, data); !errors.Is(err, ErrRecoveryToken) {
-		t.Fatalf("repeat recovery: %v", err)
+	must(t, s.Recover(key, "", token, data))
+	if err := s.Recover(key, "", "stale-token", data); !errors.Is(err, ErrRecoveryToken) {
+		t.Fatalf("stale recovery: %v", err)
 	}
 }
 

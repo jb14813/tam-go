@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,21 +18,33 @@ func (s *Syncer) recover(rc *remote.Client) bool {
 	s.mu.Lock()
 	token := s.recoveryToken
 	s.mu.Unlock()
-	if token == "" {
-		return true
-	}
 	client, err := s.st.ClientName(s.host)
 	if err != nil {
 		s.NoteFailure(fmt.Errorf("client identity: %w", err))
 		return false
 	}
+	settings := s.cfg.Get()
+	// Do not send a previous event's unfinished contribution to a newly
+	// configured server. Store only a digest, never another copy of its key.
+	target := fmt.Sprintf("%x", sha256.Sum256([]byte(settings.RemoteURL()+"\x00"+settings.RemoteKey)))
 	done := s.Numbering()
-	bf, err := s.st.ExportRecoveryForSync()
+	contribution, err := s.st.PrepareRecoveryContribution(target, token)
 	done()
 	if err != nil {
 		s.NoteFailure(fmt.Errorf("export recovery copy: %w", err))
 		return false
 	}
+	if contribution.Token == "" {
+		s.mu.Lock()
+		s.recoveryToken = ""
+		s.mu.Unlock()
+		return true
+	}
+	token = contribution.Token
+	bf := contribution.Data
+	s.mu.Lock()
+	s.recoveryToken = token
+	s.mu.Unlock()
 	defer s.Sending()()
 	res, err := rc.WithTimeout(2*time.Minute).Do(http.MethodPost, "/api/recovery", map[string]string{"X-TAM-Client-Name": client, "X-TAM-Receipts": "1"}, struct {
 		Token string                 `json:"token"`
@@ -46,24 +59,26 @@ func (s *Syncer) recover(rc *remote.Client) bool {
 		return false
 	}
 	if res.Status == http.StatusConflict {
-		// The acknowledgement may have been lost after the server committed.
-		// Ask it again; never turn that ambiguity into a discarded local copy.
+		// A stale generation or an older server may reject a repeat upload.
+		// Suppress that exact token durably and keep ordinary replay moving.
+		if err := s.st.RejectRecoveryContribution(target, token); err != nil {
+			s.NoteFailure(fmt.Errorf("retain rejected recovery generation: %w", err))
+			return false
+		}
 		s.mu.Lock()
 		s.recoveryToken = ""
 		s.nextPing = time.Time{}
 		s.mu.Unlock()
 		s.wake()
-		return false
+		return true
 	}
 	if !res.OK() {
 		s.NoteFailure(fmt.Errorf("server answered %d to recovery", res.Status))
 		return false
 	}
-	if res.Receipt != nil {
-		if err := s.st.ApplyReceipt(*res.Receipt); err != nil {
-			s.NoteFailure(fmt.Errorf("retain recovery receipt: %w", err))
-			return false
-		}
+	if err := s.st.CompleteRecoveryContribution(target, contribution, res.Receipt); err != nil {
+		s.NoteFailure(fmt.Errorf("retain recovery receipt: %w", err))
+		return false
 	}
 	s.mu.Lock()
 	s.recoveryToken = ""

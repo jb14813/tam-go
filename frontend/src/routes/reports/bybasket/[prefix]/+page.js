@@ -11,5 +11,5 @@ export const load = async ({ params, fetch }) => {
 		color: 'gray',
 		weight: 0
 	};
-	return { prefixes, prefix, reportLines, venueName: settings.venue_name || '' };
+	return { prefixes, prefix, reportLines, venueName: settings.venue_name || '', generatedAt: new Date().toISOString() };
 };

@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// ErrRecoveryToken means this key has no outstanding request with that token.
+// ErrRecoveryToken means this key has no current generation with that token.
 var ErrRecoveryToken = errors.New("recovery request is no longer current")
 
 const eventEmptySQL = `NOT EXISTS (SELECT 1 FROM prefixes)
@@ -86,12 +86,14 @@ func (s *Store) RecoverSnapshot(key, client, token string, snapshot RecoverySnap
 	if err := ValidateRecoverySnapshot(&snapshot); err != nil {
 		return err
 	}
+	if err := applyRecoveryHoldbacks(&snapshot); err != nil {
+		return err
+	}
 	return s.tx(func(tx *sql.Tx) error {
 		var valid bool
 		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM recovery_requests r
 			JOIN auth_keys k ON k.auth_key = r.auth_key
-			WHERE r.auth_key = ? AND r.token = ? AND NOT EXISTS (SELECT 1 FROM recovery_receipts a
-				WHERE a.auth_key = r.auth_key AND a.client = ? AND a.token = r.token))`, key, token, client).Scan(&valid); err != nil {
+			WHERE r.auth_key = ? AND r.token = ?)`, key, token).Scan(&valid); err != nil {
 			return err
 		}
 		if !valid {
