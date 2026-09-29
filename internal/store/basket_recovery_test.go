@@ -136,9 +136,13 @@ func TestRecoveryBasketComponentsPreserveExplicitClears(t *testing.T) {
 	// A later complete stale copy must not interpret empty strings or zero
 	// as unentered fields and bring the old values back.
 	must(t, server.Recover(key, "stale", token, BackupFile{Baskets: []Basket{{Prefix: "A", BID: 1, Description: "stale", Donors: "stale", WinningTicket: 99}}}))
-	basket, err := server.Basket("A", 1)
+	backup, err := server.Export()
 	must(t, err)
-	if basket == nil || basket.Description != "" || basket.Donors != "" || basket.WinningTicket != 0 {
+	basket := backup.Baskets[0]
+	if err := server.CheckConflicts(); err == nil {
+		t.Fatal("unversioned disagreement must require review")
+	}
+	if basket.Description != "" || basket.Donors != "" || basket.WinningTicket != 0 {
 		t.Fatalf("explicit clears overwritten: %+v", basket)
 	}
 }
@@ -161,9 +165,13 @@ func TestRecoveryBasketComponentsRespectOrdinaryServerWrites(t *testing.T) {
 				write()
 			}
 			must(t, server.Recover(key, "late", token, stale))
-			basket, err := server.Basket("A", 1)
+			backup, err := server.Export()
 			must(t, err)
-			if basket == nil || basket.Description != "live" || basket.Donors != "" || basket.WinningTicket != 0 {
+			basket := backup.Baskets[0]
+			if server.CheckConflicts() == nil {
+				t.Fatal("unknown historical value must require review")
+			}
+			if basket.Description != "live" || basket.Donors != "" || basket.WinningTicket != 0 {
 				t.Fatalf("ordinary server write lost: %+v", basket)
 			}
 		})
@@ -180,8 +188,12 @@ func TestRecoveryBasketComponentsFillAroundOneOrdinaryServerWrite(t *testing.T) 
 			must(t, server.UpsertBaskets([]Basket{{Prefix: "A", BID: 1, Description: "", Donors: ""}}))
 		}
 		must(t, server.Recover(key, "client", token, BackupFile{Baskets: []Basket{{Prefix: "A", BID: 1, Description: "recovered", Donors: "donor", WinningTicket: 42}}}))
-		basket, err := server.Basket("A", 1)
+		backup, err := server.Export()
 		must(t, err)
+		basket := backup.Baskets[0]
+		if server.CheckConflicts() == nil {
+			t.Fatal("unknown conflicting component must require review")
+		}
 		if liveDrawing && (basket.Description != "recovered" || basket.Donors != "donor" || basket.WinningTicket != 0) {
 			t.Fatalf("live drawing blocked complementary metadata or lost clear: %+v", basket)
 		}

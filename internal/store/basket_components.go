@@ -21,6 +21,9 @@ type BasketComponents struct {
 type RecoverySnapshot struct {
 	BackupFile
 	BasketComponents []BasketComponents `json:"basket_components,omitempty"`
+	Revisions        []RecordRevision   `json:"revisions,omitempty"`
+	Conflicts        []RecordConflict   `json:"conflicts,omitempty"`
+	DeletedPrefixes  []string           `json:"deleted_prefixes,omitempty"`
 }
 
 type basketID struct {
@@ -58,7 +61,7 @@ func markBasketComponents(tx *sql.Tx, bs []Basket, metadata, drawing bool) error
 func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
 	var snapshot RecoverySnapshot
 	err := s.tx(func(tx *sql.Tx) error {
-		view := &Store{db: s.db, in: tx}
+		view := s.view(tx)
 		var err error
 		if snapshot.BackupFile, err = view.Export(); err != nil {
 			return err
@@ -78,7 +81,32 @@ func (s *Store) ExportRecovery() (RecoverySnapshot, error) {
 			}
 			snapshot.BasketComponents = append(snapshot.BasketComponents, component)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		all, err := allRevisions(tx)
+		if err != nil {
+			return err
+		}
+		// Old applications may have changed shared columns directly. Never
+		// export a receipt attached to a different value.
+		for _, revision := range all {
+			raw, exists, err := currentValue(tx, revision.Kind, revision.Prefix, revision.ID)
+			if err != nil {
+				return err
+			}
+			if exists && valueHash(raw) == revision.Hash {
+				snapshot.Revisions = append(snapshot.Revisions, revision)
+				if revision.Kind == "prefix" && string(raw) == "null" {
+					snapshot.DeletedPrefixes = append(snapshot.DeletedPrefixes, revision.Prefix)
+				}
+			}
+		}
+		snapshot.Conflicts, err = view.Conflicts()
+		return err
 	})
 	return snapshot, err
 }
@@ -89,7 +117,7 @@ func ValidateRecoverySnapshot(snapshot *RecoverySnapshot) error {
 	if err := ValidateBackup(&snapshot.BackupFile); err != nil {
 		return err
 	}
-	_, err := recoveryComponents(*snapshot)
+	_, err := snapshotCandidates(*snapshot)
 	return err
 }
 
@@ -113,44 +141,4 @@ func recoveryComponents(snapshot RecoverySnapshot) (map[basketID]BasketComponent
 		return nil, errors.New("basket_components must name every recovered basket")
 	}
 	return components, nil
-}
-
-func recoverBaskets(tx *sql.Tx, snapshot RecoverySnapshot) error {
-	components, err := recoveryComponents(snapshot)
-	if err != nil {
-		return err
-	}
-	for _, b := range snapshot.Baskets {
-		var metadata, drawing bool
-		err := tx.QueryRow(`SELECT coalesce(c.metadata, 1), coalesce(c.drawing, 1)
-			FROM baskets b LEFT JOIN basket_components c ON c.prefix = b.prefix AND c.b_id = b.b_id
-			WHERE b.prefix = ? AND b.b_id = ?`, b.Prefix, b.BID).Scan(&metadata, &drawing)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		fields := components[basketID{b.Prefix, b.BID}]
-		if (!fields.Metadata || metadata) && (!fields.Drawing || drawing) {
-			continue
-		}
-		if _, err := tx.Exec(`INSERT INTO baskets (prefix, b_id) VALUES (?, ?) ON CONFLICT (prefix, b_id) DO NOTHING`, b.Prefix, b.BID); err != nil {
-			return err
-		}
-		if fields.Metadata && !metadata {
-			if _, err := tx.Exec(`UPDATE baskets SET description = ?, donors = ? WHERE prefix = ? AND b_id = ?`, b.Description, b.Donors, b.Prefix, b.BID); err != nil {
-				return err
-			}
-			metadata = true
-		}
-		if fields.Drawing && !drawing {
-			if _, err := tx.Exec(`UPDATE baskets SET winning_ticket = ? WHERE prefix = ? AND b_id = ?`, b.WinningTicket, b.Prefix, b.BID); err != nil {
-				return err
-			}
-			drawing = true
-		}
-		if _, err := tx.Exec(`INSERT INTO basket_components (prefix, b_id, metadata, drawing) VALUES (?, ?, ?, ?)
-			ON CONFLICT (prefix, b_id) DO UPDATE SET metadata = excluded.metadata, drawing = excluded.drawing`, b.Prefix, b.BID, metadata, drawing); err != nil {
-			return err
-		}
-	}
-	return nil
 }

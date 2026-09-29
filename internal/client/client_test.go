@@ -586,14 +586,16 @@ func TestRemoteMode(t *testing.T) {
 	}
 }
 
-// TestPushSendsEveryList pins the wire shape the original server requires:
-// all three lists present, never null.
-func TestPushSendsEveryList(t *testing.T) {
+// Push uses the form endpoint understood by both server implementations,
+// and asks modern servers for the numbered operation's recovery receipt.
+func TestPushSendsNumberedFormList(t *testing.T) {
 	f := newFixture(t)
-	var got map[string]json.RawMessage
+	var got []store.Ticket
+	var headers http.Header
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/backuprestore" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" {
 			json.NewDecoder(r.Body).Decode(&got)
+			headers = r.Header.Clone()
 			httpx.WriteJSON(w, 200, map[string]string{"message": "ok"})
 			return
 		}
@@ -604,19 +606,16 @@ func TestPushSendsEveryList(t *testing.T) {
 	s := config.Defaults()
 	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), "K"
 	config.Save(f.settings, s)
-	f.st.UpsertBaskets([]store.Basket{{Prefix: "A", BID: 1, Description: "B"}})
+	f.st.UpsertTickets([]store.Ticket{{Prefix: "A", TID: 1, FirstName: "Buyer"}})
 
-	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
+	if code, body := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	for _, k := range []string{"prefixes", "baskets", "tickets"} {
-		v, ok := got[k]
-		if !ok || strings.TrimSpace(string(v)) == "null" {
-			t.Fatalf("push body must contain a %s list, got %s", k, got[k])
-		}
+	if len(got) != 1 || got[0].FirstName != "Buyer" {
+		t.Fatalf("pushed tickets = %+v", got)
 	}
-	if !strings.Contains(string(got["baskets"]), `"description":"B"`) {
-		t.Fatalf("pushed baskets = %s", got["baskets"])
+	if headers.Get("X-TAM-Receipts") != "1" || headers.Get("X-TAM-Client") == "" || headers.Get("X-TAM-Save") == "" {
+		t.Fatalf("push omitted numbered receipt headers: %v", headers)
 	}
 }
 
@@ -805,8 +804,8 @@ func TestPushBasketsCarriesWinningTickets(t *testing.T) {
 	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore", "/api/drawing"}) {
-		t.Fatalf("the server received %v, want the restore and then the drawing", got)
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/baskets", "/api/drawing"}) {
+		t.Fatalf("the server received %v, want basket metadata and then owned drawing results", got)
 	}
 	if !strings.Contains(string(rec.body("/api/drawing")), `"winning_ticket":7`) {
 		t.Fatalf("drawing body = %s", rec.body("/api/drawing"))
@@ -820,8 +819,8 @@ func TestPushTicketsSendsNoDrawing(t *testing.T) {
 	if code, body := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore"}) {
-		t.Fatalf("the server received %v, want only the restore", got)
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/tickets"}) {
+		t.Fatalf("the server received %v, want only the ticket save", got)
 	}
 }
 

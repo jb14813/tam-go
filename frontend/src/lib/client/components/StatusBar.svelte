@@ -50,6 +50,13 @@
 		if (!status || status.mode !== 'remote') return null;
 		const pending = Number(status.pending) || 0;
 		const server = status.server_name || status.server || 'server';
+		const conflicts = Number(status.conflicts) || 0;
+		if (conflicts > 0) {
+			return {
+				color: 'red',
+				text: `${conflicts} conflicting ${conflicts === 1 ? 'entry needs' : 'entries need'} review on the server's Data review page before results can be used${waiting(pending)}`
+			};
+		}
 		switch (status.state) {
 			case 'connected':
 				if (status.recovering) {

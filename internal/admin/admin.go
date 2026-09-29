@@ -30,7 +30,7 @@ var staticFS embed.FS
 
 // pages holds one parsed template set per page: the layout plus the page's
 // title and content blocks.
-var pages = parsePages("login", "setup", "status", "keys", "backup", "password", "error")
+var pages = parsePages("login", "setup", "status", "keys", "backup", "conflicts", "password", "error")
 
 func parsePages(names ...string) map[string]*template.Template {
 	out := map[string]*template.Template{}
@@ -110,6 +110,8 @@ func NewHandler(st *store.Store, pw *Password, info Info, opts ...Option) http.H
 	h.mux.Handle("GET /admin/backup", in(h.backup))
 	h.mux.Handle("GET /admin/backup/download", in(h.download))
 	h.mux.Handle("POST /admin/backup/restore", in(h.restore))
+	h.mux.Handle("GET /admin/conflicts", in(h.conflicts))
+	h.mux.Handle("POST /admin/conflicts/resolve", in(h.resolveConflict))
 	h.mux.Handle("GET /admin/password", in(h.passwordForm))
 	h.mux.Handle("POST /admin/password", in(h.changePassword))
 	return h
@@ -697,7 +699,7 @@ func (h *handler) renderBackup(w http.ResponseWriter, r *http.Request, s *sessio
 }
 
 func (h *handler) download(w http.ResponseWriter, r *http.Request, s *session) {
-	bf, err := h.st.Export()
+	bf, err := h.st.ExportRecovery()
 	if err != nil {
 		h.internal(w, r, err)
 		return
@@ -720,16 +722,16 @@ func (h *handler) restore(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	defer f.Close()
-	var bf store.BackupFile
+	var bf store.RecoverySnapshot
 	if err := json.NewDecoder(f).Decode(&bf); err != nil {
 		h.renderBackup(w, r, s, http.StatusBadRequest, "That is not a backup file: "+err.Error())
 		return
 	}
-	if err := store.ValidateBackup(&bf); err != nil {
+	if err := store.ValidateRecoverySnapshot(&bf); err != nil {
 		h.renderBackup(w, r, s, http.StatusBadRequest, "That backup cannot be restored: "+err.Error())
 		return
 	}
-	if err := h.st.Import(bf); err != nil {
+	if err := h.st.RestoreSnapshot(bf); err != nil {
 		h.internal(w, r, err)
 		return
 	}

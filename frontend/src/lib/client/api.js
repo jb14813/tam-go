@@ -83,6 +83,43 @@ export function postJSON(
 export const SAVE_UNREACHABLE =
 	'Could not reach the TAM client program. Nothing was saved; your rows are still on this page.';
 
+const latestSaves = new WeakMap();
+const normalSaveQueues = new Map();
+let editSession;
+let editSequence = 0;
+
+function nextEditHeaders() {
+	// getRandomValues also works when a workstation is opened over plain LAN HTTP.
+	editSession ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
+		(byte) => byte.toString(16).padStart(2, '0')).join('');
+	return {
+		'X-TAM-Edit-Session': editSession,
+		'X-TAM-Edit-Sequence': String(++editSequence)
+	};
+}
+
+function sendMarked(url, body, keepalive, headers) {
+	const send = () => postJSON(url, body, { keepalive, headers });
+	// A queued callback cannot run after its page is destroyed. Send leave saves
+	// immediately; the daemon uses the generation headers to reject older rows.
+	if (keepalive) return send();
+	const pending = (normalSaveQueues.get(url) || Promise.resolve()).then(send);
+	const settled = pending.then(() => {}, () => {});
+	normalSaveQueues.set(url, settled);
+	settled.then(() => {
+		if (normalSaveQueues.get(url) === settled) normalSaveQueues.delete(url);
+	});
+	return pending;
+}
+
+/** A load may replace rows only while their identities and values remain unchanged. */
+export function unchangedRows(rows, value = (row) => JSON.stringify(row)) {
+	const before = [...rows];
+	const values = before.map(value);
+	return (current) => current.length === before.length && current.every((row, index) =>
+		row === before[index] && !row.changed && value(row) === values[index]);
+}
+
 /**
  * Saves a form's marked rows (`changed` set) with one POST to `url` and
  * unmarks the rows saved. Returns '' when they were saved (or there was
@@ -102,9 +139,15 @@ export async function saveMarked(
 ) {
 	if (rows.length === 0) return '';
 	const sent = rows.map(saved);
+	const request = {};
+	rows.forEach((row) => latestSaves.set(row, request));
 	let res;
 	try {
-		res = await postJSON(url, rows.map(payload), { keepalive });
+		// Both the values and their generation belong to the invocation, even
+		// when another normal save must finish before this one can be sent.
+		const body = JSON.parse(JSON.stringify(rows.map(payload)));
+		const headers = nextEditHeaders();
+		res = await sendMarked(url, body, keepalive, headers);
 	} catch {
 		return SAVE_UNREACHABLE;
 	}
@@ -113,9 +156,10 @@ export async function saveMarked(
 		return `Nothing was saved: ${reason}. Your rows are still on this page.`;
 	}
 	// A row typed in again while the save was on its way keeps its mark, so
-	// the next save sends what is on the screen now.
+	// the next save sends what is on the screen now. An older acknowledgement
+	// cannot clear the mark while a newer save for that row is still in flight.
 	rows.forEach((r, i) => {
-		if (saved(r) === sent[i]) r.changed = false;
+		if (latestSaves.get(r) === request && saved(r) === sent[i]) r.changed = false;
 	});
 	return '';
 }

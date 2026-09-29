@@ -325,6 +325,7 @@
 			{@render pairForm('Pair')}
 		{/if}
 		{#if failed > 0}
+			<p class="text-sm">Retry uses the values from the failed saves, which may be older than your current entries. It saves those values on this client and sends them after the current queue.</p>
 			<div class="flex flex-row gap-1 items-center">
 				<div class={tS.red}>{saves(failed)} could not be sent</div>
 				<button

@@ -161,7 +161,7 @@ func (t *test) start() error {
 	if err != nil {
 		return err
 	}
-	ports, err := freePorts(1 + t.o.clients)
+	ports, err := freePorts(1)
 	if err != nil {
 		return err
 	}
@@ -196,18 +196,8 @@ func (t *test) start() error {
 	fmt.Printf("tam-server %s answering on %s\n", t.version, t.server.url)
 
 	began := time.Now()
-	t.clients = make([]*client, t.o.clients)
-	for i := range t.clients {
-		name := fmt.Sprintf("client-%02d", i+1)
-		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[1+i], []string{"-open=false", "-tray=false"}, nil)
-		if err != nil {
-			return err
-		}
-		r, err := newRelay(net.JoinHostPort(t.server.host, t.server.port), t.o.late, t.o.seed+uint64(i))
-		if err != nil {
-			return err
-		}
-		t.clients[i] = &client{n: i + 1, prog: p, relay: r, rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
+	if err := t.prepareClients(clientPath); err != nil {
+		return err
 	}
 	var failed atomic.Value
 	t.each(func(l *client) {
@@ -219,6 +209,42 @@ func (t *test) start() error {
 		return err
 	}
 	fmt.Printf("%d tam-client programs answering after %s\n", len(t.clients), secs(time.Since(began)))
+	return nil
+}
+
+func (t *test) prepareClients(clientPath string) (err error) {
+	// Relays keep their listeners open before client ports are selected. If
+	// created afterward, a relay could claim a client's released reservation.
+	relays := make([]*relay, 0, t.o.clients)
+	defer func() {
+		if err != nil {
+			for _, relay := range relays {
+				relay.close()
+			}
+		}
+	}()
+	for i := 0; i < t.o.clients; i++ {
+		r, err := newRelay(net.JoinHostPort(t.server.host, t.server.port), t.o.late, t.o.seed+uint64(i))
+		if err != nil {
+			return err
+		}
+		relays = append(relays, r)
+	}
+	ports, err := freePorts(t.o.clients)
+	if err != nil {
+		return err
+	}
+	clients := make([]*client, t.o.clients)
+	for i := range clients {
+		name := fmt.Sprintf("client-%02d", i+1)
+		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[i], []string{"-open=false", "-tray=false"}, nil)
+		if err != nil {
+			return err
+		}
+		p.readyPath = "/api/status"
+		clients[i] = &client{n: i + 1, prog: p, relay: relays[i], rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
+	}
+	t.clients = clients
 	return nil
 }
 

@@ -9,17 +9,19 @@ import (
 // Outbox is one save that has not reached the server yet: the request the
 // client would have sent, kept until the server takes it.
 type Outbox struct {
-	ID        int64
-	CreatedAt time.Time
-	Method    string
-	Path      string
-	Body      []byte
-	Attempts  int
-	LastError string
-	Order     Order // the name and number it was first sent with
+	ID           int64
+	CreatedAt    time.Time
+	Method       string
+	Path         string
+	Body         []byte
+	Attempts     int
+	LastError    string
+	Order        Order  // the name and number it was first sent with
+	LocalApplied bool   // its entries have been retained in this client's store
+	Rejected     string // a known rejection whose durable cleanup has not finished
 }
 
-const outboxCols = `id, created_at, method, path, body, attempts, last_error, client, save_number`
+const outboxCols = `id, created_at, method, path, body, attempts, last_error, client, save_number, local_applied, rejected`
 
 // SaveQueued writes a save to the client's own copy and appends its
 // request to the outbox in one transaction, and returns the request's id.
@@ -30,7 +32,7 @@ const outboxCols = `id, created_at, method, path, body, attempts, last_error, cl
 func (s *Store) SaveQueued(method, path string, body []byte, order Order, write func(*Store) error) (int64, error) {
 	var id int64
 	err := s.tx(func(tx *sql.Tx) error {
-		if err := write(&Store{db: s.db, in: tx}); err != nil {
+		if err := (&Store{db: s.db, in: tx}).WithLocalOperation(order, write); err != nil {
 			return err
 		}
 		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, client, save_number) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -61,7 +63,7 @@ type rowScanner interface {
 func scanOutbox(row rowScanner) (*Outbox, error) {
 	var o Outbox
 	var created string
-	if err := row.Scan(&o.ID, &created, &o.Method, &o.Path, &o.Body, &o.Attempts, &o.LastError, &o.Order.Client, &o.Order.Save); err != nil {
+	if err := row.Scan(&o.ID, &created, &o.Method, &o.Path, &o.Body, &o.Attempts, &o.LastError, &o.Order.Client, &o.Order.Save, &o.LocalApplied, &o.Rejected); err != nil {
 		return nil, err
 	}
 	o.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -71,7 +73,7 @@ func scanOutbox(row rowScanner) (*Outbox, error) {
 // NextOutbox returns the oldest queued request, or nil when the outbox is
 // empty.
 func (s *Store) NextOutbox() (*Outbox, error) {
-	o, err := scanOutbox(s.db.QueryRow(`SELECT ` + outboxCols + ` FROM outbox ORDER BY id LIMIT 1`))
+	o, err := scanOutbox(s.db.QueryRow(`SELECT ` + outboxCols + ` FROM outbox WHERE rejected = '' ORDER BY id LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -80,7 +82,7 @@ func (s *Store) NextOutbox() (*Outbox, error) {
 
 // ListFailed returns the requests the server rejected, oldest first.
 func (s *Store) ListFailed() ([]Outbox, error) {
-	rows, err := s.db.Query(`SELECT ` + outboxCols + ` FROM outbox_failed ORDER BY id`)
+	rows, err := s.db.Query(`SELECT ` + outboxCols + ` FROM outbox_failed UNION ALL SELECT ` + outboxCols + ` FROM outbox WHERE rejected <> '' ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +113,8 @@ func (s *Store) NoteOutboxAttempt(id int64, errText string) error {
 // FailOutbox moves a request the server rejected to the failed list.
 func (s *Store) FailOutbox(id int64, errText string) error {
 	return s.tx(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number)
-			SELECT id, created_at, method, path, body, attempts + 1, ?, ?, client, save_number FROM outbox WHERE id = ?`,
+		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number, local_applied, rejected)
+			SELECT id, created_at, method, path, body, attempts + 1, ?, ?, client, save_number, local_applied, rejected FROM outbox WHERE id = ?`,
 			errText, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
@@ -126,8 +128,8 @@ func (s *Store) FailOutbox(id int64, errText string) error {
 func (s *Store) FailAllOutbox(errText string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number)
-			SELECT id, created_at, method, path, body, attempts, ?, ?, client, save_number FROM outbox ORDER BY id`,
+		res, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number, local_applied, rejected)
+			SELECT id, created_at, method, path, body, attempts, ?, ?, client, save_number, local_applied, rejected FROM outbox ORDER BY id`,
 			errText, time.Now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return err
@@ -142,10 +144,10 @@ func (s *Store) FailAllOutbox(errText string) (int, error) {
 
 // OutboxCounts returns how many requests are waiting and how many failed.
 func (s *Store) OutboxCounts() (pending, failed int, err error) {
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&pending); err != nil {
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM outbox WHERE rejected = ''`).Scan(&pending); err != nil {
 		return 0, 0, err
 	}
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM outbox_failed`).Scan(&failed); err != nil {
+	if err = s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM outbox_failed) + (SELECT COUNT(*) FROM outbox WHERE rejected <> '')`).Scan(&failed); err != nil {
 		return 0, 0, err
 	}
 	return pending, failed, nil
@@ -154,7 +156,7 @@ func (s *Store) OutboxCounts() (pending, failed int, err error) {
 // OutboxWaiting reports whether any request is waiting in the outbox.
 func (s *Store) OutboxWaiting() (bool, error) {
 	var waiting bool
-	err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM outbox)`).Scan(&waiting)
+	err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM outbox WHERE rejected = '')`).Scan(&waiting)
 	return waiting, err
 }
 
@@ -168,6 +170,15 @@ func (s *Store) OutboxWaiting() (bool, error) {
 func (s *Store) RetryFailed(host string) (int, error) {
 	var n int
 	err := s.tx(func(tx *sql.Tx) error {
+		// Rejections whose cleanup failed stay visible and never replay until
+		// the operator explicitly retries them.
+		if _, err := tx.Exec(`INSERT INTO outbox_failed (id, created_at, method, path, body, attempts, last_error, failed_at, client, save_number, local_applied, rejected)
+			SELECT id, created_at, method, path, body, attempts, last_error, ?, client, save_number, local_applied, rejected FROM outbox WHERE rejected <> ''`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM outbox WHERE rejected <> ''`); err != nil {
+			return err
+		}
 		rows, err := tx.Query(`SELECT id FROM outbox_failed ORDER BY id`)
 		if err != nil {
 			return err
@@ -194,25 +205,40 @@ func (s *Store) RetryFailed(host string) (int, error) {
 				return err
 			}
 		}
-		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, attempts, last_error, client, save_number)
-			SELECT created_at, method, path, body, attempts, last_error, client, save_number FROM outbox_failed ORDER BY id`)
+		res, err := tx.Exec(`INSERT INTO outbox (created_at, method, path, body, attempts, last_error, client, save_number, local_applied)
+			SELECT created_at, method, path, body, attempts, last_error, client, save_number, 0 FROM outbox_failed ORDER BY id`)
 		if err != nil {
 			return err
 		}
 		moved, _ := res.RowsAffected()
 		n = int(moved)
-		_, err = tx.Exec(`DELETE FROM outbox_failed`)
-		return err
+		if _, err := tx.Exec(`DELETE FROM outbox_failed`); err != nil {
+			return err
+		}
+		// An explicit retry is a new choice made after all existing saves.
+		// Retain its payload under the new number even if the operator had
+		// entered a different local value since the original rejection.
+		return s.view(tx).MaterializeIntents()
 	})
 	return n, err
 }
 
 // DiscardFailed drops every failed request and returns how many there were.
 func (s *Store) DiscardFailed() (int, error) {
-	res, err := s.exec(`DELETE FROM outbox_failed`)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	var n int64
+	err := s.tx(func(tx *sql.Tx) error {
+		for _, q := range []string{`DELETE FROM outbox_failed`, `DELETE FROM outbox WHERE rejected <> ''`} {
+			res, err := tx.Exec(q)
+			if err != nil {
+				return err
+			}
+			rows, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			n += rows
+		}
+		return nil
+	})
+	return int(n), err
 }

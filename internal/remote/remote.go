@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/version"
 )
 
@@ -53,8 +55,10 @@ func (c *Client) WithKey(key string) *Client {
 
 // Response is what the remote server answered.
 type Response struct {
-	Status int
-	Body   []byte
+	Status  int
+	Body    []byte
+	Header  http.Header
+	Receipt *store.SaveReceipt
 }
 
 // OK reports a 2xx status.
@@ -97,7 +101,18 @@ func (c *Client) Do(method, path string, headers map[string]string, body any) (*
 	if err != nil {
 		return nil, err
 	}
-	return &Response{Status: res.StatusCode, Body: data}, nil
+	out := &Response{Status: res.StatusCode, Body: data, Header: res.Header.Clone()}
+	if res.Header.Get("X-TAM-Receipts") == "1" {
+		var envelope struct {
+			Data    json.RawMessage    `json:"data"`
+			Receipt *store.SaveReceipt `json:"receipt"`
+		}
+		if err := json.Unmarshal(data, &envelope); err != nil || len(envelope.Data) == 0 || envelope.Receipt == nil {
+			return nil, fmt.Errorf("server sent an invalid save receipt")
+		}
+		out.Body, out.Receipt = envelope.Data, envelope.Receipt
+	}
+	return out, nil
 }
 
 // Get sends a GET.

@@ -40,6 +40,10 @@ var Tables = []string{
 		metadata INTEGER NOT NULL DEFAULT 0,
 		drawing INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (prefix, b_id))`,
+	`CREATE TABLE IF NOT EXISTS causal_identity (id INTEGER PRIMARY KEY CHECK(id = 1), actor TEXT NOT NULL, counter INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS record_revisions (kind TEXT NOT NULL, prefix TEXT NOT NULL, record_id INTEGER NOT NULL, revision TEXT NOT NULL, PRIMARY KEY(kind, prefix, record_id))`,
+	`CREATE TABLE IF NOT EXISTS record_conflicts (kind TEXT NOT NULL, prefix TEXT NOT NULL, record_id INTEGER NOT NULL, candidate_id TEXT NOT NULL, candidate TEXT NOT NULL, PRIMARY KEY(kind, prefix, record_id, candidate_id))`,
+	`CREATE TABLE IF NOT EXISTS operation_receipts (client TEXT NOT NULL, save INTEGER NOT NULL, digest TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(client, save))`,
 }
 
 // View is a named view definition. Views are recreated on every start so a

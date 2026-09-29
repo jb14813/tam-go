@@ -15,6 +15,14 @@ verify the drawing save contains only drawing fields, and disconnect real TCP
 links to check local-only feedback and automatic lookup retries after queued
 entries arrive. Queue readiness also waits for event recovery to finish.
 
+The integrity regressions delay saves and row loads while typing continues,
+overlap repeated values, and let a hidden-page save overtake a normal request.
+They verify that the visible input, dirty state and stored value agree. They
+also correct an already displayed buyer on another client and require the open
+Drawing page to refresh that contact information. Request interception is used
+to control timing in these fault tests; the application and HTTP programs are
+real.
+
 Build the frontend and both Linux programs first, then run on Linux (Node.js 22+):
 
 ```sh

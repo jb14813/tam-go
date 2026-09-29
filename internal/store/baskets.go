@@ -19,6 +19,9 @@ const restoreBasketSQL = `INSERT INTO baskets (prefix, b_id, description, donors
 	winning_ticket = EXCLUDED.winning_ticket`
 
 func (s *Store) queryBaskets(query string, args ...any) ([]Basket, error) {
+	if !s.readGuarded {
+		return reviewedRead(s, func(v *Store) ([]Basket, error) { return v.queryBaskets(query, args...) })
+	}
 	rows, err := s.query(query, args...)
 	if err != nil {
 		return nil, err
@@ -80,6 +83,22 @@ func (s *Store) UpsertBaskets(bs []Basket) error {
 		}
 		defer baskets.Close()
 		for _, b := range bs {
+			apply, err := s.prepareRecord(tx, "metadata", b.Prefix, b.BID, []string{b.Description, b.Donors})
+			if err != nil {
+				return err
+			}
+			if !apply {
+				continue
+			}
+			var exists bool
+			if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM baskets WHERE prefix=? AND b_id=?)`, b.Prefix, b.BID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists && b.WinningTicket != 0 {
+				if _, err = s.prepareRecord(tx, "drawing", b.Prefix, b.BID, b.WinningTicket); err != nil {
+					return err
+				}
+			}
 			// Mark immediately before each write: a repeated basket in one
 			// batch is an update after the first entry inserted it.
 			if _, err := components.Exec(basketComponentArgs(b, true, false)...); err != nil {
@@ -100,10 +119,19 @@ func (s *Store) UpsertWinning(bs []Basket) error {
 		if err := markBasketComponents(tx, bs, false, true); err != nil {
 			return err
 		}
-		return execEach(tx, upsertWinningSQL, len(bs), func(i int) []any {
-			b := bs[i]
-			return []any{b.Prefix, b.BID, b.WinningTicket}
-		})
+		for _, b := range bs {
+			apply, err := s.prepareRecord(tx, "drawing", b.Prefix, b.BID, b.WinningTicket)
+			if err != nil {
+				return err
+			}
+			if !apply {
+				continue
+			}
+			if _, err = tx.Exec(upsertWinningSQL, b.Prefix, b.BID, b.WinningTicket); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -112,7 +140,10 @@ func (s *Store) UpsertWinning(bs []Basket) error {
 const drawingCols = `prefix, b_id, description, winning_ticket, last_name, first_name, phone_number`
 
 func (s *Store) queryDrawing(query string, args ...any) ([]DrawingLine, error) {
-	rows, err := s.db.Query(query, args...)
+	if !s.readGuarded {
+		return reviewedRead(s, func(v *Store) ([]DrawingLine, error) { return v.queryDrawing(query, args...) })
+	}
+	rows, err := s.query(query, args...)
 	if err != nil {
 		return nil, err
 	}

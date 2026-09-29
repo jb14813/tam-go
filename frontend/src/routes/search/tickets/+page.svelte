@@ -1,6 +1,6 @@
 <script>
 	import { bS, iS, rBS, tS } from '$lib/client/styles';
-	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, unchangedRows, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
@@ -35,8 +35,10 @@
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
 	// Whether a search has run, for what the empty table says.
 	let searched = $state(false);
+	let loadSequence = 0;
 	const functions = {
 		async search() {
+			const request = ++loadSequence;
 			// Rows marked in the last results are saved first, as the forms do
 			// before they load other rows; the results would replace them.
 			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
@@ -44,6 +46,8 @@
 				alert(problem);
 				return;
 			}
+			if (itemsBuffer.length || request !== loadSequence) return;
+			const unchanged = unchangedRows(items);
 			const searchParams = new URLSearchParams({ ...searchForm });
 			let resData;
 			try {
@@ -52,6 +56,7 @@
 				alert(`Error searching: ${errorMessage(e)}`);
 				return;
 			}
+			if (request !== loadSequence || !unchanged(items)) return;
 			items = [...resData];
 			searched = true;
 			if (items.length > 0) setTimeout(() => focusIdx(0), 1);
@@ -67,7 +72,7 @@
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
+			if (!opts.keepalive) setTimeout(() => { if (!itemsBuffer.length) focusIdx(0); }, 1);
 			return true;
 		},
 		nextLine() {

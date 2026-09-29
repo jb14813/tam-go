@@ -38,6 +38,7 @@ func MigrateServer(sqldb *sql.DB) error {
 	// tables keep their shared schema. Each client has its own receipt,
 	// including when several clients use the same access key.
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS causal_review (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS recovery_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL,
 			populated INTEGER NOT NULL DEFAULT 0)`,

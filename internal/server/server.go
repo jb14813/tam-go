@@ -150,6 +150,7 @@ func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 
 	key := h.requireKey
 	mux.Handle("POST /api/recovery", key(h.recoverEvent))
+	mux.Handle("POST /api/recovery/receipts", key(h.reviewReceipts))
 	mux.Handle("GET /api/prefixes", key(h.listPrefixes))
 	mux.Handle("POST /api/prefixes", key(h.postPrefixes))
 	mux.Handle("DELETE /api/prefixes", key(h.deletePrefix))
@@ -200,6 +201,12 @@ func (h *handler) requireKey(next http.HandlerFunc) http.Handler {
 		h.touch(key)
 		h.presence.Seen(key, clientOf(r))
 		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+			if strings.HasPrefix(r.URL.Path, "/api/prefixes") || strings.HasPrefix(r.URL.Path, "/api/tickets") || strings.HasPrefix(r.URL.Path, "/api/baskets") || strings.HasPrefix(r.URL.Path, "/api/drawing") || strings.HasPrefix(r.URL.Path, "/api/reports") {
+				if err := h.st.CheckConflicts(); err != nil {
+					writeStoreError(w, err)
+					return
+				}
+			}
 			next(w, r)
 			return
 		}
@@ -361,6 +368,7 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	}
 	if authed {
 		client, err := recoveryClient(r)
+		reply["backup_metadata"] = true
 		if err != nil {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -373,6 +381,18 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 		if token != "" {
 			reply["recovery_token"] = token
 		}
+		conflicts, err := h.st.Conflicts()
+		if err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
+		reply["conflicts"] = len(conflicts)
+		reviewToken, err := h.st.ReviewToken()
+		if err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
+		reply["review_token"] = reviewToken
 	}
 	httpx.WriteJSON(w, http.StatusOK, reply)
 }
@@ -448,7 +468,7 @@ func (h *handler) write(w http.ResponseWriter, r *http.Request, content any, sav
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{"detail": behind.Error(), "last_save": behind.last})
 		return false, false
 	case err != nil:
-		httpx.WriteInternal(w, err)
+		writeStoreError(w, err)
 		return false, false
 	}
 	return stale, true
@@ -457,10 +477,34 @@ func (h *handler) write(w http.ResponseWriter, r *http.Request, content any, sav
 // respond writes a value (or a generic error) produced by a store call.
 func respond[T any](w http.ResponseWriter, v T, err error) {
 	if err != nil {
-		httpx.WriteInternal(w, err)
+		writeStoreError(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	var conflict *store.ConflictError
+	if errors.As(err, &conflict) {
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{"detail": err.Error(), "conflicts": conflict.Conflicts})
+		return
+	}
+	httpx.WriteInternal(w, err)
+}
+
+func (h *handler) writeResult(w http.ResponseWriter, r *http.Request, data any) {
+	if r.Header.Get("X-TAM-Receipts") != "1" {
+		httpx.WriteJSON(w, http.StatusOK, data)
+		return
+	}
+	n, _ := strconv.ParseInt(r.Header.Get("X-TAM-Save"), 10, 64)
+	receipt, err := h.st.Receipt(store.Order{Client: r.Header.Get("X-TAM-Client-Name"), Save: n})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("X-TAM-Receipts", "1")
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": data, "receipt": receipt})
 }
 
 // decodeList reads a JSON list body, validates it and answers the error
@@ -572,7 +616,7 @@ func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.write(w, r, ps, func(st *store.Store) error { return st.UpsertPrefixes(ps) }); !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, ps)
+	h.writeResult(w, r, ps)
 }
 
 func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
@@ -592,11 +636,11 @@ func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
 	case stale:
 		// Done before: answered as done, so a client replaying it does
 		// not file it as refused.
-		httpx.WriteJSON(w, http.StatusOK, store.Prefix{Prefix: name})
+		h.writeResult(w, r, store.Prefix{Prefix: name})
 	case gone == nil:
 		httpx.WriteError(w, http.StatusNotFound, "Prefix not found")
 	default:
-		httpx.WriteJSON(w, http.StatusOK, gone)
+		h.writeResult(w, r, gone)
 	}
 }
 
@@ -640,7 +684,7 @@ func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.write(w, r, ts, func(st *store.Store) error { return st.UpsertTickets(ts) }); !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, ts)
+	h.writeResult(w, r, ts)
 }
 
 func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
@@ -689,7 +733,7 @@ func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertBaskets(bs) }); !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, bs)
+	h.writeResult(w, r, bs)
 }
 
 // --- drawing ---
@@ -732,7 +776,7 @@ func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertWinning(bs) }); !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, bs)
+	h.writeResult(w, r, bs)
 }
 
 // --- reports ---
@@ -755,23 +799,33 @@ func (h *handler) reportCounts(w http.ResponseWriter, r *http.Request) {
 // --- backup and restore ---
 
 func (h *handler) exportBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-TAM-Receipts") == "1" {
+		snapshot, err := h.st.ExportRecovery()
+		respond(w, snapshot, err)
+		return
+	}
 	bf, err := h.st.Export()
 	respond(w, bf, err)
 }
 
 func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
-	var bf store.BackupFile
-	if err := httpx.DecodeJSON(w, r, &bf); err != nil {
+	var snapshot store.RecoverySnapshot
+	if err := httpx.DecodeJSON(w, r, &snapshot); err != nil {
 		httpx.WriteDecodeError(w, err)
 		return
 	}
-	if err := store.ValidateBackup(&bf); err != nil {
+	if err := store.ValidateRecoverySnapshot(&snapshot); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.st.Import(bf); err != nil {
-		httpx.WriteInternal(w, err)
+	if r.Header.Get("X-TAM-Client-Name") != "" || r.Header.Get("X-TAM-Save") != "" {
+		if err := store.ValidateNumberedRestore(snapshot); err != nil {
+			httpx.WriteError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
+	if _, ok := h.write(w, r, snapshot, func(st *store.Store) error { return st.RestoreSnapshot(snapshot) }); !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": "Backup file imported successfully."})
+	h.writeResult(w, r, map[string]string{"message": "Backup file imported successfully."})
 }

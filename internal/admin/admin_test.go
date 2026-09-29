@@ -571,9 +571,9 @@ func TestBackupDownloadAndRestore(t *testing.T) {
 	if err := json.Unmarshal([]byte(file), &bf); err != nil || len(bf.Prefixes) != 1 || len(bf.Tickets) != 1 || len(bf.Baskets) != 1 || bf.Tickets[0].FirstName != "Amy" {
 		t.Fatalf("download body = %s (%v)", file, err)
 	}
-	want, _ := src.st.Export()
+	want, _ := src.st.ExportRecovery()
 	if wantJSON, _ := json.Marshal(want); strings.TrimSpace(file) != string(wantJSON) {
-		t.Fatalf("the download must be store.Export():\n%s\n%s", file, wantJSON)
+		t.Fatalf("the download must preserve the native recovery snapshot:\n%s\n%s", file, wantJSON)
 	}
 
 	dst := newSite(t, "secret")
@@ -606,8 +606,13 @@ func TestBackupDownloadAndRestore(t *testing.T) {
 		t.Fatalf("after the restore:\n%s", body)
 	}
 	got, _ := dst.st.Export()
-	if gotJSON, _ := json.Marshal(got); strings.TrimSpace(file) != string(gotJSON) {
+	wantData, _ := json.Marshal(bf)
+	if gotJSON, _ := json.Marshal(got); string(wantData) != string(gotJSON) {
 		t.Fatalf("restored data differs:\n%s\n%s", gotJSON, file)
+	}
+	restored, err := dst.st.ExportRecovery()
+	if err != nil || len(restored.BasketComponents) != 1 || restored.BasketComponents[0].Drawing {
+		t.Fatalf("restoring a metadata-only basket invented a winner: %+v %v", restored.BasketComponents, err)
 	}
 }
 

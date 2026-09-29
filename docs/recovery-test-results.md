@@ -2,7 +2,9 @@
 
 Validated on 2026-09-28 on branch `fix/event-recovery`, based on `all-systems`
 at `ed4ef4a`, with upstream `dev` through `20c4cfc` recorded by merge `20557ac`.
-These results cover the implementation committed with this report. The earlier
+These results cover commit `b10a925`, before the subsequent data-integrity audit.
+They do not certify the newer changes; the [data-integrity audit report](integrity-test-results.md)
+records their separate validation. The earlier
 [test results](test-results.md) describe the September 27 build.
 
 The frontend was built on Windows with Node.js 26.7 and pnpm 12.6. Listening

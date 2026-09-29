@@ -163,8 +163,12 @@ func TestRecoveryExplicitPrefixSaveClearsDeletion(t *testing.T) {
 		t.Fatal("intentional prefix save did not clear deletion")
 	}
 	must(t, s.Recover(key, "", token, BackupFile{Prefixes: []Prefix{{Prefix: "A", Color: "red"}}}))
-	ps, err := s.ListPrefixes()
+	backup, err := s.Export()
 	must(t, err)
+	ps := backup.Prefixes
+	if s.CheckConflicts() == nil {
+		t.Fatal("different unversioned prefix must require review")
+	}
 	if len(ps) != 1 || ps[0].Color != "green" || ps[0].Weight != 2 {
 		t.Fatalf("snapshot replaced intentional save: %+v", ps)
 	}

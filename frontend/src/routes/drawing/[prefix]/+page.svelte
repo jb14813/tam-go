@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, lookupTicket, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
+	import { getJSON, lookupTicket, saveMarked, saveOnLeave, unchangedRows, errorMessage, API_UNREACHABLE } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -35,23 +35,23 @@
 	};
 	// The request identity also rejects an older retry for the same number.
 	// Zero means undrawn; it must not look up ticket zero.
-	async function showWinner(item) {
+	async function showWinner(item, refresh = false) {
 		const wanted = item.winning_ticket;
 		const wantedPrefix = prefix.prefix;
 		const request = ++lookupSequence;
 		lookups.set(item, request);
-		item.lookupMessage = '';
-		item.lookupRetry = false;
+		if (!refresh) item.lookupMessage = '';
+		item.lookupRefresh = true;
 		item.lookupPending = false;
 		if (!Number.isInteger(wanted) || wanted <= 0) return;
-		item.lookupMessage = 'Lookup pending…';
+		if (!refresh || !item.lookupMessage) item.lookupMessage = 'Lookup pending…';
 		item.lookupPending = true;
 		const current = () => active && lookups.get(item) === request &&
 			item.winning_ticket === wanted && prefix.prefix === wantedPrefix && items.includes(item);
 		try {
 			const { ticket, found, source, mode } = await lookupTicket(wantedPrefix, wanted);
 			if (!current()) return;
-			item.lookupRetry = mode !== 'standalone' && (source !== 'server' || !found);
+			item.lookupRefresh = mode !== 'standalone';
 			if (mode === 'standalone') {
 				item.lookupMessage = found
 					? contact(ticket) || 'Ticket found; no contact info entered'
@@ -65,10 +65,12 @@
 					? `${contact(ticket) || 'Ticket found; no contact info entered'}. Local entry only; server lookup unavailable. Retrying.`
 					: 'Server lookup unavailable; this client has no local entry for this ticket. Retrying.';
 			}
-		} catch {
+		} catch (e) {
 			if (!current()) return;
-			item.lookupMessage = 'Ticket lookup unavailable; could not reach the TAM client program. Retrying.';
-			item.lookupRetry = true;
+			const detail = errorMessage(e);
+			item.lookupMessage = detail === API_UNREACHABLE
+				? 'Ticket lookup unavailable; could not reach the TAM client program. Retrying.'
+				: `Ticket lookup unavailable: ${detail.replace(/[\s.]+$/, '')}. Retrying.`;
 		} finally {
 			if (current()) item.lookupPending = false;
 		}
@@ -78,11 +80,14 @@
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
+	let loadSequence = 0;
 	const functions = {
 		// Saves the marked rows, then loads the pager's range, or `range` when given.
 		async getPage(range) {
+			const request = ++loadSequence;
 			// Rows that could not be saved stay on the page, with the message why.
-			if (!(await this.save())) return;
+			if (!(await this.save()) || itemsBuffer.length || request !== loadSequence) return;
+			const unchanged = unchangedRows(items, (line) => line.winning_ticket);
 			if (range) [pager.idFrom, pager.idTo] = range;
 			if (pager.idFrom > pager.idTo) {
 				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
@@ -102,6 +107,7 @@
 				alert(`Error loading rows: ${errorMessage(e)}`);
 				return;
 			}
+			if (request !== loadSequence || !unchanged(items)) return;
 			resData.map((i) => (i.changed = false));
 			items = [...resData];
 			for (const item of items) showWinner(item);
@@ -122,7 +128,7 @@
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
+			if (!opts.keepalive) setTimeout(() => { if (!itemsBuffer.length) focusIdx(0); }, 1);
 			return true;
 		},
 		cancel() {
@@ -212,7 +218,10 @@
 		const retry = setInterval(() => {
 			if (document.visibilityState === 'hidden') return;
 			for (const item of items) {
-				if (item.lookupRetry && !item.lookupPending) showWinner(item);
+				// Another volunteer may correct even a buyer already found here.
+				if (item.lookupRefresh && Number.isInteger(item.winning_ticket) && item.winning_ticket > 0 && !item.lookupPending) {
+					showWinner(item, true);
+				}
 			}
 		}, 5000);
 		return () => {

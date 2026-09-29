@@ -50,6 +50,7 @@ type Status struct {
 	// Recovering means the server has requested this client's saved data;
 	// transport may be connected before that upload is acknowledged.
 	Recovering bool   `json:"recovering"`
+	Conflicts  int    `json:"conflicts"`
 	LastOK     string `json:"last_ok"`
 	// SettingsError says why settings.json could not be used, in either
 	// mode; see config.File.Problem.
@@ -92,6 +93,9 @@ type Syncer struct {
 	nextPing      time.Time
 	kick          chan struct{}
 	recoveryToken string          // authenticated request to help refill an empty server
+	conflicts     int             // server entries requiring an operator's review
+	reviewToken   string          // last server-side resolution generation seen
+	reviewApplied string          // generation durably retained in matching own rows
 	work          sync.Mutex      // a sync round and a settings change cannot overlap
 	running       context.Context // Run's context; the replay stops between saves when it ends
 
@@ -274,6 +278,8 @@ func (s *Syncer) Reset() {
 	s.retryAt = time.Time{}
 	s.nextPing = time.Time{}
 	s.recoveryToken = ""
+	s.conflicts = 0
+	s.reviewToken, s.reviewApplied = "", ""
 	s.mu.Unlock()
 	s.wake()
 }
@@ -347,6 +353,7 @@ func (s *Syncer) Status() Status {
 		Pending:    pending,
 		Failed:     failed,
 		Recovering: s.recoveryToken != "",
+		Conflicts:  s.conflicts,
 		LastOK:     lastOK,
 
 		SettingsError: problem,
@@ -378,6 +385,13 @@ func (s *Syncer) Run(ctx context.Context) {
 func (s *Syncer) Tick() {
 	s.work.Lock()
 	defer s.work.Unlock()
+	done := s.Numbering()
+	err := s.st.MaterializeIntents()
+	done()
+	if err != nil {
+		log.Printf("retain pending saves: %v", err)
+		return
+	}
 	settings := s.cfg.Get()
 	rc := s.client(settings)
 	if rc == nil {
@@ -405,6 +419,9 @@ func (s *Syncer) Tick() {
 		return
 	}
 	if !s.recover(rc) {
+		return
+	}
+	if !s.refreshReviewed(rc) {
 		return
 	}
 	handled, ok := s.drain(rc)
@@ -449,6 +466,8 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 		var doc struct {
 			Authenticated bool   `json:"authenticated"`
 			RecoveryToken string `json:"recovery_token"`
+			Conflicts     int    `json:"conflicts"`
+			ReviewToken   string `json:"review_token"`
 		}
 		if json.Unmarshal(res.Body, &doc) == nil && haveKey && !doc.Authenticated {
 			s.NoteUnauthorized()
@@ -457,6 +476,8 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 		s.mu.Lock()
 		if haveKey && doc.Authenticated {
 			s.recoveryToken = doc.RecoveryToken
+			s.conflicts = doc.Conflicts
+			s.reviewToken = doc.ReviewToken
 		}
 		s.mu.Unlock()
 		s.NoteSuccess()
@@ -491,8 +512,18 @@ func (s *Syncer) stopping() bool {
 // or set aside in the failed list); ok is false when the server stopped
 // taking requests or the queue could not be read.
 func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
+	// Finish any interrupted online save locally before another page can
+	// write a newer value. Release Numbering before the network request so
+	// ordinary offline entry can continue during a slow replay.
+	done := s.Numbering()
+	if err := s.st.MaterializeIntents(); err != nil {
+		done()
+		log.Printf("retain pending saves: %v", err)
+		return false, false
+	}
 	defer s.Sending()()
 	o, err := s.st.NextOutbox()
+	done()
 	if err != nil {
 		log.Printf("outbox: %v", err)
 		return false, false
@@ -513,7 +544,7 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 		s.backOff()
 		return false, false
 	case res.OK():
-		if err := s.st.DeleteOutbox(o.ID); err != nil {
+		if err := s.st.AcknowledgeOutbox(o.ID, res.Receipt); err != nil {
 			log.Printf("outbox: %v", err)
 			return false, false
 		}
@@ -549,7 +580,7 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 	case res.Status == http.StatusNotFound && o.Method == http.MethodDelete:
 		// A prefix already gone from the server, which is what the delete
 		// wanted; a delete made online takes the same answer as done.
-		if err := s.st.DeleteOutbox(o.ID); err != nil {
+		if err := s.st.AcknowledgeOutbox(o.ID, res.Receipt); err != nil {
 			log.Printf("outbox: %v", err)
 			return false, false
 		}
@@ -614,7 +645,7 @@ func OrderHeaders(o store.Order) map[string]string {
 	if o.Save <= 0 {
 		return nil
 	}
-	return map[string]string{"X-TAM-Client-Name": o.Client, "X-TAM-Save": strconv.FormatInt(o.Save, 10)}
+	return map[string]string{"X-TAM-Client-Name": o.Client, "X-TAM-Save": strconv.FormatInt(o.Save, 10), "X-TAM-Receipts": "1"}
 }
 
 // detail returns the server's {"detail": ...} message, or the status text.

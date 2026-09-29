@@ -1,7 +1,7 @@
 <script>
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, unchangedRows, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -29,11 +29,14 @@
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
+	let loadSequence = 0;
 	const functions = {
 		// Saves the marked rows, then loads the pager's range, or `range` when given.
 		async getPage(range) {
+			const request = ++loadSequence;
 			// Rows that could not be saved stay on the page, with the message why.
-			if (!(await this.save())) return;
+			if (!(await this.save()) || itemsBuffer.length || request !== loadSequence) return;
+			const unchanged = unchangedRows(items);
 			if (range) [pager.idFrom, pager.idTo] = range;
 			if (pager.idFrom > pager.idTo) {
 				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
@@ -53,6 +56,7 @@
 				alert(`Error loading rows: ${errorMessage(e)}`);
 				return;
 			}
+			if (request !== loadSequence || !unchanged(items)) return;
 			resData.map((i) => (i.changed = false));
 			items = [...resData];
 			setTimeout(() => focusIdx(0));
@@ -73,7 +77,7 @@
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
+			if (!opts.keepalive) setTimeout(() => { if (!itemsBuffer.length) focusIdx(0); }, 1);
 			return true;
 		},
 		cancel() {

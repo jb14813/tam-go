@@ -79,14 +79,13 @@ func (s *Store) Recover(key, client, token string, bf BackupFile) error {
 	return s.RecoverSnapshot(key, client, token, RecoverySnapshot{BackupFile: bf})
 }
 
-// RecoverSnapshot fills missing rows and basket components and acknowledges
-// this client in one transaction. Existing saved components always win.
+// RecoverSnapshot merges owned components by their causal receipts, retaining
+// incomparable values as conflicts, and acknowledges the client atomically.
 // It never imports keys or replaces the event with one client's snapshot.
 func (s *Store) RecoverSnapshot(key, client, token string, snapshot RecoverySnapshot) error {
 	if err := ValidateRecoverySnapshot(&snapshot); err != nil {
 		return err
 	}
-	bf := snapshot.BackupFile
 	return s.tx(func(tx *sql.Tx) error {
 		var valid bool
 		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM recovery_requests r
@@ -98,25 +97,32 @@ func (s *Store) RecoverSnapshot(key, client, token string, snapshot RecoverySnap
 		if !valid {
 			return ErrRecoveryToken
 		}
-		if err := execEach(tx, `INSERT INTO prefixes (prefix, color, weight)
-			SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM recovery_deleted_prefixes WHERE prefix = ?)
-			ON CONFLICT (prefix) DO NOTHING`, len(bf.Prefixes), func(i int) []any {
-			p := bf.Prefixes[i]
-			return []any{p.Prefix, p.Color, p.Weight, p.Prefix}
-		}); err != nil {
-			return fmt.Errorf("recover prefixes: %w", err)
+		candidates, err := snapshotCandidates(snapshot)
+		if err != nil {
+			return err
 		}
-		if err := execEach(tx, `INSERT INTO tickets (prefix, t_id, first_name, last_name, phone_number, pref)
-			VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (prefix, t_id) DO NOTHING`, len(bf.Tickets), func(i int) []any {
-			t := bf.Tickets[i]
-			return []any{t.Prefix, t.TID, t.FirstName, t.LastName, t.PhoneNumber, t.Pref}
-		}); err != nil {
-			return fmt.Errorf("recover tickets: %w", err)
+		for _, candidate := range candidates {
+			if candidate.Revision.Kind == "prefix" {
+				var deleted bool
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM recovery_deleted_prefixes WHERE prefix=?)`, candidate.Revision.Prefix).Scan(&deleted); err != nil {
+					return err
+				}
+				if deleted && len(candidate.Revision.Vector) == 0 {
+					continue
+				}
+			}
+			if err := mergeRecovered(tx, candidate, func() error { return applyCandidate(tx, candidate) }); err != nil {
+				return fmt.Errorf("recover %s: %w", candidate.Revision.Kind, err)
+			}
 		}
-		if err := recoverBaskets(tx, snapshot); err != nil {
-			return fmt.Errorf("recover baskets: %w", err)
+		for _, conflict := range snapshot.Conflicts {
+			for _, candidate := range conflict.Candidates {
+				if err := mergeRecovered(tx, candidate, func() error { return applyCandidate(tx, candidate) }); err != nil {
+					return err
+				}
+			}
 		}
-		_, err := tx.Exec(`INSERT INTO recovery_receipts (auth_key, client, token) VALUES (?, ?, ?)
+		_, err = tx.Exec(`INSERT INTO recovery_receipts (auth_key, client, token) VALUES (?, ?, ?)
 			ON CONFLICT (auth_key, client) DO UPDATE SET token = excluded.token`, key, client, token)
 		return err
 	})

@@ -43,14 +43,15 @@ var probe = &http.Client{
 
 // program is one tam-server or tam-client under test.
 type program struct {
-	name string
-	path string
-	args []string
-	env  []string
-	dir  string // its data folder, which also gets its console output
-	host string // the address clients pair with
-	port string
-	url  string
+	name      string
+	path      string
+	args      []string
+	env       []string
+	dir       string // its data folder, which also gets its console output
+	host      string // the address clients pair with
+	port      string
+	url       string
+	readyPath string // clients use their own status route, not the proxied server root
 
 	// A server running on another machine (-server): not started here, and
 	// killed and started again only through the -kill and -restart commands.
@@ -133,7 +134,7 @@ func (p *program) startOnce() error {
 			return fmt.Errorf("%s stopped while starting; see %s", p.name, filepath.Join(p.dir, "console.log"))
 		default:
 		}
-		if answers(p.url) {
+		if p.answers() {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -145,9 +146,14 @@ func (p *program) startOnce() error {
 	}
 }
 
-// answers reports whether a program answers at base.
-func answers(base string) bool {
-	res, err := probe.Get(base + "/api")
+// answers checks the API belonging to this kind of process. A relay forwarding
+// the server's /api must not satisfy a client's startup check.
+func (p *program) answers() bool {
+	path := p.readyPath
+	if path == "" {
+		path = "/api"
+	}
+	res, err := probe.Get(p.url + path)
 	if err != nil {
 		return false
 	}
@@ -171,13 +177,13 @@ func externalServer(o options) (*program, error) {
 // startExternal starts a server elsewhere through the -restart command when
 // it is not answering, and waits until it answers.
 func (p *program) startExternal() error {
-	if !answers(p.url) && p.startCmd != "" {
+	if !p.answers() && p.startCmd != "" {
 		if err := shell(p.startCmd); err != nil {
 			return fmt.Errorf("-restart: %w", err)
 		}
 	}
 	deadline := time.Now().Add(30 * time.Second)
-	for !answers(p.url) {
+	for !p.answers() {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not answer within 30s", p.name)
 		}

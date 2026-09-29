@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 )
 
@@ -157,7 +158,24 @@ func (s *Store) InOrder(client string, save int64, digest string, write func(*St
 			out = Behind
 			return nil
 		}
-		if err := write(&Store{db: s.db, in: tx}); err != nil {
+		receipt := SaveReceipt{Revisions: []RecordRevision{}}
+		view := s.view(tx)
+		view.operation = &Order{Client: client, Save: save}
+		view.receipt = &receipt
+		view.touched = map[string]bool{}
+		if err := write(view); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(receipt)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO operation_receipts(client,save,digest,receipt) VALUES(?,?,?,?) ON CONFLICT(client,save) DO UPDATE SET digest=excluded.digest,receipt=excluded.receipt`, client, save, digest, string(raw)); err != nil {
+			return err
+		}
+		// Only the last save can be repeated; older numbers return Behind.
+		// Avoid retaining quadratic copies of a frequently corrected row's history.
+		if _, err = tx.Exec(`DELETE FROM operation_receipts WHERE client=? AND save<>?`, client, save); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`INSERT INTO client_saves (client, last_save, last_hash) VALUES (?, ?, ?)

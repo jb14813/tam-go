@@ -20,6 +20,27 @@ func recoveryClient(r *http.Request) (string, error) {
 	return client, nil
 }
 
+// reviewReceipts returns causal metadata for this client's exact local values
+// after an operator resolves a conflict. It never imports the offered rows.
+func (h *handler) reviewReceipts(w http.ResponseWriter, r *http.Request) {
+	var snapshot store.RecoverySnapshot
+	if err := httpx.DecodeJSON(w, r, &snapshot); err != nil {
+		httpx.WriteDecodeError(w, err)
+		return
+	}
+	if err := store.ValidateRecoverySnapshot(&snapshot); err != nil {
+		httpx.WriteError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	receipt, err := h.st.MatchingReceipt(snapshot)
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	w.Header().Set("X-TAM-Receipts", "1")
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]bool{"reviewed": true}, "receipt": receipt})
+}
+
 func (h *handler) recoverEvent(w http.ResponseWriter, r *http.Request) {
 	client, err := recoveryClient(r)
 	if err != nil {
@@ -48,6 +69,16 @@ func (h *handler) recoverEvent(w http.ResponseWriter, r *http.Request) {
 		} else {
 			httpx.WriteInternal(w, err)
 		}
+		return
+	}
+	if r.Header.Get("X-TAM-Receipts") == "1" {
+		receipt, err := h.st.MatchingReceipt(*request.Data)
+		if err != nil {
+			httpx.WriteInternal(w, err)
+			return
+		}
+		w.Header().Set("X-TAM-Receipts", "1")
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]bool{"recovered": true}, "receipt": receipt})
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"recovered": true})

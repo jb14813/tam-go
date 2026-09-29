@@ -32,6 +32,15 @@ var ClientTables = []string{
 		client TEXT NOT NULL,
 		host TEXT NOT NULL,
 		last_save INTEGER NOT NULL)`,
+	// Browser uploads can arrive after a newer save, even across a daemon
+	// restart. Track retained generations per page and record/component.
+	`CREATE TABLE IF NOT EXISTS editor_generations (
+		session TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		prefix TEXT NOT NULL,
+		record_id INTEGER NOT NULL,
+		sequence INTEGER NOT NULL,
+		PRIMARY KEY (session, kind, prefix, record_id))`,
 }
 
 // clientColumns were added to the client tables after they first shipped:
@@ -41,6 +50,12 @@ var clientColumns = []struct{ table, column, decl string }{
 	{"outbox", "save_number", "INTEGER NOT NULL DEFAULT 0"},
 	{"outbox_failed", "client", "TEXT NOT NULL DEFAULT ''"},
 	{"outbox_failed", "save_number", "INTEGER NOT NULL DEFAULT 0"},
+	// Existing queued saves already have their local rows. New online saves
+	// first record an unapplied intent, before the first network request.
+	{"outbox", "local_applied", "INTEGER NOT NULL DEFAULT 1"},
+	{"outbox_failed", "local_applied", "INTEGER NOT NULL DEFAULT 1"},
+	{"outbox", "rejected", "TEXT NOT NULL DEFAULT ''"},
+	{"outbox_failed", "rejected", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // MigrateClient creates the client-only tables. It runs after Migrate and

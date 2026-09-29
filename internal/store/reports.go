@@ -5,7 +5,10 @@ import "database/sql"
 // ReportByName returns the winners of one prefix ordered by last name, first
 // name and phone number. Baskets without a drawn winner sort first.
 func (s *Store) ReportByName(prefix string) ([]ReportByNameLine, error) {
-	rows, err := s.db.Query(`SELECT last_name, first_name, phone_number, pref, prefix, b_id, description, donors, winning_ticket
+	if !s.readGuarded {
+		return reviewedRead(s, func(v *Store) ([]ReportByNameLine, error) { return v.ReportByName(prefix) })
+	}
+	rows, err := s.query(`SELECT last_name, first_name, phone_number, pref, prefix, b_id, description, donors, winning_ticket
 		FROM report_by_name WHERE prefix = ? ORDER BY last_name, first_name, phone_number, prefix, b_id`, prefix)
 	if err != nil {
 		return nil, err
@@ -29,7 +32,10 @@ func (s *Store) ReportByName(prefix string) ([]ReportByNameLine, error) {
 
 // ReportByBasket returns the winners of one prefix ordered by basket id.
 func (s *Store) ReportByBasket(prefix string) ([]ReportByBasketLine, error) {
-	rows, err := s.db.Query(`SELECT prefix, b_id, description, donors, winning_ticket, last_name, first_name, phone_number, pref
+	if !s.readGuarded {
+		return reviewedRead(s, func(v *Store) ([]ReportByBasketLine, error) { return v.ReportByBasket(prefix) })
+	}
+	rows, err := s.query(`SELECT prefix, b_id, description, donors, winning_ticket, last_name, first_name, phone_number, pref
 		FROM report_by_basket WHERE prefix = ? ORDER BY prefix, b_id`, prefix)
 	if err != nil {
 		return nil, err
@@ -54,7 +60,10 @@ func (s *Store) ReportByBasket(prefix string) ([]ReportByBasketLine, error) {
 // ReportCounts returns unique buyers and total buys per prefix, followed by
 // a "Total" row.
 func (s *Store) ReportCounts() ([]ReportCountLine, error) {
-	rows, err := s.db.Query(`SELECT prefix, unique_buyers, total_buys FROM report_counts`)
+	if !s.readGuarded {
+		return reviewedRead(s, func(v *Store) ([]ReportCountLine, error) { return v.ReportCounts() })
+	}
+	rows, err := s.query(`SELECT prefix, unique_buyers, total_buys FROM report_counts`)
 	if err != nil {
 		return nil, err
 	}
