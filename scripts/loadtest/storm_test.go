@@ -18,9 +18,7 @@ func TestStormChecksWholeRowsWhenSomeTargetsAreNeverWritten(t *testing.T) {
 	for _, mode := range []string{"no writes", "slow whole write", "torn write", "ignored write", "corrupt baseline"} {
 		t.Run(mode, func(t *testing.T) {
 			o := options{seed: 1, tickets: 400, baskets: 60, prefixes: 5, page: 25, storm: 250 * time.Millisecond, settle: time.Second}
-			if mode == "no writes" || mode == "corrupt baseline" {
-				o.storm = time.Nanosecond
-			}
+			rejectWrites := mode == "no writes" || mode == "corrupt baseline"
 			ev := newEvent(o)
 			// This is exactly the complete B1 stub reported by the Windows CI
 			// failure, before any timed storm writer reaches it.
@@ -47,6 +45,13 @@ func TestStormChecksWholeRowsWhenSomeTargetsAreNeverWritten(t *testing.T) {
 					return
 				}
 				if r.Method == http.MethodPost {
+					if rejectWrites {
+						// No write is acknowledged or applied, regardless of the
+						// platform's clock resolution or when its writer starts.
+						time.Sleep(2 * o.storm)
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
 					var rows []store.Ticket
 					if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
 						t.Error(err)
@@ -91,7 +96,7 @@ func TestStormChecksWholeRowsWhenSomeTargetsAreNeverWritten(t *testing.T) {
 			count := writes
 			mu.Unlock()
 			wantWrites := 1
-			if o.storm == time.Nanosecond {
+			if rejectWrites {
 				wantWrites = 0
 			}
 			if count != wantWrites {
