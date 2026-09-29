@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -93,18 +94,28 @@ func (s *Store) view(tx *sql.Tx) *Store {
 
 // Checking conflicts and selecting data share a transaction, so a recovery
 // arriving between the two cannot expose an arbitrary unresolved winner.
+// A read-only transaction keeps that snapshot without joining the writer
+// queue or reserving SQLite's write lock while reports are being read.
 func reviewedRead[T any](s *Store, read func(*Store) (T, error)) (T, error) {
 	var value T
-	err := s.tx(func(tx *sql.Tx) error {
-		view := s.view(tx)
-		if err := view.CheckConflicts(); err != nil {
-			return err
-		}
-		view.readGuarded = true
+	tx := s.in
+	if tx == nil {
 		var err error
-		value, err = read(view)
-		return err
-	})
+		tx, err = s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return value, err
+		}
+		defer tx.Rollback()
+	}
+	view := s.view(tx)
+	if err := view.CheckConflicts(); err != nil {
+		return value, err
+	}
+	view.readGuarded = true
+	value, err := read(view)
+	if err == nil && s.in == nil {
+		err = tx.Commit()
+	}
 	return value, err
 }
 

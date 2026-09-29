@@ -12,7 +12,10 @@ import (
 	"ticket-auction-manager/tam-go/internal/store"
 )
 
-var eventReportPaths = []string{"/api/reports/byname/A", "/api/reports/bybasket/A", "/api/reports/counts"}
+var eventReportPaths = []string{
+	"/api/reports/byname/A", "/api/reports/bybasket/A", "/api/reports/counts",
+	"/api/drawing", "/api/drawing/A",
+}
 
 func TestEventReportsRefusePartialLocalFallback(t *testing.T) {
 	for _, path := range eventReportPaths {

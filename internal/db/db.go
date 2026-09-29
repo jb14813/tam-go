@@ -86,7 +86,8 @@ var Views = []View{
 // does not apply the busy timeout to a transaction that has read and then
 // asks to write, but fails it at once with "database is locked" when the
 // lock is held for a moment, as a reader under load repairing the WAL index
-// does. Every transaction here writes, so none loses anything by it.
+// does. Read-only transactions explicitly opt out of IMMEDIATE so reports
+// can share a consistent snapshot without reserving the write lock.
 func Open(path string) (*sql.DB, error) {
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	sqldb, err := sql.Open("sqlite", dsn)

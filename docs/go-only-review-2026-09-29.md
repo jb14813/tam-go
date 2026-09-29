@@ -45,3 +45,9 @@ Final integrated checks passed. Evidence is retained in `build/validation/go-onl
 | Formatting and diff checks | Clean. |
 
 Runtime validation used disposable synthetic event data in Linux containers. Cross-builds do not constitute Windows/macOS runtime tests. No release packaging, deployment or live event data was involved.
+
+## CI follow-up
+
+GitHub's race-enabled load test exposed report timeouts that the earlier local runs did not reproduce. Reports were serialized through the writer lock; a timeout then let drawing-result lists return an incomplete local copy. Reviewed reads now use read-only SQLite snapshots, preserving the atomic conflict check without blocking other reports or writers. Drawing-result lists use the same shared-data guard as event reports; offline form ranges remain available.
+
+Regression tests first reproduced both defects, then passed with the fixes. They also verify snapshot consistency during concurrent recovery and reuse of an enclosing write transaction. The unchanged 12-client race-enabled load scenario passed all 26 checks locally with the container limited to four CPUs; the slowest counts read fell from 2.55 seconds to 1.12 seconds. Timeout limits and CI assertions remain unchanged.

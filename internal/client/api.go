@@ -725,12 +725,12 @@ func drawingPlaceholder(prefix string) func(id int) store.DrawingLine {
 }
 
 func (h *handler) allDrawing(w http.ResponseWriter, r *http.Request) {
-	listOr(h, w, h.remote(h.settings()), "/api/drawing", nil, h.st.AllDrawing)
+	eventReport(h, w, h.remote(h.settings()), "/api/drawing", h.st.AllDrawing)
 }
 
 func (h *handler) drawingByPrefix(w http.ResponseWriter, r *http.Request) {
 	prefix := r.PathValue("prefix")
-	listOr(h, w, h.remote(h.settings()), "/api/drawing/"+url.PathEscape(prefix), nil, func() ([]store.DrawingLine, error) {
+	eventReport(h, w, h.remote(h.settings()), "/api/drawing/"+url.PathEscape(prefix), func() ([]store.DrawingLine, error) {
 		return h.st.DrawingByPrefix(prefix)
 	})
 }
