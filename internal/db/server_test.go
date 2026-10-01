@@ -49,12 +49,12 @@ func TestMigrateServerAddsKeyActivity(t *testing.T) {
 		t.Fatalf("auth_key_activity after MigrateServer = %v", cols)
 	}
 	if cols := columns(t, sqldb, "auth_keys"); !reflect.DeepEqual(cols, []string{"auth_key", "description"}) {
-		t.Fatalf("auth_keys after MigrateServer = %v, unexpected key columns", cols)
+		t.Fatalf("auth_keys after MigrateServer = %v, want the original's two columns", cols)
 	}
 }
 
-func TestMigrateServerPreservesExistingKeys(t *testing.T) {
-	sqldb := openWithSchema(t, earlyGoSchema)
+func TestMigrateServerOverDatabaseFromTheOriginalServer(t *testing.T) {
+	sqldb := openWithSchema(t, originalServerSchema)
 	if _, err := sqldb.Exec(`INSERT INTO auth_keys VALUES ('K', 'client')`); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestMigrateServerPreservesExistingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := MigrateServer(sqldb); err != nil {
-		t.Fatalf("MigrateServer over an earlier Go schema: %v", err)
+		t.Fatalf("MigrateServer over the original server's schema: %v", err)
 	}
 	var desc string
 	if err := sqldb.QueryRow(`SELECT description FROM auth_keys WHERE auth_key = 'K'`).Scan(&desc); err != nil || desc != "client" {
@@ -75,11 +75,11 @@ func TestMigrateServerPreservesExistingKeys(t *testing.T) {
 }
 
 // earlierServerDatabase is a database an earlier tam-server migrated: it
-// added last_seen and last_update to auth_keys itself. Key K was seen and
-// wrote; key L was not.
+// added last_seen and last_update to auth_keys itself, which the original
+// server cannot read. Key K was seen and wrote, key L was not.
 func earlierServerDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	sqldb := openWithSchema(t, earlyGoSchema)
+	sqldb := openWithSchema(t, originalServerSchema)
 	for _, stmt := range []string{
 		`ALTER TABLE auth_keys ADD COLUMN last_seen TEXT`,
 		`ALTER TABLE auth_keys ADD COLUMN last_update TEXT`,
@@ -97,7 +97,7 @@ func earlierServerDatabase(t *testing.T) *sql.DB {
 // migrated: it added last_seen alone to auth_keys.
 func olderServerDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	sqldb := openWithSchema(t, earlyGoSchema)
+	sqldb := openWithSchema(t, originalServerSchema)
 	for _, stmt := range []string{
 		`ALTER TABLE auth_keys ADD COLUMN last_seen TEXT`,
 		`INSERT INTO auth_keys VALUES ('K', 'front desk', '2026-09-25T10:00:00Z')`,
@@ -133,7 +133,8 @@ func keyTimes(t *testing.T, sqldb *sql.DB) [][4]string {
 
 // TestMigrateServerMovesTheTimesOutOfAuthKeys: over a database from an
 // earlier tam-server, or one from before last_update, the times move to
-// auth_key_activity, retaining their recorded values.
+// auth_key_activity and auth_keys gets back the original's two columns,
+// so the original server can manage keys in it again.
 func TestMigrateServerMovesTheTimesOutOfAuthKeys(t *testing.T) {
 	for name, c := range map[string]struct {
 		open func(*testing.T) *sql.DB
@@ -153,7 +154,7 @@ func TestMigrateServerMovesTheTimesOutOfAuthKeys(t *testing.T) {
 				}
 			}
 			if cols := columns(t, sqldb, "auth_keys"); !reflect.DeepEqual(cols, []string{"auth_key", "description"}) {
-				t.Fatalf("auth_keys = %v, unexpected key columns", cols)
+				t.Fatalf("auth_keys = %v, want the original's two columns", cols)
 			}
 			if cols := columns(t, sqldb, "auth_key_activity"); !reflect.DeepEqual(cols, []string{"auth_key", "last_seen", "last_update"}) {
 				t.Fatalf("auth_key_activity = %v", cols)
@@ -183,7 +184,7 @@ func TestMigrateServerCompletesTheActivityTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cols := columns(t, sqldb, "auth_keys"); !reflect.DeepEqual(cols, []string{"auth_key", "description"}) {
-		t.Fatalf("auth_keys = %v, unexpected key columns", cols)
+		t.Fatalf("auth_keys = %v, want the original's two columns", cols)
 	}
 	if cols := columns(t, sqldb, "auth_key_activity"); !reflect.DeepEqual(cols, []string{"auth_key", "last_seen", "last_update"}) {
 		t.Fatalf("auth_key_activity = %v", cols)
@@ -191,6 +192,93 @@ func TestMigrateServerCompletesTheActivityTable(t *testing.T) {
 	want := [][4]string{{"K", "front desk", "2026-09-26T08:00:00Z", ""}, {"L", "spare", "2026-09-25T11:00:00Z", ""}}
 	if got := keyTimes(t, sqldb); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %v, want the later time of each: %v", got, want)
+	}
+}
+
+// TestTheOriginalServerKeepsManagingKeys runs the original server's own
+// statements on auth_keys (api/app/system/auth.py at 19eab77) over every
+// database tam-server migrates. The original reads the table with SELECT *
+// into a two-field model and inserts two values, so its GET, POST and
+// DELETE /api/auth answered 500 once tam-server had added a column.
+func TestTheOriginalServerKeepsManagingKeys(t *testing.T) {
+	for name, open := range map[string]func(*testing.T) *sql.DB{
+		"new": func(t *testing.T) *sql.DB {
+			sqldb, err := Open(filepath.Join(t.TempDir(), "new.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { sqldb.Close() })
+			return sqldb
+		},
+		"the original server's":   func(t *testing.T) *sql.DB { return openWithSchema(t, originalServerSchema) },
+		"an earlier tam-server's": earlierServerDatabase,
+		"an older tam-server's":   olderServerDatabase,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sqldb := open(t)
+			if err := Migrate(sqldb); err != nil {
+				t.Fatal(err)
+			}
+			if err := MigrateServer(sqldb); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sqldb.Exec(`INSERT INTO auth_keys (auth_key, description) VALUES ('G', 'go client')`); err != nil {
+				t.Fatal(err)
+			}
+
+			twoFields := func(what string, rows *sql.Rows, err error) int {
+				t.Helper()
+				if err != nil {
+					t.Fatalf("%s: %v", what, err)
+				}
+				defer rows.Close()
+				cols, _ := rows.Columns()
+				if len(cols) != 2 {
+					t.Fatalf("%s gives %d columns %v; AuthKey(*r) takes 2", what, len(cols), cols)
+				}
+				n := 0
+				for rows.Next() {
+					n++
+				}
+				return n
+			}
+			rows, err := sqldb.Query("SELECT * FROM auth_keys ORDER BY description, auth_key") // get_all_keys
+			if n := twoFields("GET /api/auth", rows, err); n == 0 {
+				t.Fatal("GET /api/auth lists no key")
+			}
+			rows, err = sqldb.Query("SELECT * FROM auth_keys WHERE auth_key = ?", "NEWKEY") // create_key's check
+			twoFields("POST /api/auth, looking for a clash", rows, err)
+			rows, err = sqldb.Query("INSERT INTO auth_keys VALUES (?, ?) RETURNING *", "NEWKEY", "original client") // create_key
+			if n := twoFields("POST /api/auth", rows, err); n != 1 {
+				t.Fatalf("POST /api/auth returned %d rows", n)
+			}
+			rows, err = sqldb.Query("SELECT * FROM auth_keys WHERE auth_key = ?", "NEWKEY") // check_key, verify_key
+			if n := twoFields("a data route's key check", rows, err); n != 1 {
+				t.Fatal("the key the original created does not check out")
+			}
+			rows, err = sqldb.Query("DELETE FROM auth_keys WHERE auth_key = ? RETURNING *", "NEWKEY") // del_key
+			if n := twoFields("DELETE /api/auth", rows, err); n != 1 {
+				t.Fatalf("DELETE /api/auth returned %d rows", n)
+			}
+
+			// What tam-server records about a key does not get in the way:
+			// the original deletes such a key as any other and leaves the
+			// record, which the next start of tam-server drops.
+			if _, err := sqldb.Exec(`INSERT INTO auth_key_activity (auth_key, last_seen) VALUES ('G', '2026-09-27T10:00:00Z')`); err != nil {
+				t.Fatal(err)
+			}
+			rows, err = sqldb.Query("DELETE FROM auth_keys WHERE auth_key = ? RETURNING *", "G")
+			if n := twoFields("DELETE /api/auth of a key tam-server saw", rows, err); n != 1 {
+				t.Fatalf("DELETE /api/auth returned %d rows", n)
+			}
+			if err := MigrateServer(sqldb); err != nil {
+				t.Fatal(err)
+			}
+			var left int
+			if err := sqldb.QueryRow(`SELECT COUNT(*) FROM auth_key_activity WHERE auth_key = 'G'`).Scan(&left); err != nil || left != 0 {
+				t.Fatalf("the record of a key the original deleted is still there after a restart: %d (%v)", left, err)
+			}
+		})
 	}
 }
 
@@ -202,24 +290,5 @@ func TestHasColumnUnknownTable(t *testing.T) {
 	defer sqldb.Close()
 	if has, err := hasColumn(sqldb, "nothing_here", "x"); err != nil || has {
 		t.Fatalf("hasColumn on a missing table = %v, %v; want false, nil", has, err)
-	}
-}
-
-func TestMigrateServerLeavesUnrecognizedKeyColumnsUntouched(t *testing.T) {
-	sqldb := openWithSchema(t, earlyGoSchema)
-	for _, stmt := range []string{
-		`ALTER TABLE auth_keys ADD COLUMN operator_note TEXT`,
-		`INSERT INTO auth_keys(auth_key,description,operator_note) VALUES('K','desk','keep here')`,
-	} {
-		if _, err := sqldb.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := MigrateServer(sqldb); err != nil {
-		t.Fatal(err)
-	}
-	var note string
-	if err := sqldb.QueryRow(`SELECT operator_note FROM auth_keys WHERE auth_key='K'`).Scan(&note); err != nil || note != "keep here" {
-		t.Fatalf("unrecognized data moved or changed: %q, %v", note, err)
 	}
 }

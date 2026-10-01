@@ -60,13 +60,19 @@ func (e *LoadError) Unwrap() error { return e.Err }
 // being written empty or full of zeros, and a hand edit can break it.
 func BackupPath(path string) string { return path + ".bak" }
 
-// Load reads the settings file. Defaults are created only when both the file
-// and its backup are missing. A missing, unreadable or malformed file yields
-// a *LoadError with the backup's settings when that copy is good, and defaults
-// otherwise; existing recovery files stay untouched until an explicit save.
+// Load reads the settings file. A missing file is created with defaults. An
+// unreadable or malformed file yields a *LoadError together with the backup
+// copy's settings when that copy is good, and defaults otherwise; the file
+// is left untouched so a hand edit can be fixed.
 func Load(path string) (Settings, error) {
 	data, err := os.ReadFile(path)
-	missing := errors.Is(err, fs.ErrNotExist)
+	if errors.Is(err, fs.ErrNotExist) {
+		s := Defaults()
+		if err := Save(path, s); err != nil {
+			return s, &LoadError{Path: path, Err: err}
+		}
+		return s, nil
+	}
 	if err == nil {
 		s, perr := parse(data)
 		if perr == nil {
@@ -74,23 +80,10 @@ func Load(path string) (Settings, error) {
 		}
 		err = perr
 	}
-	bak, backupErr := os.ReadFile(BackupPath(path))
-	if backupErr == nil {
+	if bak, rerr := os.ReadFile(BackupPath(path)); rerr == nil {
 		if s, perr := parse(bak); perr == nil {
 			return s, &LoadError{Path: path, Err: err, FromBackup: true}
-		} else {
-			backupErr = perr
 		}
-	}
-	if missing && errors.Is(backupErr, fs.ErrNotExist) {
-		s := Defaults()
-		if err := Save(path, s); err != nil {
-			return s, &LoadError{Path: path, Err: err}
-		}
-		return s, nil
-	}
-	if missing {
-		err = fmt.Errorf("%w (backup %s: %v)", err, BackupPath(path), backupErr)
 	}
 	return Defaults(), &LoadError{Path: path, Err: err}
 }
@@ -206,11 +199,11 @@ func (f *File) reload() error {
 		var le *LoadError
 		fromBackup := errors.As(err, &le) && le.FromBackup
 		switch {
-		case fromBackup && (!f.loaded || errors.Is(le.Err, fs.ErrNotExist) && f.cur == s):
-			f.cur, f.loaded = s, true
-			f.problem = fmt.Sprintf("settings.json could not be read (%v); the client uses the copy it saved last (settings.json.bak). Save the settings again to repair the file.", unwrapLoad(err))
 		case f.loaded:
 			f.problem = fmt.Sprintf("settings.json was changed and cannot be read (%v); the client keeps the settings it had. Fix the file or save the settings again.", unwrapLoad(err))
+		case fromBackup:
+			f.cur, f.loaded = s, true
+			f.problem = fmt.Sprintf("settings.json could not be read (%v); the client uses the copy it saved last (settings.json.bak). Save the settings again to repair the file.", unwrapLoad(err))
 		default:
 			f.cur = s
 			f.problem = fmt.Sprintf("settings.json could not be read (%v) and there is no good copy; the client runs with default settings, not paired with any server, until the file is fixed or the settings are saved again.", unwrapLoad(err))

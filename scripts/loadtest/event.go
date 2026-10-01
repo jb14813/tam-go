@@ -254,26 +254,22 @@ func describe(t store.Ticket) string {
 	return fmt.Sprintf("%q", t.FirstName+" "+t.LastName+" "+t.PhoneNumber+" "+t.Pref)
 }
 
-type countKey struct {
-	prefix string
-	total  bool
-}
-
-// counts keeps the aggregate separate from a prefix named Total and counts
-// contacts by their three fields, without concatenation collisions.
-func (ev *event) counts() map[countKey]store.ReportCountLine {
+// counts is the counts report the saved tickets call for, by prefix, with
+// "Total" for all of them.
+func (ev *event) counts() map[string]store.ReportCountLine {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
-	out := map[countKey]store.ReportCountLine{}
-	buyers := map[countKey]map[[3]string]bool{}
+	out := map[string]store.ReportCountLine{}
+	buyers := map[string]map[string]bool{}
 	for k, t := range ev.ticket {
-		for _, p := range []countKey{{prefix: k.prefix}, {prefix: "Total", total: true}} {
+		for _, p := range []string{k.prefix, "Total"} {
 			if buyers[p] == nil {
-				buyers[p] = map[[3]string]bool{}
+				buyers[p] = map[string]bool{}
 			}
-			buyers[p][[3]string{t.FirstName, t.LastName, t.PhoneNumber}] = true
+			// The view counts distinct first name, last name and phone run together.
+			buyers[p][t.FirstName+t.LastName+t.PhoneNumber] = true
 			line := out[p]
-			line.Prefix, line.IsTotal, line.TotalBuys, line.UniqueBuyers = p.prefix, p.total, line.TotalBuys+1, len(buyers[p])
+			line.Prefix, line.TotalBuys, line.UniqueBuyers = p, line.TotalBuys+1, len(buyers[p])
 			out[p] = line
 		}
 	}

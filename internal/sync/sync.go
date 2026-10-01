@@ -1,7 +1,8 @@
 // Package sync keeps a tam-client useful while its server comes and goes.
 // It watches the connection with a heartbeat, replays the saves the server
-// has not taken yet. Request handlers feed it what they see and ask whether
-// a call to the server is worth trying.
+// has not taken yet, and refreshes the local mirror when the server is
+// back. Request handlers feed it what they see and ask it whether a call
+// to the server is worth trying.
 package sync
 
 import (
@@ -12,7 +13,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -47,10 +47,6 @@ type Status struct {
 	ServerName string `json:"server_name"`
 	Pending    int    `json:"pending"`
 	Failed     int    `json:"failed"`
-	// Recovering means the server has requested this client's saved data;
-	// transport may be connected before that upload is acknowledged.
-	Recovering bool   `json:"recovering"`
-	Conflicts  int    `json:"conflicts"`
 	LastOK     string `json:"last_ok"`
 	// SettingsError says why settings.json could not be used, in either
 	// mode; see config.File.Problem.
@@ -75,30 +71,27 @@ func DefaultTimings() Timings {
 	}
 }
 
-// Syncer owns the connection state, recovery uploads and outbox replay.
+// Syncer owns the connection state, the outbox replay and the mirror pull.
 type Syncer struct {
 	st     *store.Store
 	cfg    *config.File
 	client func(config.Settings) *remote.Client
 	t      Timings
-	host   string // machine name used by this data folder's save-order identity
 
-	mu            sync.Mutex
-	state         State
-	nativeReady   bool      // only an authenticated capability heartbeat enables background delivery
-	label         string    // the server as named in log lines
-	since         time.Time // when the current run of failures began
-	lastOK        time.Time
-	retries       int
-	retryAt       time.Time
-	nextPing      time.Time
-	kick          chan struct{}
-	recoveryToken string          // authenticated request to help refill an empty server
-	conflicts     int             // server entries requiring an operator's review
-	reviewToken   string          // last server-side resolution generation seen
-	reviewApplied string          // generation durably retained in matching own rows
-	work          sync.Mutex      // a sync round and a settings change cannot overlap
-	running       context.Context // Run's context; the replay stops between saves when it ends
+	mu         sync.Mutex
+	state      State
+	label      string    // the server as named in log lines
+	since      time.Time // when the current run of failures began
+	lastOK     time.Time
+	pullNeeded bool
+	retries    int
+	retryAt    time.Time
+	nextPing   time.Time
+	kick       chan struct{}
+	touched    map[string]bool // rows saved since the running pull began; nil when none runs
+	pulling    func()          // tests: runs as a pull starts
+	pullAt     time.Time       // no mirror pull before this, after a download that could not be used
+	running    context.Context // Run's context; the replay stops between saves when it ends
 
 	// numbering is held while a save is numbered and then sent or queued,
 	// so saves are numbered, queued and sent directly in one order (see
@@ -109,31 +102,18 @@ type Syncer struct {
 	// Lock numbering before sending, never the other way.
 	numbering sync.Mutex
 	sending   sync.Mutex
+
+	// saving is held for reading by every page save (BeginSave) and for
+	// writing by the mirror pull while it starts noting saved rows and while
+	// it imports, so the pull knows which rows a page saved meanwhile.
+	saving sync.RWMutex
 }
 
 // New returns a syncer over the client's store and settings. client builds
 // (or reuses) the remote client for the given settings and returns nil in
 // standalone mode.
 func New(st *store.Store, cfg *config.File, client func(config.Settings) *remote.Client, t Timings) *Syncer {
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "client"
-	}
-	return &Syncer{st: st, cfg: cfg, client: client, t: t, host: host, kick: make(chan struct{}, 1)}
-}
-
-// Reconfigure changes the connection between sync rounds and saves. The
-// queue belongs to this event, so changing its server does not discard it.
-func (s *Syncer) Reconfigure(change func() error) error {
-	s.work.Lock()
-	defer s.work.Unlock()
-	defer s.Numbering()()
-	defer s.Sending()()
-	if err := change(); err != nil {
-		return err
-	}
-	s.Reset()
-	return nil
+	return &Syncer{st: st, cfg: cfg, client: client, t: t, kick: make(chan struct{}, 1)}
 }
 
 // Online reports whether a call to the server is worth trying: the server
@@ -151,12 +131,6 @@ func (s *Syncer) Online() bool {
 // they were made and a sheet opened meanwhile shows what the client saved,
 // not the server's older copy.
 func (s *Syncer) InStep() bool {
-	s.mu.Lock()
-	recovering := s.recoveryToken != ""
-	s.mu.Unlock()
-	if recovering {
-		return false
-	}
 	if !s.Online() {
 		return false
 	}
@@ -166,6 +140,11 @@ func (s *Syncer) InStep() bool {
 		return false
 	}
 	return !waiting
+}
+
+// Row names a row for BeginSave: its table, prefix and id (0 for a prefix).
+func Row(table, prefix string, id int) string {
+	return table + "\x00" + prefix + "\x00" + strconv.Itoa(id)
 }
 
 // Numbering holds this client's saves in line while the caller numbers one
@@ -185,6 +164,21 @@ func (s *Syncer) Numbering() (done func()) {
 func (s *Syncer) Sending() (done func()) {
 	s.sending.Lock()
 	return s.sending.Unlock
+}
+
+// BeginSave tells the syncer that a page is saving the named rows and
+// returns the function that ends the save. A mirror pull under way leaves
+// those rows as the page saved them: what it downloaded may be older.
+func (s *Syncer) BeginSave(rows []string) (end func()) {
+	s.saving.RLock()
+	s.mu.Lock()
+	if s.touched != nil {
+		for _, r := range rows {
+			s.touched[r] = true
+		}
+	}
+	s.mu.Unlock()
+	return s.saving.RUnlock
 }
 
 // State returns the current state ("" before the first contact).
@@ -220,6 +214,7 @@ func (s *Syncer) NoteSuccess() {
 		log.Printf("server %s: connected", s.label)
 	}
 	s.state = Connected
+	s.pullNeeded = true
 	s.wake()
 }
 
@@ -230,7 +225,6 @@ func (s *Syncer) NoteFailure(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
-	s.nativeReady = false
 	if errors.Is(err, remote.ErrCertificateChanged) {
 		if s.state != Certificate {
 			log.Printf("server %s: its certificate changed (%v); pair with it again in Settings", s.label, err)
@@ -263,7 +257,6 @@ func (s *Syncer) NoteUnauthorized() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
-	s.nativeReady = false
 	if s.state != Unauthenticated {
 		log.Printf("server %s: rejected this client's key", s.label)
 		s.state = Unauthenticated
@@ -275,15 +268,12 @@ func (s *Syncer) NoteUnauthorized() {
 func (s *Syncer) Reset() {
 	s.mu.Lock()
 	s.state = ""
-	s.nativeReady = false
 	s.since = time.Time{}
 	s.lastOK = time.Time{}
+	s.pullNeeded = false
 	s.retries = 0
 	s.retryAt = time.Time{}
 	s.nextPing = time.Time{}
-	s.recoveryToken = ""
-	s.conflicts = 0
-	s.reviewToken, s.reviewApplied = "", ""
 	s.mu.Unlock()
 	s.wake()
 }
@@ -291,12 +281,7 @@ func (s *Syncer) Reset() {
 // Enqueue stores a request for the server to take later and wakes the
 // worker.
 func (s *Syncer) Enqueue(method, path string, body []byte) error {
-	defer s.Numbering()()
-	order, err := s.st.NextSave(s.host)
-	if err != nil {
-		return err
-	}
-	if _, err := s.st.SaveQueued(method, path, body, order, func(*store.Store) error { return nil }); err != nil {
+	if _, err := s.st.EnqueueOutbox(method, path, body); err != nil {
 		return err
 	}
 	s.wake()
@@ -361,16 +346,14 @@ func (s *Syncer) Status() Status {
 		ServerName: name,
 		Pending:    pending,
 		Failed:     failed,
-		Recovering: s.recoveryToken != "",
-		Conflicts:  s.conflicts,
 		LastOK:     lastOK,
 
 		SettingsError: problem,
 	}
 }
 
-// Run pings the server, offers local recovery data and replays the outbox
-// until ctx ends. It is the only goroutine that talks to the server on its own.
+// Run pings the server, replays the outbox and refreshes the mirror until
+// ctx ends. It is the only goroutine that talks to the server on its own.
 func (s *Syncer) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.running = ctx
@@ -389,23 +372,15 @@ func (s *Syncer) Run(ctx context.Context) {
 }
 
 // Tick does one round of work: a heartbeat when one is due, then, while
-// connected, a requested recovery upload and replay of the outbox. It is
-// what Run repeats and what tests call directly.
+// connected, a replay of the outbox and the mirror pull that a fresh
+// connection asks for. It is what Run repeats and what tests call directly.
 func (s *Syncer) Tick() {
-	s.work.Lock()
-	defer s.work.Unlock()
-	done := s.Numbering()
-	err := s.st.MaterializeIntents()
-	done()
-	if err != nil {
-		log.Printf("retain pending saves: %v", err)
-		return
-	}
 	settings := s.cfg.Get()
 	rc := s.client(settings)
 	if rc == nil {
 		s.mu.Lock()
 		s.state = ""
+		s.pullNeeded = false
 		s.mu.Unlock()
 		return
 	}
@@ -422,15 +397,9 @@ func (s *Syncer) Tick() {
 	}
 
 	s.mu.Lock()
-	ready := s.state == Connected && s.nativeReady && !time.Now().Before(s.retryAt)
+	ready := s.state == Connected && !time.Now().Before(s.retryAt)
 	s.mu.Unlock()
 	if !ready {
-		return
-	}
-	if !s.recover(rc) {
-		return
-	}
-	if !s.refreshReviewed(rc) {
 		return
 	}
 	handled, ok := s.drain(rc)
@@ -438,18 +407,23 @@ func (s *Syncer) Tick() {
 		return
 	}
 	if handled > 0 {
-		// A definitive refusal may have exposed the last accepted local
-		// value, omitted while this component still had an ordered replay.
-		if !s.recover(rc) {
-			return
-		}
 		// The server's admin page shows what each client has queued, from
 		// the heartbeat: say at once that the queue is empty, not at the
 		// next heartbeat.
 		s.ping(rc, settings.RemoteKey != "")
 		s.mu.Lock()
 		s.nextPing = time.Now().Add(s.t.Heartbeat)
+		connected := s.state == Connected
 		s.mu.Unlock()
+		if !connected {
+			return
+		}
+	}
+	s.mu.Lock()
+	pull := s.pullNeeded && !time.Now().Before(s.pullAt)
+	s.mu.Unlock()
+	if pull {
+		s.pull(rc)
 	}
 }
 
@@ -457,21 +431,12 @@ func (s *Syncer) Tick() {
 // here (X-TAM-Pending), which its admin page shows; when the count cannot
 // be read the header is left out rather than guessed.
 func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
-	client, err := s.st.ClientName(s.host)
-	if err != nil {
-		s.NoteFailure(fmt.Errorf("client identity: %w", err))
-		return
-	}
-	headers := map[string]string{"X-TAM-Client-Name": client}
-	if pending, failed, err := s.st.OutboxCounts(); err != nil {
+	var headers map[string]string
+	if pending, _, err := s.st.OutboxCounts(); err != nil {
 		log.Printf("outbox: %v", err)
 	} else {
-		headers["X-TAM-Pending"] = strconv.Itoa(pending)
-		headers["X-TAM-Failed"] = strconv.Itoa(failed)
+		headers = map[string]string{"X-TAM-Pending": strconv.Itoa(pending)}
 	}
-	s.mu.Lock()
-	headers["X-TAM-Recovering"] = strconv.FormatBool(s.recoveryToken != "")
-	s.mu.Unlock()
 	res, err := rc.WithTimeout(s.t.PingTimeout).Do(http.MethodGet, "/api", headers, nil)
 	switch {
 	case err != nil:
@@ -481,30 +446,21 @@ func (s *Syncer) ping(rc *remote.Client, haveKey bool) {
 	case !res.OK():
 		s.NoteFailure(fmt.Errorf("server answered %d", res.Status))
 	default:
-		doc, err := res.NativeStatus()
-		if err != nil {
-			if errors.Is(err, remote.ErrUnauthenticated) {
-				s.NoteUnauthorized()
-			} else {
-				s.NoteFailure(err)
-			}
+		var doc struct {
+			Authenticated bool `json:"authenticated"`
+		}
+		if json.Unmarshal(res.Body, &doc) == nil && haveKey && !doc.Authenticated {
+			s.NoteUnauthorized()
 			return
 		}
-		s.mu.Lock()
-		s.nativeReady = true
-		if haveKey && doc.Authenticated {
-			s.recoveryToken = doc.RecoveryToken
-			s.conflicts = *doc.Conflicts
-			s.reviewToken = *doc.ReviewToken
-		}
-		s.mu.Unlock()
 		s.NoteSuccess()
 	}
 }
 
 // drain sends queued requests in order and returns how many it took off
 // the queue (sent, or refused by the server and kept in the failed list).
-// ok is false when the server stopped taking them.
+// ok is false when the server stopped taking them, so the caller does not
+// pull a mirror it cannot trust.
 func (s *Syncer) drain(rc *remote.Client) (handled int, ok bool) {
 	for ; ; handled++ {
 		if s.stopping() {
@@ -530,30 +486,14 @@ func (s *Syncer) stopping() bool {
 // or set aside in the failed list); ok is false when the server stopped
 // taking requests or the queue could not be read.
 func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
-	// Finish any interrupted online save locally before another page can
-	// write a newer value. Release Numbering before the network request so
-	// ordinary offline entry can continue during a slow replay.
-	done := s.Numbering()
-	if err := s.st.MaterializeIntents(); err != nil {
-		done()
-		log.Printf("retain pending saves: %v", err)
-		return false, false
-	}
 	defer s.Sending()()
 	o, err := s.st.NextOutbox()
-	done()
 	if err != nil {
 		log.Printf("outbox: %v", err)
 		return false, false
 	}
 	if o == nil {
 		return false, true
-	}
-	if o.Order.Client == "" || o.Order.Save <= 0 {
-		err := errors.New("queued save has no native client identity or operation number")
-		s.noteAttempt(o.ID, err.Error())
-		s.NoteFailure(err)
-		return false, false
 	}
 	var body any
 	if len(o.Body) > 0 {
@@ -568,7 +508,7 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 		s.backOff()
 		return false, false
 	case res.OK():
-		if err := s.st.AcknowledgeOutbox(o.ID, res.Receipt); err != nil {
+		if err := s.st.DeleteOutbox(o.ID); err != nil {
 			log.Printf("outbox: %v", err)
 			return false, false
 		}
@@ -601,6 +541,15 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 		}
 		s.NoteSuccess()
 		log.Printf("server %s: a queued %s %s is older than this client's save %d on the server; kept in the failed list", s.name(), o.Method, o.Path, last)
+	case res.Status == http.StatusNotFound && o.Method == http.MethodDelete:
+		// A prefix already gone from the server, which is what the delete
+		// wanted; a delete made online takes the same answer as done.
+		if err := s.st.DeleteOutbox(o.ID); err != nil {
+			log.Printf("outbox: %v", err)
+			return false, false
+		}
+		s.NoteSuccess()
+		log.Printf("server %s: a queued %s %s found it gone already", s.name(), o.Method, o.Path)
 	default:
 		reason := detail(res)
 		if err := s.st.FailOutbox(o.ID, reason); err != nil {
@@ -638,6 +587,87 @@ func (s *Syncer) name() string {
 	return s.label
 }
 
+// pull copies the server's data into the mirror, so the pages have it when
+// the server goes away again. Rows a page saves while the download is on
+// its way keep what the page saved: the download may be older.
+func (s *Syncer) pull(rc *remote.Client) {
+	if s.pulling != nil {
+		s.pulling()
+	}
+	// Saves already under way finish first, so the download includes them.
+	// A save queued after the replay found nothing left to send is not on
+	// the server yet: the next tick sends it, then pulls. From here on the
+	// rows of every save are noted until the import.
+	s.saving.Lock()
+	waiting, err := s.st.OutboxWaiting()
+	if err != nil || waiting {
+		s.saving.Unlock()
+		if err != nil {
+			log.Printf("outbox: %v", err)
+		}
+		return
+	}
+	s.mu.Lock()
+	s.touched = map[string]bool{}
+	s.mu.Unlock()
+	s.saving.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.touched = nil
+		s.mu.Unlock()
+	}()
+
+	res, err := rc.Get("/api/backuprestore")
+	if err != nil {
+		s.NoteFailure(err)
+		return
+	}
+	if !res.OK() {
+		if res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden {
+			s.NoteUnauthorized()
+		} else {
+			s.NoteFailure(fmt.Errorf("server answered %d to the backup download", res.Status))
+		}
+		return
+	}
+	var bf store.BackupFile
+	if err := res.JSON(&bf); err != nil {
+		s.pullFailed(fmt.Errorf("sent an unreadable backup: %w", err))
+		return
+	}
+	if err := store.ValidateBackup(&bf); err != nil {
+		s.pullFailed(fmt.Errorf("sent a backup this client cannot use: %w", err))
+		return
+	}
+	// Import only adds and updates: a client's own standalone rows are never
+	// deleted by a pull, so pairing (and unpairing) never loses local data.
+	s.saving.Lock()
+	s.mu.Lock()
+	saved := s.touched
+	s.mu.Unlock()
+	err = s.st.Import(without(bf, saved))
+	s.saving.Unlock()
+	if err != nil {
+		s.pullFailed(fmt.Errorf("its backup could not be copied into this client: %w", err))
+		return
+	}
+	s.mu.Lock()
+	s.pullNeeded = false
+	s.pullAt = time.Time{}
+	s.mu.Unlock()
+	log.Printf("mirror refreshed from %s: %d prefixes, %d tickets, %d baskets", s.name(), len(bf.Prefixes), len(bf.Tickets), len(bf.Baskets))
+}
+
+// pullFailed notes a mirror download that could not be used and puts the
+// next try off by a heartbeat, instead of downloading the whole data set
+// again every second.
+func (s *Syncer) pullFailed(err error) {
+	s.mu.Lock()
+	s.pullAt = time.Now().Add(s.t.Heartbeat)
+	s.mu.Unlock()
+	log.Printf("server %s: %v; trying again in %s", s.name(), err, s.t.Heartbeat)
+}
+
 // LastSave reads the number of the last save the server applied from this
 // client out of its answer to a save it did not apply as older than that
 // (409, see store.InOrder). ok is false for any other answer.
@@ -660,7 +690,31 @@ func OrderHeaders(o store.Order) map[string]string {
 	if o.Save <= 0 {
 		return nil
 	}
-	return map[string]string{"X-TAM-Client-Name": o.Client, "X-TAM-Save": strconv.FormatInt(o.Save, 10), "X-TAM-Receipts": "1"}
+	return map[string]string{"X-TAM-Client-Name": o.Client, "X-TAM-Save": strconv.FormatInt(o.Save, 10)}
+}
+
+// without returns the backup minus the named rows.
+func without(bf store.BackupFile, rows map[string]bool) store.BackupFile {
+	if len(rows) == 0 {
+		return bf
+	}
+	out := store.NewBackupFile()
+	for _, p := range bf.Prefixes {
+		if !rows[Row("prefixes", p.Prefix, 0)] {
+			out.Prefixes = append(out.Prefixes, p)
+		}
+	}
+	for _, b := range bf.Baskets {
+		if !rows[Row("baskets", b.Prefix, b.BID)] {
+			out.Baskets = append(out.Baskets, b)
+		}
+	}
+	for _, t := range bf.Tickets {
+		if !rows[Row("tickets", t.Prefix, t.TID)] {
+			out.Tickets = append(out.Tickets, t)
+		}
+	}
+	return out
 }
 
 // detail returns the server's {"detail": ...} message, or the status text.

@@ -30,12 +30,12 @@ type client struct {
 	act sync.Mutex
 
 	mu          sync.Mutex
-	offline     []sheet      // sheets whose save was queued, once entry has moved past them
-	queuedAt    []queuedSave // each queued save and its pre-save recovery/catch-up evidence
-	reconnected time.Time    // when it saw the server again after the outage
-	backlog     int          // saves it still had queued at that moment
-	away        []window     // when its saves may rightly be queued
-	outage      int          // the index in away of the server outage's window
+	offline     []sheet     // sheets whose save was queued, once entry has moved past them
+	queuedAt    []time.Time // when a save was answered as queued
+	reconnected time.Time   // when it saw the server again after the outage
+	backlog     int         // saves it still had queued at that moment
+	away        []window    // when its saves may rightly be queued
+	outage      int         // the index in away of the server outage's window
 
 	// dropNow asks the entry loop to take this client's Wi-Fi down after it
 	// opens its next sheet; dropped is closed when it has.
@@ -45,11 +45,6 @@ type client struct {
 
 // window is a stretch of time; to is zero while it lasts.
 type window struct{ from, to time.Time }
-
-type queuedSave struct {
-	at     time.Time
-	reason string // recovery or catchup, observed before this save; empty otherwise
-}
 
 // openAway notes that from now on this client's saves may rightly be
 // queued, until closeAway with the index it returns.
@@ -66,15 +61,11 @@ func (l *client) closeAway(i int, to time.Time) {
 	l.away[i].to = to
 }
 
-// queuedRightly requires pre-save recovery/catch-up evidence or a planned
-// outage window covering the save.
+// queuedRightly reports whether a save queued at at fell in a window.
 // Callers hold l.mu.
-func (l *client) queuedRightly(save queuedSave) bool {
-	if save.reason == "recovery" || save.reason == "catchup" {
-		return true
-	}
+func (l *client) queuedRightly(at time.Time) bool {
 	for _, w := range l.away {
-		if !save.at.Before(w.from) && (w.to.IsZero() || save.at.Before(w.to)) {
+		if !at.Before(w.from) && (w.to.IsZero() || at.Before(w.to)) {
 			return true
 		}
 	}
@@ -108,27 +99,10 @@ func (l *client) pairing(t *test) map[string]any {
 
 // clientStatus is what GET /api/status answers, the status bar's source.
 type clientStatus struct {
-	Mode       string `json:"mode"`
-	State      string `json:"state"`
-	Pending    int    `json:"pending"`
-	Failed     int    `json:"failed"`
-	Recovering bool   `json:"recovering"`
-}
-
-func (s clientStatus) caughtUp() bool {
-	return s.State == "connected" && !s.Recovering && s.Pending == 0
-}
-
-func (s clientStatus) queueReason() string {
-	if s.State == "connected" {
-		if s.Recovering {
-			return "recovery"
-		}
-		if s.Pending > 0 {
-			return "catchup"
-		}
-	}
-	return ""
+	Mode    string `json:"mode"`
+	State   string `json:"state"`
+	Pending int    `json:"pending"`
+	Failed  int    `json:"failed"`
 }
 
 // call sends one request to the client's tam-client, as its pages do, and
@@ -142,14 +116,6 @@ func (l *client) call(ph *phase, op, method, path string, body, into any, rows i
 
 // request is call for a caller that holds act already.
 func (l *client) request(ph *phase, op, method, path string, body, into any, rows int) (queued bool, err error) {
-	// Sample before a write, never after its queued response: the latter
-	// would count the save itself as evidence of a pre-existing backlog.
-	var before clientStatus
-	if method == http.MethodPost || method == http.MethodDelete {
-		if _, statusErr := l.request(nil, "", http.MethodGet, "/api/status", nil, &before, 0); statusErr != nil {
-			before = clientStatus{}
-		}
-	}
 	var rd io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -184,7 +150,7 @@ func (l *client) request(ph *phase, op, method, path string, body, into any, row
 	}
 	if queued {
 		l.mu.Lock()
-		l.queuedAt = append(l.queuedAt, queuedSave{at: start, reason: before.queueReason()})
+		l.queuedAt = append(l.queuedAt, start)
 		l.mu.Unlock()
 	}
 	if ph != nil {
@@ -402,16 +368,16 @@ func (l *client) readReports(t *test, ph *phase) {
 	var counts []store.ReportCountLine
 	if _, err := l.call(ph, "counts report", http.MethodGet, "/api/reports/counts", nil, &counts, 0); err == nil {
 		want := t.ev.counts()
-		got := map[countKey]store.ReportCountLine{}
+		got := map[string]store.ReportCountLine{}
 		for _, c := range counts {
-			got[countKey{prefix: c.Prefix, total: c.IsTotal}] = c
+			got[c.Prefix] = c
 		}
 		if len(got) != len(want) {
 			t.problems.add("report", 1, "%s: the counts report has %d lines, the data %d", l.prog.name, len(got), len(want))
 		}
 		for p, w := range want {
 			if got[p] != w {
-				t.problems.add("report", 1, "%s: counts for %+v are %+v, the data says %+v", l.prog.name, p, got[p], w)
+				t.problems.add("report", 1, "%s: counts for %s are %+v, the data says %+v", l.prog.name, p, got[p], w)
 			}
 		}
 	}

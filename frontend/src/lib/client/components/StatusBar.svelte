@@ -5,9 +5,9 @@
 	// Where the TAM client program stands, from GET /api/status: whether it
 	// answers at all, its connection to the server in remote mode, and a
 	// settings file it could not read (in any mode). Nothing is shown in
-	// standalone mode while all is well. The bar is never printed.
+	// standalone mode while all is well, nor when the client does not have
+	// the route yet (an older client answers 404). The bar is never printed.
 	let status = $state(null);
-	let statusError = $state('');
 	// The program did not answer: it was shut down or crashed.
 	let unreachable = $state(false);
 
@@ -20,8 +20,9 @@
 			const { status: code, data } = await pollJSON('/api/status');
 			if (stopped) return;
 			unreachable = code === 0;
-			status = code === 200 && ['standalone', 'remote'].includes(data?.mode) ? data : null;
-			statusError = code && !status ? `TAM client status unavailable (HTTP ${code}). Check the client installation.` : '';
+			status = code === 200 && data ? data : null;
+			// An older client has no status route: no point asking again this page load.
+			if (code === 404) return;
 			timer = setTimeout(poll, POLL_MS);
 		};
 		poll();
@@ -46,25 +47,11 @@
 		if (unreachable) {
 			return { color: 'red', text: 'TAM client not running: changes cannot be saved' };
 		}
-		if (statusError) return { color: 'red', text: statusError };
 		if (!status || status.mode !== 'remote') return null;
 		const pending = Number(status.pending) || 0;
 		const server = status.server_name || status.server || 'server';
-		const conflicts = Number(status.conflicts) || 0;
-		if (conflicts > 0) {
-			return {
-				color: 'red',
-				text: `${conflicts} conflicting ${conflicts === 1 ? 'entry needs' : 'entries need'} review on the server's Data review page before results can be used${waiting(pending)}`
-			};
-		}
 		switch (status.state) {
 			case 'connected':
-				if (status.recovering) {
-					return {
-						color: 'amber',
-						text: `Connected to ${server}, restoring this client's saved data${waiting(pending)}`
-					};
-				}
 				return {
 					color: 'green',
 					text: `Connected to ${server}${pending > 0 ? `, sending ${saves(pending)}` : ''}`
@@ -77,7 +64,7 @@
 				return {
 					color: 'red',
 					text: `The server rejected this client's key${waiting(pending)}: open`,
-					settings: 'and pair with the server, or choose a new key under Auth Keys'
+					settings: 'and pair again'
 				};
 			case 'certificate':
 				return {

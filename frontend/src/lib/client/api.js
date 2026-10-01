@@ -1,28 +1,6 @@
 import { error } from '@sveltejs/kit';
-import { preserveDraft } from './drafts';
 
 export const API_UNREACHABLE = 'Could not reach the TAM client API';
-
-/** JSON numbers outside this range have already lost their exact identity. */
-export function recordNumberError(value, { includeWinner = true } = {}) {
-	for (const row of Array.isArray(value) ? value : [value]) {
-		if (!row || typeof row !== 'object') continue;
-		for (const field of ['t_id', 'b_id', 'winning_ticket']) {
-			if (!(field in row) || (!includeWinner && field === 'winning_ticket')) continue;
-			if (!Number.isSafeInteger(row[field]) || row[field] < 0) {
-				return `Invalid ${field}: ticket and basket numbers must be whole numbers from 0 to ${Number.MAX_SAFE_INTEGER}.`;
-			}
-		}
-	}
-	return '';
-}
-
-export async function readRecords(res) {
-	const data = await res.json();
-	const problem = recordNumberError(data);
-	if (problem) throw new Error(problem);
-	return data;
-}
 
 /**
  * Reads the `detail` message of an API error response (`{detail: "..."}`),
@@ -60,29 +38,7 @@ export async function getJSON(url, { fetch: doFetch = globalThis.fetch, headers 
 		error(503, API_UNREACHABLE);
 	}
 	if (!res.ok) error(res.status, await readDetail(res));
-	return readRecords(res);
-}
-
-/** A ticket placeholder has the same JSON shape as a saved blank ticket.
- * The client API headers distinguish existence and a shared-server answer
- * from this workstation's own local entries when the server is unavailable.
- */
-export async function lookupTicket(prefix, id, { fetch: doFetch = globalThis.fetch } = {}) {
-	const problem = recordNumberError({ t_id: id });
-	if (problem) throw new Error(problem);
-	let res;
-	try {
-		res = await doFetch(`/api/tickets/${encodeURIComponent(prefix)}/${id}`);
-	} catch {
-		error(503, API_UNREACHABLE);
-	}
-	if (!res.ok) error(res.status, await readDetail(res));
-	return {
-		ticket: await readRecords(res),
-		found: res.headers.get('X-TAM-Found') === '1',
-		source: res.headers.get('X-TAM-Source') === 'server' ? 'server' : 'local',
-		mode: res.headers.get('X-TAM-Mode') === 'standalone' ? 'standalone' : 'remote'
-	};
+	return res.json();
 }
 
 /**
@@ -107,44 +63,6 @@ export function postJSON(
 export const SAVE_UNREACHABLE =
 	'Could not reach the TAM client program. Nothing was saved; your rows are still on this page.';
 
-const latestSaves = new WeakMap();
-const normalSaveQueues = new Map();
-let updateDraft = () => true;
-let editSession;
-let editSequence = 0;
-
-function nextEditHeaders() {
-	// getRandomValues also works when a workstation is opened over plain LAN HTTP.
-	editSession ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
-		(byte) => byte.toString(16).padStart(2, '0')).join('');
-	return {
-		'X-TAM-Edit-Session': editSession,
-		'X-TAM-Edit-Sequence': String(++editSequence)
-	};
-}
-
-function sendMarked(url, body, keepalive, headers) {
-	const send = () => postJSON(url, body, { keepalive, headers });
-	// A queued callback cannot run after its page is destroyed. Send leave saves
-	// immediately; the daemon uses the generation headers to reject older rows.
-	if (keepalive) return send();
-	const pending = (normalSaveQueues.get(url) || Promise.resolve()).then(send);
-	const settled = pending.then(() => {}, () => {});
-	normalSaveQueues.set(url, settled);
-	settled.then(() => {
-		if (normalSaveQueues.get(url) === settled) normalSaveQueues.delete(url);
-	});
-	return pending;
-}
-
-/** A load may replace rows only while their identities and values remain unchanged. */
-export function unchangedRows(rows, value = (row) => JSON.stringify(row)) {
-	const before = [...rows];
-	const values = before.map(value);
-	return (current) => current.length === before.length && current.every((row, index) =>
-		row === before[index] && !row.changed && value(row) === values[index]);
-}
-
 /**
  * Saves a form's marked rows (`changed` set) with one POST to `url` and
  * unmarks the rows saved. Returns '' when they were saved (or there was
@@ -155,28 +73,17 @@ export function unchangedRows(rows, value = (row) => JSON.stringify(row)) {
  * `saved(row)` is the part of a row the save stores, the whole row unless
  * the form says otherwise; a row whose part changed while the save was on
  * its way stays marked.
- * `payload(row)` selects the fields the form actually edits for the request.
  */
 export async function saveMarked(
 	url,
 	rows,
-	{ keepalive = false, saved = (r) => JSON.stringify(r), payload = (r) => r } = {}
+	{ keepalive = false, saved = (r) => JSON.stringify(r) } = {}
 ) {
-	updateDraft();
 	if (rows.length === 0) return '';
-	const payloadRows = rows.map(payload);
-	const problem = recordNumberError(payloadRows);
-	if (problem) return `Nothing was saved: ${problem} Your rows are still on this page.`;
 	const sent = rows.map(saved);
-	const request = {};
-	rows.forEach((row) => latestSaves.set(row, request));
 	let res;
 	try {
-		// Both the values and their generation belong to the invocation, even
-		// when another normal save must finish before this one can be sent.
-		const body = JSON.parse(JSON.stringify(payloadRows));
-		const headers = nextEditHeaders();
-		res = await sendMarked(url, body, keepalive, headers);
+		res = await postJSON(url, rows, { keepalive });
 	} catch {
 		return SAVE_UNREACHABLE;
 	}
@@ -185,12 +92,10 @@ export async function saveMarked(
 		return `Nothing was saved: ${reason}. Your rows are still on this page.`;
 	}
 	// A row typed in again while the save was on its way keeps its mark, so
-	// the next save sends what is on the screen now. An older acknowledgement
-	// cannot clear the mark while a newer save for that row is still in flight.
+	// the next save sends what is on the screen now.
 	rows.forEach((r, i) => {
-		if (latestSaves.get(r) === request && saved(r) === sent[i]) r.changed = false;
+		if (saved(r) === sent[i]) r.changed = false;
 	});
-	updateDraft();
 	return '';
 }
 
@@ -208,38 +113,15 @@ export async function saveMarked(
  */
 export function saveOnLeave(marked, save) {
 	let sending = '';
-	const preserve = () => preserveDraft(marked());
-	updateDraft = preserve;
-	const leave = (event) => {
+	const leave = () => {
 		const rows = marked();
 		if (rows.length === 0) return;
-		const retained = preserve();
-		if (!retained && event?.type === 'beforeunload') {
-			event.preventDefault();
-			event.returnValue = '';
-		}
 		const now = JSON.stringify(rows);
 		if (now === sending) return;
 		sending = now;
 		Promise.resolve(save({ keepalive: true })).finally(() => {
-			preserve();
 			if (sending === now) sending = '';
 		});
-	};
-	let navigating = false;
-	const navigate = async (event) => {
-		const link = event.target.closest?.('a[href]');
-		if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.download || (link.target && link.target !== '_self')) return;
-		const destination = new URL(link.href, location.href);
-		if (destination.origin !== location.origin || (destination.pathname === location.pathname && destination.hash)) return;
-		if (!marked().length) return;
-		event.preventDefault();
-		if (navigating) return;
-		navigating = true;
-		try {
-			preserve();
-			if (await save() && !marked().length) location.assign(destination.href);
-		} finally { navigating = false; }
 	};
 	const hidden = () => {
 		if (document.visibilityState === 'hidden') leave();
@@ -247,22 +129,11 @@ export function saveOnLeave(marked, save) {
 	window.addEventListener('beforeunload', leave);
 	window.addEventListener('pagehide', leave);
 	document.addEventListener('visibilitychange', hidden);
-	document.addEventListener('click', navigate);
 	return () => {
-		if (updateDraft === preserve) updateDraft = () => true;
 		window.removeEventListener('beforeunload', leave);
 		window.removeEventListener('pagehide', leave);
 		document.removeEventListener('visibilitychange', hidden);
-		document.removeEventListener('click', navigate);
 	};
-}
-
-/** Normalize a requested sheet without changing the currently displayed range. */
-export function pageRange(range) {
-	if (!range.every(Number.isSafeInteger)) return null;
-	let [from, to] = range.map((id) => Math.max(0, id));
-	if (from > to) [from, to] = [to, from];
-	return [from, Math.min(to, from + 300)];
 }
 
 /**

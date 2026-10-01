@@ -3,16 +3,13 @@
 	import { resolve } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { bS, iS, tS } from '$lib/client/styles';
-	import { postJSON, pollJSON, readDetail, errorMessage, saves, API_UNREACHABLE } from '$lib/client/api';
+	import { postJSON, pollJSON, readDetail, saves, API_UNREACHABLE } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 
 	let { data } = $props();
 	let loadError = $derived(data.loadError || '');
 	// Editable working copy of the loaded settings (intentionally captured once).
 	let settings = $state(untrack(() => ({ ...data.settings })));
-	let savedSettings = $state(untrack(() => ({ ...data.settings })));
-	let saving = $state(false);
-	let unsaved = $derived(Object.keys(settings).some((key) => settings[key] !== savedSettings[key]));
 	let status = $state({
 		message: '',
 		color: 'green'
@@ -20,12 +17,16 @@
 
 	const pageTitle = 'Settings | TAM';
 
+	let reloadTimer;
+	$effect(() => () => clearTimeout(reloadTimer));
+
 	// --- Server section: pairing, discovered servers and the failed saves ---
+	const NOT_SUPPORTED = 'This client does not support pairing yet';
 	const SERVERS_POLL_MS = 5000;
 	const STATUS_POLL_MS = 5000;
 
 	// A server is set either by pairing, which also names it, or by typing
-	// it into the Remote Mode fields below, where the
+	// it into the Remote Mode fields below, the original's way, where the
 	// key comes from Auth Keys. Only the first is "paired".
 	let configured = $derived(!!data.settings.remote_server);
 	let paired = $derived(configured && !!data.settings.remote_name);
@@ -33,7 +34,7 @@
 	let serverAddress = $derived(`${data.settings.remote_server}:${data.settings.remote_port}`);
 	let pairVerb = $derived(paired ? 'Pair again' : 'Pair');
 	let servers = $state([]);
-	let discoveryError = $state('');
+	let pairingUnsupported = $state(false);
 	// Fields for pairing; a discovered server's Use button fills them, and
 	// while paired they hold the current server, for pairing again.
 	let pair = $state(untrack(() => pairFields(data.settings)));
@@ -69,6 +70,7 @@
 		} catch {
 			return { ok: false, message: API_UNREACHABLE };
 		}
+		if (res.status === 404) return { ok: false, message: NOT_SUPPORTED };
 		if (!res.ok) return { ok: false, message: await readDetail(res) };
 		let answer = {};
 		try {
@@ -81,91 +83,57 @@
 
 	// Re-runs the page's load so the pairing state and the form show the saved settings.
 	async function reloadSettings() {
-		const before = { ...savedSettings };
 		await invalidateAll();
-		savedSettings = { ...data.settings };
-		for (const [key, value] of Object.entries(data.settings)) {
-			if (settings[key] === before[key]) settings[key] = value;
-		}
+		settings = { ...data.settings };
 		pair = pairFields(data.settings);
 	}
 
-	async function saveSettings() {
-		if (loadError || saving || busy) return;
-		const submitted = { ...settings };
-		saving = true;
-		status = { message: 'Saving settings…', color: 'green' };
-		try {
-			let res;
-			try { res = await postJSON('/api/settings', submitted); }
-			catch { throw new Error(API_UNREACHABLE); }
-			if (!res.ok) throw new Error(`Error Code: ${res.status} (${await readDetail(res)})`);
-			const accepted = await res.json();
-			savedSettings = { ...accepted };
-			// The acknowledgement belongs to the submitted snapshot. Keep any
-			// fields typed since then, including while the page load refreshes.
-			for (const [key, value] of Object.entries(accepted)) {
-				if (settings[key] === submitted[key]) settings[key] = value;
-			}
-			status = {
-				message: Object.keys(settings).some((key) => settings[key] !== accepted[key])
-					? 'Settings saved. Newer edits on this page still need saving.'
-					: 'Settings saved successfully!',
-				color: 'green'
-			};
-			await invalidateAll();
-		} catch (e) {
-			status = { message: errorMessage(e), color: 'red' };
-		} finally { saving = false; }
-	}
-
 	function useServer(s) {
-		if (busy || saving) return;
 		pair.host = s.host || s.name || '';
 		pair.port = String(s.port || (s.tls ? '8443' : '8000'));
 		pair.tls = !!s.tls;
 	}
 
 	async function doPair() {
-		if (busy || saving) return;
+		if (busy) return;
 		const host = String(pair.host || '').trim();
 		const port = String(pair.port || '').trim();
 		if (!host) return say('Enter the server host or pick one from the list', 'red');
 		if (!port) return say('Enter the server port', 'red');
 		busy = true;
-		try {
-			// The event's waiting saves follow the server, including a replacement.
-			const r = await post('/api/pair', { host, port, tls: !!pair.tls, password: pair.password });
-			// The whole answer may also describe the retained local data.
-			say(r.message, r.ok ? 'green' : 'red');
-			if (r.ok) {
-				pair.password = '';
-				await reloadSettings();
-				await pollStatus();
-			}
-		} finally { busy = false; }
+		// Pairing again with the server this client is paired with keeps the
+		// saves still waiting for it; the client sends them once paired.
+		const r = await post('/api/pair', { host, port, tls: !!pair.tls, password: pair.password });
+		busy = false;
+		// The whole answer: it may also say what became of this client's own data.
+		say(r.message, r.ok ? 'green' : 'red');
+		if (r.ok) {
+			pair.password = '';
+			await reloadSettings();
+			await pollStatus();
+		}
 	}
 
 	async function doUnpair() {
-		if (busy || saving) return;
-		// Keep the event copy and pause delivery until a server is configured.
+		if (busy) return;
+		// After pairing, the client's own copy is the server's data; what the
+		// client had not sent yet goes to the failed list (see the client's unpair).
 		const now = pending > 0 ? ` (${pending} now)` : '';
 		if (
 			!confirm(
-				`Unpair from ${pairedName}? This client keeps its event data and works standalone. Saves waiting to reach the server${now} stay queued and resume when a server is configured again.`
+				`Unpair from ${pairedName}? This client goes back to standalone mode and keeps the copy of the server's data it has now. Saves still waiting to reach the server${now} are set aside in the failed list.`
 			)
 		)
 			return;
 		busy = true;
-		try {
-			const r = await post('/api/unpair', {});
-			say(r.message, r.ok ? 'green' : 'red');
-			if (r.ok) await reloadSettings();
-		} finally { busy = false; }
+		const r = await post('/api/unpair', {});
+		busy = false;
+		say(r.message, r.ok ? 'green' : 'red');
+		if (r.ok) await reloadSettings();
 	}
 
 	async function retryFailed() {
-		if (busy || saving) return;
+		if (busy) return;
 		busy = true;
 		const r = await post('/api/outbox/retry', {});
 		busy = false;
@@ -174,10 +142,10 @@
 	}
 
 	async function discardFailed() {
-		if (busy || saving) return;
+		if (busy) return;
 		if (
 			!confirm(
-				`Discard the ${saves(failed)} that could not be sent? They will not be sent automatically. Their entries stay on this client and in backups.`
+				`Discard the ${saves(failed)} that could not be sent? They will not reach the server.`
 			)
 		)
 			return;
@@ -202,8 +170,9 @@
 		let stopped = false;
 		let timer;
 		const loop = async () => {
-			await pollStatus();
-			if (stopped) return;
+			const code = await pollStatus();
+			// An older client has no status route: no point asking again this page load.
+			if (stopped || code === 404) return;
 			timer = setTimeout(loop, STATUS_POLL_MS);
 		};
 		loop();
@@ -213,21 +182,20 @@
 		};
 	});
 
-	// The servers found on the network, while no server is set.
+	// The servers found on the network, while no server is set. An older
+	// client answers 404: pairing is not available then.
 	$effect(() => {
-		if (configured) return;
+		if (configured || pairingUnsupported) return;
 		let stopped = false;
 		let timer;
 		const loop = async () => {
 			const { status: code, data: list } = await pollJSON('/api/servers');
 			if (stopped) return;
-			if (code === 200 && Array.isArray(list)) {
-				servers = list;
-				discoveryError = '';
-			} else {
-				servers = [];
-				discoveryError = code === 0 ? API_UNREACHABLE : `TAM server discovery unavailable (HTTP ${code}). Check the client installation.`;
+			if (code === 404) {
+				pairingUnsupported = true;
+				return;
 			}
+			if (code === 200 && Array.isArray(list)) servers = list;
 			timer = setTimeout(loop, SERVERS_POLL_MS);
 		};
 		loop();
@@ -244,7 +212,6 @@
 
 <!-- The pairing form: for a first pairing, and while paired for pairing again. -->
 {#snippet pairForm(label)}
-	<fieldset disabled={busy || saving} class="flex flex-col gap-1">
 	<div class="flex flex-row gap-1 items-center">
 		<label for="pair_host">Host:</label>
 		<input type="text" id="pair_host" class={iS.normal} bind:value={pair.host} />
@@ -279,11 +246,10 @@
 	<div class="flex flex-row gap-1 items-center">
 		<button
 			class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
-			disabled={busy || saving}
+			disabled={busy}
 			onclick={doPair}>{label}</button
 		>
 	</div>
-	</fieldset>
 {/snippet}
 
 <div id="app_container" class="p-1">
@@ -312,7 +278,7 @@
 				</div>
 				<button
 					class="{bS.red} disabled:opacity-50 disabled:cursor-not-allowed"
-					disabled={busy || saving}
+					disabled={busy}
 					onclick={doUnpair}>Unpair</button
 				>
 			</div>
@@ -343,34 +309,34 @@
 				{/if}
 				{@render pairForm(pairVerb)}
 			</div>
+		{:else if pairingUnsupported}
+			<div>{NOT_SUPPORTED}</div>
 		{:else}
 			<div>Servers on this network:</div>
-			{#if discoveryError}<p role="alert" class={tS.red}>{discoveryError}</p>{/if}
 			{#each servers as s}
 				<div class="flex flex-row gap-1 items-center">
 					<div>
 						<span class="font-bold">{s.name || s.host}</span>
 						{s.host}:{s.port} (TLS {s.tls ? 'on' : 'off'}{s.version ? `, v${s.version}` : ''})
 					</div>
-					<button class={bS.gray} disabled={busy || saving} onclick={() => useServer(s)}>Use</button>
+					<button class={bS.gray} onclick={() => useServer(s)}>Use</button>
 				</div>
 			{:else}
-				{#if !discoveryError}<div class="italic">Looking for servers on this network...</div>{/if}
+				<div class="italic">Looking for servers on this network...</div>
 			{/each}
 			{@render pairForm('Pair')}
 		{/if}
 		{#if failed > 0}
-			<p class="text-sm">Retry uses the values from the failed saves, which may be older than your current entries. It saves those values on this client and sends them after the current queue.</p>
 			<div class="flex flex-row gap-1 items-center">
 				<div class={tS.red}>{saves(failed)} could not be sent</div>
 				<button
 					class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
-					disabled={busy || saving}
+					disabled={busy}
 					onclick={retryFailed}>Retry</button
 				>
 				<button
 					class="{bS.red} disabled:opacity-50 disabled:cursor-not-allowed"
-					disabled={busy || saving}
+					disabled={busy}
 					onclick={discardFailed}>Discard</button
 				>
 			</div>
@@ -434,20 +400,45 @@
 		<div class="flex flex-row gap-1 items-center">
 			<button
 				class="{bS.gray} disabled:opacity-50 disabled:cursor-not-allowed"
-				disabled={!!loadError || saving || busy}
-				onclick={saveSettings}>Save</button
+				disabled={!!loadError}
+				onclick={async () => {
+					if (loadError) return;
+					let res;
+					try {
+						res = await postJSON('/api/settings', settings);
+					} catch {
+						status.message = 'Could not reach the TAM client API';
+						status.color = 'red';
+						return;
+					}
+					if (!res.ok) {
+						status.message = `Error Code: ${res.status} (${await readDetail(res)})`;
+						status.color = 'red';
+					} else {
+						const resData = await res.json();
+						// The Remote Mode fields set where the server is; they do not pair.
+						const remoteChanged = ['remote_server', 'remote_port', 'remote_tls'].some(
+							(k) => resData[k] !== data.settings[k]
+						);
+						settings = { ...resData };
+						status.message = remoteChanged
+							? 'Remote server settings saved.'
+							: 'Settings saved successfully!';
+						status.color = 'green';
+						clearTimeout(reloadTimer);
+						reloadTimer = setTimeout(() => window.location.reload(), 3000);
+					}
+				}}>Save</button
 			>
 			<button
 				class={bS.gray}
-				disabled={saving}
 				onclick={() => {
-					settings = { ...savedSettings };
+					settings = { ...data.settings };
 				}}>Cancel</button
 			>
 		</div>
 		<div>
 			<p class={tS[loadError ? 'red' : status.color]}>{loadError || status.message}</p>
-			{#if unsaved}<p>Unsaved settings changes.</p>{/if}
 		</div>
 	</div>
 </div>

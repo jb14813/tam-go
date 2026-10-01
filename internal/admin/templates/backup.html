@@ -3,11 +3,10 @@
 <h1>Backup</h1>
 <p>This server holds {{.Data.Prefixes}} prefixes, {{.Data.Tickets}} tickets and {{.Data.Baskets}} baskets.</p>
 <h2>Download</h2>
-<p>The file includes the event entries and the saved history needed to preserve corrections and any unresolved differences during recovery. Keep this complete file when restoring into TAM.</p>
+<p>The file is the same JSON the API and the clients' Backup/Restore page produce.</p>
 <a class="button" href="/admin/backup/download">Download tam-backup.json</a>
 <h2>Restore</h2>
-<p>Choose a Go-native TAM backup. Backups from the original application are not supported.</p>
-<p>Restoring writes the entries in the file over this server's data. A client backup changes only the basket details or drawing entries that client entered. Other rows stay as they are. Any unresolved differences in the file still need Data review.</p>
+<p>Restoring writes every row of the file over this server's data. Rows the file does not mention stay as they are.</p>
 <form method="post" action="/admin/backup/restore" enctype="multipart/form-data">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label for="file">Backup file

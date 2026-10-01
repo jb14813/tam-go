@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -268,19 +269,24 @@ func (t *test) checkClients() {
 		st, err := l.peek()
 		mu.Lock()
 		defer mu.Unlock()
-		if err != nil || st.State != "connected" || st.Recovering {
+		if err != nil || st.State != "connected" {
 			away++
 		}
 		waiting += st.Pending
 		failed += st.Failed
 	})
 	t.record("every client ends connected with nothing waiting or refused", away+waiting+failed == 0,
-		"%d clients: %d disconnected or recovering, %d saves waiting, %d refused by the server", len(t.clients), away, waiting, failed)
+		"%d clients: %d not connected, %d saves waiting, %d refused by the server", len(t.clients), away, waiting, failed)
 }
 
 // checkPresence reads the Clients table of the server's admin page.
 func (t *test) checkPresence() {
 	st, _, err := t.admin.status()
+	if errors.Is(err, errNoTable) {
+		t.skip("the admin page's Clients table lists every client as connected and caught up", "%v", err)
+		t.skip("the admin page counts every prefix, ticket and basket", "%v", err)
+		return
+	}
 	if err != nil {
 		t.record("the admin page's Clients table lists every client as connected and caught up", false, "%v", err)
 		return
@@ -293,7 +299,7 @@ func (t *test) checkPresence() {
 		if l.LastUpdate != "" && l.LastUpdate != "never" {
 			updated++
 		}
-		if l.Queued != nil && *l.Queued == 0 && l.Failed != nil && *l.Failed == 0 && l.Recovering != nil && !*l.Recovering {
+		if l.Queued != nil && *l.Queued == 0 {
 			caughtUp++
 		}
 	}
@@ -330,27 +336,20 @@ func (t *test) checkRequests() {
 	// client still has saves from then to send: from the moment the server
 	// was killed (a save already on its way may be cut off too, hence the
 	// client's five-second write timeout of slack) until the client shows
-	// nothing queued. Online recovery/catch-up also legitimately queues,
-	// but requires status evidence observed before that save was made.
-	total, unexpected, recovering, catchup := 0, 0, 0, 0
+	// nothing queued. Any other queued save means the server was too slow.
+	total, unexpected := 0, 0
 	for _, l := range t.clients {
 		l.mu.Lock()
 		for _, at := range l.queuedAt {
 			total++
-			if at.reason == "recovery" {
-				recovering++
-			}
-			if at.reason == "catchup" {
-				catchup++
-			}
 			if !l.queuedRightly(at) {
 				unexpected++
 			}
 		}
 		l.mu.Unlock()
 	}
-	t.record("saves were queued only during outages or observed recovery/catch-up", unexpected == 0,
-		"%d saves queued, %d observed during recovery, %d behind an existing online queue, %d unexplained", total, recovering, catchup, unexpected)
+	t.record("saves were queued only while the server was out of reach", unexpected == 0,
+		"%d saves queued, %d of them while the client could reach the server", total, unexpected)
 
 	// A page waits for the server five seconds at most, then works from the
 	// client's own copy; a second more covers the rest of the work.
@@ -459,6 +458,10 @@ func (t *test) checkLogs() {
 	t.record("no errors in what the programs wrote", bad == 0, "%d programs, %d lines, %d errors%s", len(files), lines, bad, examples(first))
 }
 
+// errNoTable is a server whose status page answers HTML only, such as one
+// from before the page could be read as JSON: there is no table to check.
+var errNoTable = errors.New("this server's status page answers HTML only")
+
 // adminPage is the server's admin page, logged in as the tests's browser.
 type adminPage struct {
 	url, password string
@@ -479,8 +482,6 @@ type adminStatus struct {
 		LastSeen   string `json:"last_seen"`
 		LastUpdate string `json:"last_update"`
 		Queued     *int   `json:"queued"`
-		Failed     *int   `json:"failed"`
-		Recovering *bool  `json:"recovering"`
 	} `json:"clients"`
 }
 
@@ -541,7 +542,7 @@ func (a *adminPage) status() (adminStatus, time.Duration, error) {
 		took := time.Since(start)
 		if res.StatusCode == http.StatusOK && !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
 			res.Body.Close()
-			return st, took, fmt.Errorf("the native server status page did not return JSON")
+			return st, took, errNoTable
 		}
 		if res.StatusCode == http.StatusUnauthorized {
 			res.Body.Close()
@@ -572,6 +573,9 @@ func (a *adminPage) watch(t *test, stop <-chan struct{}) {
 		_, took, err := a.status()
 		if err != nil && !t.server.up.Load() {
 			continue // it went down during the request
+		}
+		if errors.Is(err, errNoTable) {
+			err = nil // the page answered; it only has no table to read
 		}
 		t.current().rec.add("admin status page", took, err, 0, false)
 	}

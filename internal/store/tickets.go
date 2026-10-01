@@ -9,10 +9,7 @@ const upsertTicketSQL = `INSERT INTO tickets (prefix, t_id, first_name, last_nam
 	phone_number = EXCLUDED.phone_number, pref = EXCLUDED.pref`
 
 func (s *Store) queryTickets(query string, args ...any) ([]Ticket, error) {
-	if !s.readGuarded {
-		return reviewedRead(s, func(v *Store) ([]Ticket, error) { return v.queryTickets(query, args...) })
-	}
-	rows, err := s.query(query, args...)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -58,25 +55,11 @@ func (s *Store) TicketRange(prefix string, from, to int) ([]Ticket, error) {
 
 // UpsertTickets inserts or updates tickets in one transaction.
 func (s *Store) UpsertTickets(ts []Ticket) error {
-	for _, ticket := range ts {
-		if err := validateIdentity(ticket.TID); err != nil {
-			return err
-		}
-	}
 	return s.tx(func(tx *sql.Tx) error {
-		for _, t := range ts {
-			apply, err := s.prepareRecord(tx, "ticket", t.Prefix, t.TID, t)
-			if err != nil {
-				return err
-			}
-			if !apply {
-				continue
-			}
-			if _, err = tx.Exec(upsertTicketSQL, t.Prefix, t.TID, t.FirstName, t.LastName, t.PhoneNumber, t.Pref); err != nil {
-				return err
-			}
-		}
-		return nil
+		return execEach(tx, upsertTicketSQL, len(ts), func(i int) []any {
+			t := ts[i]
+			return []any{t.Prefix, t.TID, t.FirstName, t.LastName, t.PhoneNumber, t.Pref}
+		})
 	})
 }
 

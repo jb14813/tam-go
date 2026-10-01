@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -336,8 +337,8 @@ func TestStandalonePrefixesAndTickets(t *testing.T) {
 // lower end, like any other range that is too wide.
 func TestRangeSpanningEveryIDIsCut(t *testing.T) {
 	f := newFixture(t)
-	for _, from := range []int{0, 1, 500} {
-		code, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", from, store.SafeIntegerMax), nil, nil)
+	for _, from := range []int{-1, math.MinInt} {
+		code, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", from, math.MaxInt), nil, nil)
 		if code != 200 {
 			t.Fatalf("range from %d to the largest id = %d %s", from, code, body)
 		}
@@ -351,15 +352,17 @@ func TestRangeSpanningEveryIDIsCut(t *testing.T) {
 	}
 }
 
-// A range at the exact JSON integer boundary retains the saved identity.
+// TestRangeEndingAtTheLargestID: a ticket may have the largest id there is,
+// and the range that ends there must list it and stop instead of counting
+// on past the end of the ints.
 func TestRangeEndingAtTheLargestID(t *testing.T) {
 	f := newFixture(t)
-	if code, body := f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: store.SafeIntegerMax, FirstName: "Last", Pref: "CALL"}}, nil); code != 200 {
+	if code, body := f.do("POST", "/api/tickets", []store.Ticket{{Prefix: "A", TID: math.MaxInt, FirstName: "Last", Pref: "CALL"}}, nil); code != 200 {
 		t.Fatalf("save = %d %s", code, body)
 	}
-	_, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", store.SafeIntegerMax-2, store.SafeIntegerMax), nil, nil)
+	_, body := f.do("GET", fmt.Sprintf("/api/tickets/A/%d/%d", math.MaxInt-2, math.MaxInt), nil, nil)
 	rng := decode[[]store.Ticket](t, body)
-	if len(rng) != 3 || rng[0].TID != store.SafeIntegerMax-2 || rng[2].TID != store.SafeIntegerMax || rng[2].FirstName != "Last" {
+	if len(rng) != 3 || rng[0].TID != math.MaxInt-2 || rng[2].TID != math.MaxInt || rng[2].FirstName != "Last" {
 		t.Fatalf("range up to the largest id = %+v, want two placeholders and the saved ticket", rng)
 	}
 }
@@ -490,8 +493,8 @@ func TestRemoteMode(t *testing.T) {
 	if ps, _ := f.st.ListPrefixes(); len(ps) != 0 {
 		t.Fatalf("local-only prefix must be gone: %v", ps)
 	}
-	if code, _ = f.do("DELETE", "/api/prefixes?p=NOWHERE", nil, nil); code != 200 {
-		t.Fatalf("idempotent server delete = %d, want 200", code)
+	if code, _ = f.do("DELETE", "/api/prefixes?p=NOWHERE", nil, nil); code != 404 {
+		t.Fatalf("delete of a prefix nobody has = %d, want 404", code)
 	}
 
 	// Push and remote backup.
@@ -513,7 +516,7 @@ func TestRemoteMode(t *testing.T) {
 	if bf := decode[store.BackupFile](t, body); len(bf.Baskets) != 1 || len(bf.Tickets) != 1 {
 		t.Fatalf("remote export = %+v", bf)
 	}
-	code, _ = f.do("POST", "/api/backuprestore/remote", nativeFixtureBackup(store.BackupFile{Prefixes: []store.Prefix{{Prefix: "Z", Color: "red"}}}), nil)
+	code, _ = f.do("POST", "/api/backuprestore/remote", store.BackupFile{Prefixes: []store.Prefix{{Prefix: "Z", Color: "red"}}}, nil)
 	if code != 200 {
 		t.Fatalf("remote import = %d", code)
 	}
@@ -583,43 +586,37 @@ func TestRemoteMode(t *testing.T) {
 	}
 }
 
-// Push uses the native numbered form endpoint and requires its recovery receipt.
-func TestPushSendsNumberedFormList(t *testing.T) {
+// TestPushSendsEveryList pins the wire shape the original server requires:
+// all three lists present, never null.
+func TestPushSendsEveryList(t *testing.T) {
 	f := newFixture(t)
-	st := newServerStore(t)
-	key, err := st.CreateKey("push")
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := server.NewHandler(st, server.FixedPassword("secret"))
-	var got []store.Ticket
-	var headers http.Header
+	var got map[string]json.RawMessage
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" {
-			body, _ := io.ReadAll(r.Body)
-			json.Unmarshal(body, &got)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			headers = r.Header.Clone()
-			native.ServeHTTP(w, r)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/backuprestore" {
+			json.NewDecoder(r.Body).Decode(&got)
+			httpx.WriteJSON(w, 200, map[string]string{"message": "ok"})
 			return
 		}
-		native.ServeHTTP(w, r)
+		httpx.WriteJSON(w, 200, map[string]any{"whoami": "TAM Server", "authenticated": true, "healthy": true})
 	}))
 	defer rs.Close()
 	u, _ := url.Parse(rs.URL)
 	s := config.Defaults()
-	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), key.AuthKey
+	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), "K"
 	config.Save(f.settings, s)
-	f.st.UpsertTickets([]store.Ticket{{Prefix: "A", TID: 1, FirstName: "Buyer"}})
+	f.st.UpsertBaskets([]store.Basket{{Prefix: "A", BID: 1, Description: "B"}})
 
-	if code, body := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 200 {
+	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	if len(got) != 1 || got[0].FirstName != "Buyer" {
-		t.Fatalf("pushed tickets = %+v", got)
+	for _, k := range []string{"prefixes", "baskets", "tickets"} {
+		v, ok := got[k]
+		if !ok || strings.TrimSpace(string(v)) == "null" {
+			t.Fatalf("push body must contain a %s list, got %s", k, got[k])
+		}
 	}
-	if headers.Get("X-TAM-Receipts") != "1" || headers.Get("X-TAM-Client") == "" || headers.Get("X-TAM-Save") == "" {
-		t.Fatalf("push omitted numbered receipt headers: %v", headers)
+	if !strings.Contains(string(got["baskets"]), `"description":"B"`) {
+		t.Fatalf("pushed baskets = %s", got["baskets"])
 	}
 }
 
@@ -697,7 +694,7 @@ func TestStandaloneAuthAndPush(t *testing.T) {
 	}
 	f.do("POST", "/api/prefixes", []store.Prefix{{Prefix: "A", Color: "red"}}, nil)
 	_, body = f.do("GET", "/api/backuprestore/local", nil, nil)
-	bf := decode[store.RecoverySnapshot](t, body)
+	bf := decode[store.BackupFile](t, body)
 	if len(bf.Prefixes) != 1 || bf.Tickets == nil {
 		t.Fatalf("local export = %+v", bf)
 	}
@@ -725,16 +722,9 @@ type recordedWrite struct {
 func newRecorder(t *testing.T, f *fixture) *recorder {
 	t.Helper()
 	rec := &recorder{drawingStatus: 200}
-	st := newServerStore(t)
-	key, err := st.CreateKey("recorder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := server.NewHandler(st, server.FixedPassword("secret"))
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
 			rec.mu.Lock()
 			rec.writes = append(rec.writes, recordedWrite{r.URL.Path, body})
 			status := rec.drawingStatus
@@ -743,15 +733,15 @@ func newRecorder(t *testing.T, f *fixture) *recorder {
 				httpx.WriteError(w, status, "no drawing today")
 				return
 			}
-			native.ServeHTTP(w, r)
+			httpx.WriteJSON(w, 200, map[string]string{"message": "ok"})
 			return
 		}
-		native.ServeHTTP(w, r)
+		httpx.WriteJSON(w, 200, map[string]any{"whoami": "TAM Server", "authenticated": true, "healthy": true})
 	}))
 	t.Cleanup(rs.Close)
 	u, _ := url.Parse(rs.URL)
 	s := config.Defaults()
-	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), key.AuthKey
+	s.RemoteServer, s.RemotePort, s.RemoteKey = u.Hostname(), u.Port(), "K"
 	if err := config.Save(f.settings, s); err != nil {
 		t.Fatal(err)
 	}
@@ -785,20 +775,24 @@ func (rec *recorder) body(path string) []byte {
 	return nil
 }
 
-func TestRestoreIntoServerUsesSingleNativeOperation(t *testing.T) {
+// A restore into a server carries the winning tickets through the drawing
+// route as well. The original server's restore leaves the winning ticket of
+// a basket it already has untouched; the drawing route sets it on every
+// server, so the restore comes out complete on both.
+func TestRestoreIntoServerCarriesWinningTickets(t *testing.T) {
 	f := newFixture(t)
 	rec := newRecorder(t, f)
 	bf := store.NewBackupFile()
-	bf.Baskets = []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}}
-	if code, body := f.do("POST", "/api/backuprestore/remote", nativeFixtureBackup(bf), nil); code != 200 {
-		t.Fatalf("restore: %d %s", code, body)
+	bf.Baskets = []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}, {Prefix: "A", BID: 2, Description: "Spa"}}
+	if code, body := f.do("POST", "/api/backuprestore/remote", bf, nil); code != 200 {
+		t.Fatalf("restore = %d %s", code, body)
 	}
-	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore"}) {
-		t.Fatalf("restore issued extra writes: %v", got)
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore", "/api/drawing"}) {
+		t.Fatalf("the server received %v, want the restore and then the drawing", got)
 	}
-	var snapshot store.RecoverySnapshot
-	if err := json.Unmarshal(rec.body("/api/backuprestore"), &snapshot); err != nil || len(snapshot.Baskets) != 1 || snapshot.Baskets[0].WinningTicket != 7 || len(snapshot.BasketComponents) != 1 {
-		t.Fatalf("restore lost native data: %+v %v", snapshot, err)
+	var lines []store.Basket
+	if err := json.Unmarshal(rec.body("/api/drawing"), &lines); err != nil || len(lines) != 2 || lines[0].WinningTicket != 7 || lines[1].BID != 2 || lines[1].WinningTicket != 0 {
+		t.Fatalf("drawing body = %s", rec.body("/api/drawing"))
 	}
 }
 
@@ -811,8 +805,8 @@ func TestPushBasketsCarriesWinningTickets(t *testing.T) {
 	if code, body := f.do("POST", "/api/backuprestore/push/baskets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/baskets", "/api/drawing"}) {
-		t.Fatalf("the server received %v, want basket metadata and then owned drawing results", got)
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore", "/api/drawing"}) {
+		t.Fatalf("the server received %v, want the restore and then the drawing", got)
 	}
 	if !strings.Contains(string(rec.body("/api/drawing")), `"winning_ticket":7`) {
 		t.Fatalf("drawing body = %s", rec.body("/api/drawing"))
@@ -826,7 +820,20 @@ func TestPushTicketsSendsNoDrawing(t *testing.T) {
 	if code, body := f.do("POST", "/api/backuprestore/push/tickets", `{}`, nil); code != 200 {
 		t.Fatalf("push = %d %s", code, body)
 	}
-	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/tickets"}) {
-		t.Fatalf("the server received %v, want only the ticket save", got)
+	if got := rec.paths(); !reflect.DeepEqual(got, []string{"/api/backuprestore"}) {
+		t.Fatalf("the server received %v, want only the restore", got)
+	}
+}
+
+// A refused drawing means the restore did not complete, and the page must
+// hear that rather than a success.
+func TestRestoreIntoServerReportsARefusedDrawing(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder(t, f)
+	rec.refuseDrawing(500)
+	bf := store.NewBackupFile()
+	bf.Baskets = []store.Basket{{Prefix: "A", BID: 1, Description: "Wine", WinningTicket: 7}}
+	if code, body := f.do("POST", "/api/backuprestore/remote", bf, nil); code != 500 || !strings.Contains(string(body), "no drawing today") {
+		t.Fatalf("restore = %d %s, want the server's refusal", code, body)
 	}
 }

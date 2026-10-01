@@ -48,9 +48,9 @@
 			return;
 		}
 		if (res.ok) {
-			// Native backups carry conflict values and their revision hashes.
-			// Save the server's document without re-encoding those values.
-			const blob = await res.blob();
+			const backup = await res.json();
+			const jsonString = JSON.stringify(backup, null, 2);
+			const blob = new Blob([jsonString], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 
 			const a = document.createElement('a');

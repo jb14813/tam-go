@@ -11,7 +11,6 @@ import (
 
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/discovery"
-	"ticket-auction-manager/tam-go/internal/httpx"
 	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 )
@@ -123,15 +122,7 @@ func TestQueuedDeleteAndFailedList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot listen again on %s: %v", addr, err)
 	}
-	inner := server.NewHandler(rst, server.FixedPassword("secret"))
-	refuseTickets := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" {
-			httpx.WriteError(w, http.StatusBadRequest, "ticket rejected by the server")
-			return
-		}
-		inner.ServeHTTP(w, r)
-	})
-	rs2 := &httptest.Server{Listener: ln, Config: &http.Server{Handler: refuseTickets}}
+	rs2 := &httptest.Server{Listener: ln, Config: &http.Server{Handler: server.NewHandler(rst, server.FixedPassword("secret"))}}
 	rs2.Start()
 	t.Cleanup(rs2.Close)
 	f.h.sync.Reset()
@@ -145,7 +136,7 @@ func TestQueuedDeleteAndFailedList(t *testing.T) {
 
 	// A queued request the server refuses lands in the failed list, where
 	// it can be retried or discarded.
-	if err := f.h.sync.Enqueue("POST", "/api/tickets", []byte(`[{"prefix":"A","t_id":1,"first_name":"Retried buyer"}]`)); err != nil {
+	if err := f.h.sync.Enqueue("POST", "/api/nowhere", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	f.h.sync.Tick()
@@ -159,9 +150,6 @@ func TestQueuedDeleteAndFailedList(t *testing.T) {
 	code, body := f.do("POST", "/api/outbox/retry", `{}`, nil)
 	if code != 200 || !strings.Contains(string(body), "Retrying 1 save") {
 		t.Fatalf("retry = %d %s", code, body)
-	}
-	if ticket, err := f.st.Ticket("A", 1); err != nil || ticket == nil || ticket.FirstName != "Retried buyer" {
-		t.Fatalf("retry did not retain the chosen entry: %+v %v", ticket, err)
 	}
 	f.h.sync.Tick()
 	if p, fl := pending(t, f.st); p != 0 || fl != 1 {

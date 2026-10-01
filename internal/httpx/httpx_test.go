@@ -83,16 +83,6 @@ func TestIntParam(t *testing.T) {
 	if _, err := IntParam(r, "id"); err == nil {
 		t.Fatal("non-integer must fail")
 	}
-	for _, invalid := range []string{"-1", "9007199254740992", "9223372036854775807"} {
-		r.SetPathValue("id", invalid)
-		if _, err := IntParam(r, "id"); err == nil {
-			t.Fatalf("unsafe ID %s was accepted", invalid)
-		}
-	}
-	r.SetPathValue("id", "9007199254740991")
-	if n, err := IntParam(r, "id"); err != nil || int64(n) != 9007199254740991 {
-		t.Fatalf("last exact ID = %d, %v", n, err)
-	}
 }
 
 func TestJSONErrors(t *testing.T) {

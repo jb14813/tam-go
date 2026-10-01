@@ -161,7 +161,7 @@ func (t *test) start() error {
 	if err != nil {
 		return err
 	}
-	ports, err := freePorts(1)
+	ports, err := freePorts(1 + t.o.clients)
 	if err != nil {
 		return err
 	}
@@ -196,8 +196,18 @@ func (t *test) start() error {
 	fmt.Printf("tam-server %s answering on %s\n", t.version, t.server.url)
 
 	began := time.Now()
-	if err := t.prepareClients(clientPath); err != nil {
-		return err
+	t.clients = make([]*client, t.o.clients)
+	for i := range t.clients {
+		name := fmt.Sprintf("client-%02d", i+1)
+		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[1+i], []string{"-open=false", "-tray=false"}, nil)
+		if err != nil {
+			return err
+		}
+		r, err := newRelay(net.JoinHostPort(t.server.host, t.server.port), t.o.late, t.o.seed+uint64(i))
+		if err != nil {
+			return err
+		}
+		t.clients[i] = &client{n: i + 1, prog: p, relay: r, rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
 	}
 	var failed atomic.Value
 	t.each(func(l *client) {
@@ -212,47 +222,11 @@ func (t *test) start() error {
 	return nil
 }
 
-func (t *test) prepareClients(clientPath string) (err error) {
-	// Relays keep their listeners open before client ports are selected. If
-	// created afterward, a relay could claim a client's released reservation.
-	relays := make([]*relay, 0, t.o.clients)
-	defer func() {
-		if err != nil {
-			for _, relay := range relays {
-				relay.close()
-			}
-		}
-	}()
-	for i := 0; i < t.o.clients; i++ {
-		r, err := newRelay(net.JoinHostPort(t.server.host, t.server.port), t.o.late, t.o.seed+uint64(i))
-		if err != nil {
-			return err
-		}
-		relays = append(relays, r)
-	}
-	ports, err := freePorts(t.o.clients)
-	if err != nil {
-		return err
-	}
-	clients := make([]*client, t.o.clients)
-	for i := range clients {
-		name := fmt.Sprintf("client-%02d", i+1)
-		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[i], []string{"-open=false", "-tray=false"}, nil)
-		if err != nil {
-			return err
-		}
-		p.readyPath = "/api/status"
-		clients[i] = &client{n: i + 1, prog: p, relay: relays[i], rng: rand.New(rand.NewPCG(t.o.seed, uint64(i+2)))}
-	}
-	t.clients = clients
-	return nil
-}
-
 // tls reports whether the server speaks HTTPS.
 func (t *test) tls() bool { return strings.HasPrefix(t.server.url, "https:") }
 
 // pair pairs every client with the server through its Settings route, all
-// at once, and waits until each is connected with recovery and queued saves done.
+// at once, and waits until each shows Connected.
 func (t *test) pair() error {
 	ph := t.newPhase("Pairing")
 	defer func() { ph.end = time.Now() }()
@@ -266,16 +240,16 @@ func (t *test) pair() error {
 	for _, l := range t.clients {
 		for {
 			st, err := l.peek()
-			if err == nil && st.caughtUp() {
+			if err == nil && st.State == "connected" {
 				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("%s was not connected and caught up within 30s of pairing (%+v, %v)", l.prog.name, st, err)
+				return fmt.Errorf("%s did not show Connected within 30s of pairing (%+v, %v)", l.prog.name, st, err)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	t.record("every client paired, finished recovery and showed Connected", true, "%d clients, in %s", len(t.clients), secs(time.Since(ph.start)))
+	t.record("every client paired and showed Connected", true, "%d clients, in %s", len(t.clients), secs(time.Since(ph.start)))
 	return nil
 }
 
@@ -286,9 +260,6 @@ func (t *test) setup() error {
 	defer func() { ph.end = time.Now() }()
 	if _, err := t.clients[0].call(ph, "save prefixes", http.MethodPost, "/api/prefixes", t.ev.prefixes, nil, len(t.ev.prefixes)); err != nil {
 		return err
-	}
-	if !t.untilCaughtUp(t.clients[0]) {
-		return fmt.Errorf("setup prefixes did not finish recovery/delivery within %s", t.o.settle)
 	}
 	t.each(func(l *client) {
 		var ps []store.Prefix
@@ -428,11 +399,11 @@ func (t *test) dropWifi(saved *atomic.Int64, after int, over chan struct{}) {
 	fmt.Println("  Wi-Fi back everywhere, queues sent")
 }
 
-// untilCaughtUp waits until connection, recovery and queue delivery are ready.
+// untilCaughtUp waits until the client shows Connected with nothing queued.
 func (t *test) untilCaughtUp(l *client) bool {
 	deadline := time.Now().Add(t.o.settle)
 	for time.Now().Before(deadline) {
-		if st, err := l.peek(); err == nil && st.caughtUp() {
+		if st, err := l.peek(); err == nil && st.State == "connected" && st.Pending == 0 {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -518,7 +489,7 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 			l.mu.Lock()
 			// The outage's window closes the first time the client shows
 			// Connected with nothing queued.
-			if w := &l.away[l.outage]; w.to.IsZero() && st.caughtUp() {
+			if w := &l.away[l.outage]; w.to.IsZero() && st.State == "connected" && st.Pending == 0 {
 				w.to = time.Now()
 			}
 			all = all && !l.away[l.outage].to.IsZero()
@@ -533,14 +504,14 @@ func (t *test) watchCatchUp(back <-chan struct{}, done chan struct{}) {
 	}
 }
 
-// settle waits until every client's recovery and queued saves have finished.
+// settle waits until every client shows Connected with nothing queued.
 func (t *test) settle(when string) {
 	deadline := time.Now().Add(t.o.settle)
 	for {
 		away, waiting := 0, 0
 		for _, l := range t.clients {
 			st, err := l.peek()
-			if err != nil || st.State != "connected" || st.Recovering {
+			if err != nil || st.State != "connected" {
 				away++
 			}
 			if err == nil {
@@ -551,7 +522,7 @@ func (t *test) settle(when string) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.problems.add("settle", 1, "%s: %s later %d clients were disconnected or recovering and %d saves were still queued", when, t.o.settle, away, waiting)
+			t.problems.add("settle", 1, "%s: %s later %d clients were not connected and %d saves were still queued", when, t.o.settle, away, waiting)
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -654,14 +625,6 @@ func (t *test) storm() {
 	}
 	var mu sync.Mutex
 	written := map[store.Ticket]bool{}
-	baseline := map[key]store.Ticket{}
-	for _, k := range keys {
-		if row, _, ok := t.ev.ticketNow(k); ok {
-			// A short storm may never reach this target. Only the known
-			// accepted model row is valid, not an unchecked server read.
-			baseline[k], written[row] = row, true
-		}
-	}
 	stop := time.Now().Add(t.o.storm)
 	t.each(func(l *client) {
 		for seq := 0; time.Now().Before(stop); seq++ {
@@ -670,9 +633,6 @@ func (t *test) storm() {
 				PhoneNumber: fmt.Sprintf("555-%03d-%06d", l.n, seq), Pref: prefs[1+seq%2]}
 			if _, err := l.call(ph, "save a ticket everyone saves", http.MethodPost, "/api/tickets", []store.Ticket{tk}, nil, 1); err == nil {
 				mu.Lock()
-				// Once a storm write succeeds, retaining the old value would
-				// be a lost save, so its baseline must no longer pass.
-				delete(written, baseline[k])
 				written[tk] = true
 				mu.Unlock()
 			}

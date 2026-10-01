@@ -73,9 +73,8 @@ func TestOutboxOrderAndDelete(t *testing.T) {
 
 func TestOutboxFailRetryDiscard(t *testing.T) {
 	s := newOutboxStore(t)
-	const ticketBody = `[{"prefix":"A","t_id":1,"first_name":"Retried buyer"}]`
-	a, _ := s.EnqueueOutbox("POST", "/api/tickets", []byte(ticketBody))
-	b, _ := s.EnqueueOutbox("POST", "/api/baskets", []byte(`[{"prefix":"A","b_id":2}]`))
+	a, _ := s.EnqueueOutbox("POST", "/api/tickets", []byte(`[1]`))
+	b, _ := s.EnqueueOutbox("POST", "/api/baskets", []byte(`[2]`))
 	if err := s.FailOutbox(a, "400: prefix name must not be empty"); err != nil {
 		t.Fatal(err)
 	}
@@ -102,9 +101,6 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 	if p, f := counts(t, s); p != 2 || f != 0 {
 		t.Fatalf("counts = %d, %d; want 2, 0", p, f)
 	}
-	if ticket, err := s.Ticket("A", 1); err != nil || ticket == nil || ticket.FirstName != "Retried buyer" {
-		t.Fatalf("explicit retry did not retain its new local choice: %+v %v", ticket, err)
-	}
 
 	// Setting the queue aside (pairing with another server, unpairing)
 	// moves what waits to the failed list, in order, with the reason.
@@ -112,7 +108,7 @@ func TestOutboxFailRetryDiscard(t *testing.T) {
 		t.Fatalf("FailAllOutbox = %d, %v", n, err)
 	}
 	setAside, _ := s.ListFailed()
-	if len(setAside) != 2 || setAside[0].ID != b || string(setAside[1].Body) != ticketBody || setAside[1].ID <= b || setAside[0].LastError != "set aside" {
+	if len(setAside) != 2 || setAside[0].ID != b || string(setAside[1].Body) != `[1]` || setAside[1].ID <= b || setAside[0].LastError != "set aside" {
 		t.Fatalf("failed list = %+v, want the waiting request, then the retried one, with the reason", setAside)
 	}
 	if n, err := s.DiscardFailed(); err != nil || n != 2 {

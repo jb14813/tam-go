@@ -8,9 +8,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Tables is the event schema. Existing tables retain their column layout;
-// basket_components records which form supplied each basket part.
-// Every statement is idempotent.
+// Tables is the table schema of both daemons, copied from the original
+// Ticket Auction Manager. Every statement is idempotent.
 var Tables = []string{
 	`CREATE TABLE IF NOT EXISTS prefixes (
 		prefix TEXT PRIMARY KEY,
@@ -34,27 +33,21 @@ var Tables = []string{
 	`CREATE TABLE IF NOT EXISTS auth_keys (
 		auth_key TEXT PRIMARY KEY,
 		description TEXT)`,
-	`CREATE TABLE IF NOT EXISTS basket_components (
-		prefix TEXT NOT NULL,
-		b_id INTEGER NOT NULL,
-		metadata INTEGER NOT NULL DEFAULT 0,
-		drawing INTEGER NOT NULL DEFAULT 0,
-		PRIMARY KEY (prefix, b_id))`,
-	`CREATE TABLE IF NOT EXISTS causal_identity (id INTEGER PRIMARY KEY CHECK(id = 1), actor TEXT NOT NULL, counter INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS record_revisions (kind TEXT NOT NULL, prefix TEXT NOT NULL, record_id INTEGER NOT NULL, revision TEXT NOT NULL, PRIMARY KEY(kind, prefix, record_id))`,
-	`CREATE TABLE IF NOT EXISTS record_conflicts (kind TEXT NOT NULL, prefix TEXT NOT NULL, record_id INTEGER NOT NULL, candidate_id TEXT NOT NULL, candidate TEXT NOT NULL, PRIMARY KEY(kind, prefix, record_id, candidate_id))`,
-	`CREATE TABLE IF NOT EXISTS operation_receipts (client TEXT NOT NULL, save INTEGER NOT NULL, digest TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(client, save))`,
 }
 
-// View is a named view definition. Views are recreated on every start so
-// databases written by earlier Go versions use the current definitions.
+// View is a named view definition. Views are recreated on every start so a
+// database written by an older version (or by the original app, whose
+// server labelled the counts total "Totals") ends up with the current
+// definitions.
 type View struct {
 	Name string
 	SQL  string
 }
 
-// Views join a basket with a winner only after it is drawn. Winning ticket
-// zero means not drawn yet, even if a sold ticket is numbered zero.
+// Views are the report views of the original, but for one thing: a basket
+// joins its winner only once it is drawn. Winning ticket 0 means not drawn
+// yet, and the original's join made a ticket numbered 0 the winner of every
+// basket still to draw.
 var Views = []View{
 	{"drawing", `CREATE VIEW drawing AS
 		SELECT b.prefix, b.b_id, b.description, b.winning_ticket, t.last_name, t.first_name, t.phone_number
@@ -69,14 +62,12 @@ var Views = []View{
 		FROM baskets b LEFT JOIN tickets t ON b.prefix = t.prefix AND b.winning_ticket = t.t_id AND b.winning_ticket > 0
 		ORDER BY b.prefix, b.b_id`},
 	{"report_counts", `CREATE VIEW report_counts AS
-		SELECT prefix, 0 AS is_total, COUNT(*) AS unique_buyers, SUM(purchases) AS total_buys
-		FROM (SELECT prefix, first_name, last_name, phone_number, COUNT(*) AS purchases
-			FROM tickets GROUP BY prefix, first_name, last_name, phone_number)
+		SELECT prefix, COUNT(DISTINCT(CONCAT(first_name, last_name, phone_number))) AS unique_buyers, COUNT(*) AS total_buys
+		FROM tickets
 		GROUP BY prefix
 		UNION ALL
-		SELECT 'Total', 1, COUNT(*), coalesce(SUM(purchases), 0)
-		FROM (SELECT first_name, last_name, phone_number, COUNT(*) AS purchases
-			FROM tickets GROUP BY first_name, last_name, phone_number)`},
+		SELECT 'Total', COUNT(DISTINCT(CONCAT(first_name, last_name, phone_number))), COUNT(*)
+		FROM tickets`},
 }
 
 // Open opens (and creates when missing) the SQLite database at path with a
@@ -86,8 +77,7 @@ var Views = []View{
 // does not apply the busy timeout to a transaction that has read and then
 // asks to write, but fails it at once with "database is locked" when the
 // lock is held for a moment, as a reader under load repairing the WAL index
-// does. Read-only transactions explicitly opt out of IMMEDIATE so reports
-// can share a consistent snapshot without reserving the write lock.
+// does. Every transaction here writes, so none loses anything by it.
 func Open(path string) (*sql.DB, error) {
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	sqldb, err := sql.Open("sqlite", dsn)
@@ -107,25 +97,6 @@ func Migrate(sqldb *sql.DB) error {
 	for _, stmt := range Tables {
 		if _, err := sqldb.Exec(stmt); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
-		}
-	}
-	if _, err := sqldb.Exec(`CREATE TRIGGER IF NOT EXISTS basket_components_delete
-		AFTER DELETE ON baskets BEGIN
-		DELETE FROM basket_components WHERE prefix = OLD.prefix AND b_id = OLD.b_id; END`); err != nil {
-		return fmt.Errorf("apply basket component cleanup: %w", err)
-	}
-	// Native recovery and restore apply explicit component column updates.
-	// Track ownership even when clearing a field to its existing empty value.
-	for _, statement := range []string{
-		`CREATE TRIGGER IF NOT EXISTS basket_components_metadata
-			AFTER UPDATE OF description, donors ON baskets BEGIN
-			UPDATE basket_components SET metadata = 1 WHERE prefix = NEW.prefix AND b_id = NEW.b_id; END`,
-		`CREATE TRIGGER IF NOT EXISTS basket_components_drawing
-			AFTER UPDATE OF winning_ticket ON baskets BEGIN
-			UPDATE basket_components SET drawing = 1 WHERE prefix = NEW.prefix AND b_id = NEW.b_id; END`,
-	} {
-		if _, err := sqldb.Exec(statement); err != nil {
-			return fmt.Errorf("apply basket component tracking: %w", err)
 		}
 	}
 	for _, v := range Views {

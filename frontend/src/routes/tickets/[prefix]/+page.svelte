@@ -1,9 +1,7 @@
 <script>
 	import { prefixPage } from '$lib/client/paths';
 	import { bS, bAS, iS, rBS } from '$lib/client/styles';
-	import { getJSON, saveMarked, saveOnLeave, unchangedRows, pageRange, errorMessage } from '$lib/client/api';
-	import UnsentEdits from '$lib/client/components/UnsentEdits.svelte';
-	import { preserveDraft } from '$lib/client/drafts';
+	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import PagerBar from '$lib/client/components/PagerBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
@@ -50,42 +48,30 @@
 	let items = $state([]);
 	let itemsLength = $derived(items.length || 1);
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
-	let loadSequence = 0;
-	let loadedRange;
-	function restorePager() { if (loadedRange) [pager.idFrom, pager.idTo] = loadedRange; }
-	function applyDraft(row) {
-		if (itemsBuffer.length) { alert('Save or cancel the current edits before using a draft.'); return false; }
-		items = [{ ...row, changed: true }];
-		loadedRange = [row.t_id, row.t_id];
-		restorePager();
-		return true;
-	}
 	const functions = {
 		// Saves the marked rows, then loads the pager's range, or `range` when given.
 		async getPage(range) {
-			const request = ++loadSequence;
-			const wanted = pageRange(range || [pager.idFrom, pager.idTo]);
-			if (!wanted) { alert('Enter whole numbers for the first and last row.'); restorePager(); return; }
 			// Rows that could not be saved stay on the page, with the message why.
-			if (!(await this.save()) || itemsBuffer.length || request !== loadSequence) {
-				if (request === loadSequence) restorePager();
-				return;
+			if (!(await this.save())) return;
+			if (range) [pager.idFrom, pager.idTo] = range;
+			if (pager.idFrom > pager.idTo) {
+				[pager.idFrom, pager.idTo] = [pager.idTo, pager.idFrom];
 			}
-			const unchanged = unchangedRows(items);
+			if (pager.idTo - pager.idFrom > 300) {
+				pager.idTo = pager.idFrom + 300;
+			}
+			// Numbers start at 0: a row below it could not be saved.
+			if (pager.idFrom < 0) pager.idFrom = 0;
+			if (pager.idTo < 0) pager.idTo = 0;
 			let resData;
 			try {
 				resData = await getJSON(
-					`/api/tickets/${encodeURIComponent(prefix.prefix)}/${wanted[0]}/${wanted[1]}`
+					`/api/tickets/${encodeURIComponent(prefix.prefix)}/${pager.idFrom}/${pager.idTo}`
 				);
 			} catch (e) {
-				if (request === loadSequence) restorePager();
 				alert(`Error loading rows: ${errorMessage(e)}`);
 				return;
 			}
-			if (request !== loadSequence) return;
-			if (!unchanged(items)) { restorePager(); return; }
-			loadedRange = wanted;
-			restorePager();
 			resData.forEach((i) => {
 				i.changed = false;
 				// A new row (no data yet, no preference) takes the workstation default.
@@ -109,7 +95,7 @@
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			if (!opts.keepalive) setTimeout(() => { if (!itemsBuffer.length) focusIdx(0); }, 1);
+			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
 			return true;
 		},
 		cancel() {
@@ -120,13 +106,11 @@
 		},
 		prevPage() {
 			// Stops at 0, keeping the page's size: 1-10 goes to 0-9.
-			const [start, end] = loadedRange || [pager.idFrom, pager.idTo];
-			const from = Math.max(0, start - itemsLength);
-			this.getPage([from, from + (end - start)]);
+			const from = Math.max(0, pager.idFrom - itemsLength);
+			this.getPage([from, from + (pager.idTo - pager.idFrom)]);
 		},
 		nextPage() {
-			const [start, end] = loadedRange || [pager.idFrom, pager.idTo];
-			this.getPage([start + itemsLength, end + itemsLength]);
+			this.getPage([pager.idFrom + itemsLength, pager.idTo + itemsLength]);
 		},
 		nextLine() {
 			if (items[nextIdx]) {
@@ -190,15 +174,11 @@
 
 	// Marked rows are saved when the page is hidden, left or closed.
 	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
-	// Observe row values, including keyboard shortcuts and programmatic copies.
-	$effect(() => { preserveDraft(itemsBuffer); });
 </script>
 
 <svelte:head>
 	<title>{pageTitle}</title>
 </svelte:head>
-
-<UnsentEdits apply={applyDraft} />
 
 <table class="w-full box-border border-separate p-1">
 	<thead class="sticky top-1 bg-white">

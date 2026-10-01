@@ -127,28 +127,19 @@ func TestNextSave(t *testing.T) {
 // queue in its order, so the two must agree.
 func TestRetriedSavesGetNewNumbers(t *testing.T) {
 	s := newOrderStore(t)
-	const firstBody = `[{"prefix":"A","t_id":1,"first_name":"set aside"}]`
-	const laterBody = `[{"prefix":"A","t_id":1,"first_name":"queued"}]`
 	first, _ := s.NextSave("desk")
-	if _, err := s.SaveQueued("POST", "/api/tickets", []byte(firstBody), first, func(st *Store) error {
-		return st.UpsertTickets([]Ticket{{Prefix: "A", TID: 1, FirstName: "set aside"}})
-	}); err != nil {
+	if _, err := s.SaveQueued("POST", "/api/tickets", []byte(`["set aside"]`), first, func(*Store) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.FailAllOutbox("set aside"); err != nil {
 		t.Fatal(err)
 	}
 	later, _ := s.NextSave("desk")
-	if _, err := s.SaveQueued("POST", "/api/tickets", []byte(laterBody), later, func(st *Store) error {
-		return st.UpsertTickets([]Ticket{{Prefix: "A", TID: 1, FirstName: "queued"}})
-	}); err != nil {
+	if _, err := s.SaveQueued("POST", "/api/tickets", []byte(`["queued"]`), later, func(*Store) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.RetryFailed("desk"); err != nil || n != 1 {
 		t.Fatalf("RetryFailed = %d, %v", n, err)
-	}
-	if ticket, err := s.Ticket("A", 1); err != nil || ticket == nil || ticket.FirstName != "set aside" {
-		t.Fatalf("retry did not retain its new local choice: %+v %v", ticket, err)
 	}
 	var queue []Outbox
 	for {
@@ -164,7 +155,7 @@ func TestRetriedSavesGetNewNumbers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(queue) != 2 || string(queue[0].Body) != laterBody || string(queue[1].Body) != firstBody {
+	if len(queue) != 2 || string(queue[0].Body) != `["queued"]` || string(queue[1].Body) != `["set aside"]` {
 		t.Fatalf("queue after the retry = %+v, want the queued save first, then the retried one", queue)
 	}
 	if queue[1].Order.Client != first.Client || queue[1].Order.Save <= queue[0].Order.Save {

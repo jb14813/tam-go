@@ -1,11 +1,9 @@
 <script>
 	import { bS, iS, rBS, tS } from '$lib/client/styles';
-	import { getJSON, saveMarked, saveOnLeave, unchangedRows, errorMessage } from '$lib/client/api';
+	import { getJSON, saveMarked, saveOnLeave, errorMessage } from '$lib/client/api';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 	import CommandBar from '$lib/client/components/CommandBar.svelte';
 	import TicketSearchBar from '$lib/client/components/TicketSearchBar.svelte';
-	import UnsentEdits from '$lib/client/components/UnsentEdits.svelte';
-	import { preserveDraft } from '$lib/client/drafts';
 
 	let { data } = $props();
 	let { prefix, prefixes } = $derived(data);
@@ -37,16 +35,8 @@
 	let itemsBuffer = $derived(items.filter((i) => i.changed));
 	// Whether a search has run, for what the empty table says.
 	let searched = $state(false);
-	let loadSequence = 0;
-	function applyDraft(row) {
-		if (itemsBuffer.length) { alert('Save the current edits before using a draft.'); return false; }
-		items = [{ ...row, changed: true }];
-		searched = true;
-		return true;
-	}
 	const functions = {
 		async search() {
-			const request = ++loadSequence;
 			// Rows marked in the last results are saved first, as the forms do
 			// before they load other rows; the results would replace them.
 			const problem = await saveMarked('/api/search/tickets', itemsBuffer);
@@ -54,8 +44,6 @@
 				alert(problem);
 				return;
 			}
-			if (itemsBuffer.length || request !== loadSequence) return;
-			const unchanged = unchangedRows(items);
 			const searchParams = new URLSearchParams({ ...searchForm });
 			let resData;
 			try {
@@ -64,7 +52,6 @@
 				alert(`Error searching: ${errorMessage(e)}`);
 				return;
 			}
-			if (request !== loadSequence || !unchanged(items)) return;
 			items = [...resData];
 			searched = true;
 			if (items.length > 0) setTimeout(() => focusIdx(0), 1);
@@ -80,7 +67,7 @@
 				if (!opts.keepalive) alert(problem);
 				return false;
 			}
-			if (!opts.keepalive) setTimeout(() => { if (!itemsBuffer.length) focusIdx(0); }, 1);
+			if (!opts.keepalive) setTimeout(() => focusIdx(0), 1);
 			return true;
 		},
 		nextLine() {
@@ -155,14 +142,11 @@
 	// the forms. (The original asked before leaving instead; its question
 	// cannot stop a browser discarding a hidden tab, and Leave lost the rows.)
 	$effect(() => saveOnLeave(() => itemsBuffer, (opts) => functions.save(opts)));
-	$effect(() => { preserveDraft(itemsBuffer); });
 </script>
 
 <svelte:head>
 	<title>{pageTitle}</title>
 </svelte:head>
-
-<UnsentEdits apply={applyDraft} />
 
 <table class="w-full box-border border-separate p-1">
 	<thead class="sticky top-1 bg-white">

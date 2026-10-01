@@ -19,7 +19,8 @@ import (
 // FuzzModelsDecode: whatever JSON arrives, decoding a ticket, basket, prefix
 // or bare id never panics, and whatever is accepted encodes to JSON that
 // decodes to the same value, so a row tam-client relays or a backup carries
-// arrives as it left. Numeric strings are rejected at the native boundary.
+// arrives as it left. An id the original client sends as a string decodes
+// like the same id sent as a number.
 func FuzzModelsDecode(f *testing.F) {
 	for _, seed := range []string{
 		`{"prefix":"A","t_id":4,"first_name":"Ann","last_name":"Lee","phone_number":"555-0001","pref":"CALL"}`,
@@ -50,8 +51,8 @@ func FuzzModelsDecode(f *testing.F) {
 		}
 		quoted, _ := json.Marshal(strings.TrimSpace(string(data)))
 		var s Int
-		if err := json.Unmarshal(quoted, &s); err == nil {
-			t.Fatalf("numeric string accepted: %s", quoted)
+		if err := json.Unmarshal(quoted, &s); err != nil || s != n {
+			t.Fatalf("the number %s decodes to %d, the string %s to %d (%v)", data, n, quoted, s, err)
 		}
 	})
 }
@@ -296,19 +297,7 @@ func FuzzStoreRoundTrip(f *testing.F) {
 		tk := Ticket{prefix, int(id), s1, s2, s3, s4}
 		bk := Basket{prefix, int(id), s1, s2, int(winning)}
 		must(t, s.UpsertPrefixes([]Prefix{p}))
-		if id < 0 || id > SafeIntegerMax {
-			if err := s.UpsertTickets([]Ticket{tk}); err == nil {
-				t.Fatal("unsafe ticket id accepted")
-			}
-			return
-		}
 		must(t, s.UpsertTickets([]Ticket{tk}))
-		if winning < 0 || winning > SafeIntegerMax {
-			if err := s.UpsertBaskets([]Basket{bk}); err == nil {
-				t.Fatal("unsafe winner accepted")
-			}
-			return
-		}
 		must(t, s.UpsertBaskets([]Basket{bk}))
 
 		expect := func(what string, got, want any, err error) {

@@ -19,10 +19,7 @@ const restoreBasketSQL = `INSERT INTO baskets (prefix, b_id, description, donors
 	winning_ticket = EXCLUDED.winning_ticket`
 
 func (s *Store) queryBaskets(query string, args ...any) ([]Basket, error) {
-	if !s.readGuarded {
-		return reviewedRead(s, func(v *Store) ([]Basket, error) { return v.queryBaskets(query, args...) })
-	}
-	rows, err := s.query(query, args...)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -68,89 +65,23 @@ func (s *Store) BasketRange(prefix string, from, to int) ([]Basket, error) {
 
 // UpsertBaskets inserts baskets or updates their description and donors.
 func (s *Store) UpsertBaskets(bs []Basket) error {
-	if err := validateBasketIdentities(bs); err != nil {
-		return err
-	}
 	return s.tx(func(tx *sql.Tx) error {
-		if len(bs) == 0 {
-			return nil
-		}
-		components, err := tx.Prepare(markBasketComponentSQL)
-		if err != nil {
-			return err
-		}
-		defer components.Close()
-		baskets, err := tx.Prepare(upsertBasketSQL)
-		if err != nil {
-			return err
-		}
-		defer baskets.Close()
-		for _, b := range bs {
-			apply, err := s.prepareRecord(tx, "metadata", b.Prefix, b.BID, []string{b.Description, b.Donors})
-			if err != nil {
-				return err
-			}
-			if !apply {
-				continue
-			}
-			var exists bool
-			if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM baskets WHERE prefix=? AND b_id=?)`, b.Prefix, b.BID).Scan(&exists); err != nil {
-				return err
-			}
-			if !exists && b.WinningTicket != 0 {
-				if _, err = s.prepareRecord(tx, "drawing", b.Prefix, b.BID, b.WinningTicket); err != nil {
-					return err
-				}
-			}
-			// Mark immediately before each write: a repeated basket in one
-			// batch is an update after the first entry inserted it.
-			if _, err := components.Exec(basketComponentArgs(b, true, false)...); err != nil {
-				return err
-			}
-			if _, err := baskets.Exec(b.Prefix, b.BID, b.Description, b.Donors, b.WinningTicket); err != nil {
-				return err
-			}
-		}
-		return nil
+		return execEach(tx, upsertBasketSQL, len(bs), func(i int) []any {
+			b := bs[i]
+			return []any{b.Prefix, b.BID, b.Description, b.Donors, b.WinningTicket}
+		})
 	})
 }
 
 // UpsertWinning sets the winning ticket of each basket, creating the basket
 // when it does not exist yet.
 func (s *Store) UpsertWinning(bs []Basket) error {
-	if err := validateBasketIdentities(bs); err != nil {
-		return err
-	}
 	return s.tx(func(tx *sql.Tx) error {
-		if err := markBasketComponents(tx, bs, false, true); err != nil {
-			return err
-		}
-		for _, b := range bs {
-			apply, err := s.prepareRecord(tx, "drawing", b.Prefix, b.BID, b.WinningTicket)
-			if err != nil {
-				return err
-			}
-			if !apply {
-				continue
-			}
-			if _, err = tx.Exec(upsertWinningSQL, b.Prefix, b.BID, b.WinningTicket); err != nil {
-				return err
-			}
-		}
-		return nil
+		return execEach(tx, upsertWinningSQL, len(bs), func(i int) []any {
+			b := bs[i]
+			return []any{b.Prefix, b.BID, b.WinningTicket}
+		})
 	})
-}
-
-func validateBasketIdentities(bs []Basket) error {
-	for _, basket := range bs {
-		if err := validateIdentity(basket.BID); err != nil {
-			return err
-		}
-		if err := validateIdentity(basket.WinningTicket); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // --- drawing view ---
@@ -158,10 +89,7 @@ func validateBasketIdentities(bs []Basket) error {
 const drawingCols = `prefix, b_id, description, winning_ticket, last_name, first_name, phone_number`
 
 func (s *Store) queryDrawing(query string, args ...any) ([]DrawingLine, error) {
-	if !s.readGuarded {
-		return reviewedRead(s, func(v *Store) ([]DrawingLine, error) { return v.queryDrawing(query, args...) })
-	}
-	rows, err := s.query(query, args...)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

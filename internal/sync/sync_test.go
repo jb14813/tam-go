@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +13,6 @@ import (
 	"ticket-auction-manager/tam-go/internal/config"
 	"ticket-auction-manager/tam-go/internal/db"
 	"ticket-auction-manager/tam-go/internal/remote"
-	"ticket-auction-manager/tam-go/internal/server"
 	"ticket-auction-manager/tam-go/internal/store"
 	"ticket-auction-manager/tam-go/internal/version"
 )
@@ -31,23 +29,6 @@ type fakeServer struct {
 func newFakeServer(t *testing.T) *fakeServer {
 	t.Helper()
 	f := &fakeServer{mode: "up"}
-	database, err := db.Open(filepath.Join(t.TempDir(), "fake-server.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.MigrateServer(database); err != nil {
-		t.Fatal(err)
-	}
-	st := store.New(database)
-	key, err := st.CreateKey("fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := server.NewHandler(st, server.FixedPassword("secret"))
 	f.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		mode := f.mode
@@ -66,15 +47,14 @@ func newFakeServer(t *testing.T) *fakeServer {
 			w.Write([]byte(`{"detail":"Invalid Key"}`))
 		case r.URL.Path == "/api":
 			authed := mode != "nokey"
-			json.NewEncoder(w).Encode(nativeHeartbeat(authed))
+			json.NewEncoder(w).Encode(map[string]any{"whoami": "TAM Server", "authenticated": authed, "healthy": true})
 		case r.URL.Path == "/api/backuprestore":
 			w.Write([]byte(`{"prefixes":[{"prefix":"S","color":"red","weight":1}],"tickets":[{"prefix":"S","t_id":1,"first_name":"Sam","last_name":"Server","phone_number":"1","pref":"CALL"}],"baskets":[]}`))
-		case r.URL.Path == "/api/drawing":
+		case r.URL.Path == "/api/bad":
 			w.WriteHeader(400)
 			w.Write([]byte(`{"detail":"nope"}`))
 		default:
-			r.Header.Set("TAM-KEY", key.AuthKey)
-			native.ServeHTTP(w, r)
+			w.Write([]byte(`[]`))
 		}
 	}))
 	t.Cleanup(f.ts.Close)
@@ -157,10 +137,10 @@ func TestStandaloneHasNoState(t *testing.T) {
 	}
 }
 
-func TestDrainOrderAndFailedList(t *testing.T) {
+func TestDrainOrderFailedListAndPull(t *testing.T) {
 	f := newFakeServer(t)
 	s, st := newSyncer(t, f.ts.URL)
-	for _, q := range [][2]string{{"POST", "/api/tickets"}, {"POST", "/api/drawing"}, {"POST", "/api/baskets"}} {
+	for _, q := range [][2]string{{"POST", "/api/tickets"}, {"POST", "/api/bad"}, {"POST", "/api/baskets"}} {
 		if err := s.Enqueue(q[0], q[1], []byte(`[]`)); err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +151,7 @@ func TestDrainOrderAndFailedList(t *testing.T) {
 	}
 	seen := f.seen()
 	// The replay is followed at once by a heartbeat saying nothing waits.
-	want := []string{"GET /api", "POST /api/tickets", "POST /api/drawing", "POST /api/baskets", "GET /api"}
+	want := []string{"GET /api", "POST /api/tickets", "POST /api/bad", "POST /api/baskets", "GET /api", "GET /api/backuprestore"}
 	if len(seen) != len(want) {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
@@ -181,8 +161,14 @@ func TestDrainOrderAndFailedList(t *testing.T) {
 		}
 	}
 	failed, _ := st.ListFailed()
-	if len(failed) != 1 || failed[0].Path != "/api/drawing" || failed[0].LastError != "400: nope" {
+	if len(failed) != 1 || failed[0].Path != "/api/bad" || failed[0].LastError != "400: nope" {
 		t.Fatalf("failed list = %+v", failed)
+	}
+	// The pull copied the server's data into the mirror.
+	ps, _ := st.ListPrefixes()
+	ts, _ := st.AllTickets()
+	if len(ps) != 1 || ps[0].Prefix != "S" || len(ts) != 1 || ts[0].LastName != "Server" {
+		t.Fatalf("mirror after pull: prefixes %+v tickets %+v", ps, ts)
 	}
 	status := s.Status()
 	if status.Mode != "remote" || status.State != Connected || status.ServerName != "fake" || status.Pending != 0 || status.Failed != 1 || status.LastOK == "" {
@@ -232,9 +218,9 @@ func TestServerGoesAwayAndComesBack(t *testing.T) {
 		t.Fatalf("outbox after reconnect: pending %d failed %d", p, fl)
 	}
 	seen := f.seen()
-	last := seen[len(seen)-2:]
-	if last[0] != "POST /api/tickets" || last[1] != "GET /api" {
-		t.Fatalf("after reconnect the queue drains and a heartbeat says so; tail = %v", last)
+	last := seen[len(seen)-3:]
+	if last[0] != "POST /api/tickets" || last[1] != "GET /api" || last[2] != "GET /api/backuprestore" {
+		t.Fatalf("after reconnect the queue drains, a heartbeat says so, then the mirror is pulled; tail = %v", last)
 	}
 }
 
@@ -309,6 +295,46 @@ func TestHeartbeatCarriesTheQueuedSaves(t *testing.T) {
 	}
 }
 
+// TestPullWaitsForSavesQueuedAfterTheReplay: a page save can be queued in
+// the moment between the replay finding nothing left to send and the pull
+// starting. The server does not have that save yet, so the pull must wait
+// until it has been sent instead of copying the server's older row over it.
+func TestPullWaitsForSavesQueuedAfterTheReplay(t *testing.T) {
+	f := newFakeServer(t)
+	s, st := newSyncer(t, f.ts.URL)
+	s.pulling = func() {
+		s.pulling = nil
+		row := []store.Ticket{{Prefix: "S", TID: 1, FirstName: "Sam", LastName: "Client", PhoneNumber: "2", Pref: "CALL"}}
+		if err := st.UpsertTickets(row); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(row)
+		if err := s.Enqueue("POST", "/api/tickets", body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tick()
+	if tk, _ := st.Ticket("S", 1); tk == nil || tk.LastName != "Client" {
+		t.Fatalf("the client's copy has %+v, want its queued save (Client)", tk)
+	}
+	for _, r := range f.seen() {
+		if r == "GET /api/backuprestore" {
+			t.Fatalf("the pull downloaded while a save was still queued: %v", f.seen())
+		}
+	}
+
+	// The next tick sends the save first (and says the queue is empty),
+	// then pulls.
+	s.Tick()
+	if p, _ := pendingFailed(t, st); p != 0 {
+		t.Fatalf("pending after the second tick = %d, want 0", p)
+	}
+	seen := f.seen()
+	if n := len(seen); n < 3 || seen[n-3] != "POST /api/tickets" || seen[n-2] != "GET /api" || seen[n-1] != "GET /api/backuprestore" {
+		t.Fatalf("requests = %v, want the queued save sent before the download", seen)
+	}
+}
+
 // TestHeartbeatRightAfterTheReplay: the server's admin page shows how many
 // saves each client still has queued, from its heartbeat. Once the replay
 // has sent them the client says so at once, not at the next heartbeat, so
@@ -343,14 +369,4 @@ func TestHeartbeatRightAfterTheReplay(t *testing.T) {
 	if got := queued(); len(got) != 2 {
 		t.Fatalf("heartbeats said %v queued, want no heartbeat from a tick that sent nothing", got)
 	}
-}
-
-func nativeHeartbeat(authenticated bool) map[string]any {
-	return map[string]any{"whoami": "TAM Server", "authenticated": authenticated, "healthy": true, "backup_metadata": true, "receipts": true, "conflicts": 0, "review_token": ""}
-}
-
-func writeNativeReceipt(w http.ResponseWriter, r *http.Request, data any) {
-	n, _ := strconv.ParseInt(r.Header.Get("X-TAM-Save"), 10, 64)
-	w.Header().Set("X-TAM-Receipts", "1")
-	json.NewEncoder(w).Encode(map[string]any{"data": data, "receipt": store.SaveReceipt{Revisions: []store.RecordRevision{}}, "client": r.Header.Get("X-TAM-Client-Name"), "save": n})
 }

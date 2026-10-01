@@ -17,17 +17,12 @@ import (
 // Writes take turns through wmu, in the order they arrive. SQLite lets one
 // writer in at a time and has the others retry in a busy wait that is not
 // first come, first served; where every commit is flushed to a slow disk, a
-// writer could time out behind a crowd of others and fail. Event reads use
-// a short transaction so conflict checks and displayed values stay consistent.
+// writer could time out behind a crowd of others and fail. Reads do not
+// wait: with WAL journaling they never block on a writer.
 type Store struct {
-	db               *sql.DB
-	wmu              sync.Mutex
-	in               *sql.Tx // set on the Store SaveQueued hands out: its writes go into this transaction
-	operation        *Order
-	receipt          *SaveReceipt
-	withoutRevisions bool
-	touched          map[string]bool
-	readGuarded      bool
+	db  *sql.DB
+	wmu sync.Mutex
+	in  *sql.Tx // set on the Store SaveQueued hands out: its writes go into this transaction
 }
 
 // New returns a Store over an opened, migrated database.
@@ -57,14 +52,6 @@ func (s *Store) exec(query string, args ...any) (sql.Result, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	return s.db.Exec(query, args...)
-}
-
-// query lets a transaction-scoped Store read its own consistent snapshot.
-func (s *Store) query(query string, args ...any) (*sql.Rows, error) {
-	if s.in != nil {
-		return s.in.Query(query, args...)
-	}
-	return s.db.Query(query, args...)
 }
 
 // execReturning runs one statement that writes and returns a row (DELETE
@@ -119,10 +106,7 @@ func scanPrefixes(rows *sql.Rows) ([]Prefix, error) {
 
 // ListPrefixes returns every prefix ordered by weight, then name.
 func (s *Store) ListPrefixes() ([]Prefix, error) {
-	if !s.readGuarded {
-		return reviewedRead(s, func(v *Store) ([]Prefix, error) { return v.ListPrefixes() })
-	}
-	rows, err := s.query(`SELECT ` + prefixCols + ` FROM prefixes ORDER BY weight, prefix`)
+	rows, err := s.db.Query(`SELECT ` + prefixCols + ` FROM prefixes ORDER BY weight, prefix`)
 	if err != nil {
 		return nil, err
 	}
@@ -135,22 +119,9 @@ const upsertPrefixSQL = `INSERT INTO prefixes (prefix, color, weight) VALUES (?,
 // UpsertPrefixes inserts or updates the given prefixes in one transaction.
 func (s *Store) UpsertPrefixes(ps []Prefix) error {
 	return s.tx(func(tx *sql.Tx) error {
-		for _, p := range ps {
-			apply, err := s.prepareRecord(tx, "prefix", p.Prefix, 0, p)
-			if err != nil {
-				return err
-			}
-			if !apply {
-				continue
-			}
-			if err := recoveryPrefixesSaved(tx, []Prefix{p}); err != nil {
-				return err
-			}
-			if _, err = tx.Exec(upsertPrefixSQL, p.Prefix, p.Color, p.Weight); err != nil {
-				return err
-			}
-		}
-		return nil
+		return execEach(tx, upsertPrefixSQL, len(ps), func(i int) []any {
+			return []any{ps[i].Prefix, ps[i].Color, ps[i].Weight}
+		})
 	})
 }
 
@@ -160,39 +131,12 @@ func (s *Store) DeletePrefix(name string) (*Prefix, error) {
 	var p Prefix
 	var color sql.NullString
 	var weight sql.NullInt64
-	found := false
-	err := s.tx(func(tx *sql.Tx) error {
-		apply, err := s.prepareRecord(tx, "prefix", name, 0, nil)
-		if err != nil {
-			return err
-		}
-		if !apply {
-			return nil
-		}
-		cached, err := deleteCachedPrefix(tx, name)
-		if err != nil {
-			return err
-		}
-		// An absent row still records the user's deletion: a later client's
-		// saved copy must not put its menu prefix back during recovery.
-		err = tx.QueryRow(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, name).Scan(&p.Prefix, &color, &weight)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		found = err == nil
-		if !found && cached != nil {
-			p.Prefix = cached.Prefix
-			color = sql.NullString{String: cached.Color, Valid: true}
-			weight = sql.NullInt64{Int64: int64(cached.Weight), Valid: true}
-			found = true
-		}
-		return recoveryPrefixDeleted(tx, name, found)
-	})
+	err := s.execReturning(`DELETE FROM prefixes WHERE prefix = ? RETURNING prefix, color, weight`, []any{name}, &p.Prefix, &color, &weight)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
-	}
-	if !found {
-		return nil, nil
 	}
 	p.Color, p.Weight = nstr(color), nint(weight)
 	return &p, nil
@@ -372,17 +316,6 @@ func (s *Store) Counts() (prefixes, tickets, baskets int, err error) {
 
 // Export returns every prefix, basket and ticket.
 func (s *Store) Export() (BackupFile, error) {
-	if !s.readGuarded {
-		var backup BackupFile
-		err := s.tx(func(tx *sql.Tx) error {
-			view := s.view(tx)
-			view.readGuarded = true
-			var err error
-			backup, err = view.Export()
-			return err
-		})
-		return backup, err
-	}
 	bf := NewBackupFile()
 	var err error
 	if bf.Prefixes, err = s.ListPrefixes(); err != nil {
@@ -401,17 +334,22 @@ func (s *Store) Export() (BackupFile, error) {
 // rows are overwritten, which is what a restore is for.
 func (s *Store) Import(bf BackupFile) error {
 	return s.tx(func(tx *sql.Tx) error {
-		view := s.view(tx)
-		if err := view.UpsertPrefixes(bf.Prefixes); err != nil {
+		if err := execEach(tx, upsertPrefixSQL, len(bf.Prefixes), func(i int) []any {
+			p := bf.Prefixes[i]
+			return []any{p.Prefix, p.Color, p.Weight}
+		}); err != nil {
 			return fmt.Errorf("prefixes: %w", err)
 		}
-		if err := view.UpsertBaskets(bf.Baskets); err != nil {
+		if err := execEach(tx, restoreBasketSQL, len(bf.Baskets), func(i int) []any {
+			b := bf.Baskets[i]
+			return []any{b.Prefix, b.BID, b.Description, b.Donors, b.WinningTicket}
+		}); err != nil {
 			return fmt.Errorf("baskets: %w", err)
 		}
-		if err := view.UpsertWinning(bf.Baskets); err != nil {
-			return fmt.Errorf("drawing: %w", err)
-		}
-		if err := view.UpsertTickets(bf.Tickets); err != nil {
+		if err := execEach(tx, upsertTicketSQL, len(bf.Tickets), func(i int) []any {
+			t := bf.Tickets[i]
+			return []any{t.Prefix, t.TID, t.FirstName, t.LastName, t.PhoneNumber, t.Pref}
+		}); err != nil {
 			return fmt.Errorf("tickets: %w", err)
 		}
 		return nil
