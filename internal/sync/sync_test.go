@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -53,6 +54,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 		case r.URL.Path == "/api/bad":
 			w.WriteHeader(400)
 			w.Write([]byte(`{"detail":"nope"}`))
+		case r.Method == http.MethodPost:
+			// A server answers a save with the rows as it stored them: here,
+			// as they were sent.
+			body, _ := io.ReadAll(r.Body)
+			w.Write(body)
 		default:
 			w.Write([]byte(`[]`))
 		}

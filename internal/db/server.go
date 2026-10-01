@@ -1,15 +1,18 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // MigrateServer applies the schema additions only tam-server needs, after
-// Migrate: the client_saves table and the auth_key_activity table. It is
-// safe to run on every start.
+// Migrate: the client_saves, event, deleted_prefixes and auth_key_activity
+// tables. It is safe to run on every start.
 func MigrateServer(sqldb *sql.DB) error {
 	// client_saves holds, per client, the number and digest of the last save
 	// applied from it, so a copy of an older save the network delivers late
@@ -30,7 +33,46 @@ func MigrateServer(sqldb *sql.DB) error {
 			return fmt.Errorf("add client_saves.last_hash: %w", err)
 		}
 	}
+	// event names the event this server holds and counts the order numbers
+	// it stamps on the changes it accepts (see store.Event): one row, made
+	// on the first start. deleted_prefixes remembers the prefixes deleted
+	// here, with the order number of the delete, so a copy older than the
+	// delete cannot bring one back.
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS event (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			event TEXT NOT NULL,
+			started TEXT NOT NULL,
+			last_rev INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS deleted_prefixes (
+			prefix TEXT PRIMARY KEY,
+			rev INTEGER NOT NULL)`,
+	} {
+		if _, err := sqldb.Exec(stmt); err != nil {
+			return fmt.Errorf("apply server schema: %w", err)
+		}
+	}
+	id, err := newEventID()
+	if err != nil {
+		return err
+	}
+	if _, err := sqldb.Exec(`INSERT INTO event (id, event, started, last_rev)
+		SELECT 1, ?, ?, (SELECT max(0, coalesce(max(rev), 0)) FROM (
+			SELECT rev FROM prefixes UNION ALL SELECT rev FROM tickets
+			UNION ALL SELECT rev FROM baskets UNION ALL SELECT win_rev FROM baskets))
+		WHERE NOT EXISTS (SELECT 1 FROM event)`, id, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("start the event: %w", err)
+	}
 	return migrateKeyActivity(sqldb)
+}
+
+// newEventID makes the random name of an event: 16 bytes, in hex.
+func newEventID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("name the event: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // keyActivity are the columns of auth_key_activity besides the key: last_seen

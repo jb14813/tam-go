@@ -105,13 +105,13 @@ func FuzzSearchTickets(f *testing.F) {
 		}
 		// Rows in the order the search returns them: by prefix, then id.
 		rows := []Ticket{
-			{"A", 1, a, b, c, "CALL"},
-			{"A", 2, b, c, a, "TEXT"},
-			{"B", 1, c, a, b, "CALL"},
-			{"B", 2, first, last, phone, "CALL"},
-			{"C", 1, "Ann" + first, strings.ToUpper(last), "(" + phone + ")", "CALL"},
-			{"C", 2, "50%", "a_b", `x\y`, "CALL"},
-			{"C", 3, "", "", "", ""},
+			{"A", 1, a, b, c, "CALL", 0},
+			{"A", 2, b, c, a, "TEXT", 0},
+			{"B", 1, c, a, b, "CALL", 0},
+			{"B", 2, first, last, phone, "CALL", 0},
+			{"C", 1, "Ann" + first, strings.ToUpper(last), "(" + phone + ")", "CALL", 0},
+			{"C", 2, "50%", "a_b", `x\y`, "CALL", 0},
+			{"C", 3, "", "", "", "", 0},
 		}
 		s := newTestStore(t)
 		must(t, s.UpsertTickets(rows))
@@ -283,9 +283,9 @@ func FuzzStoreRoundTrip(f *testing.F) {
 	f.Add("123", int64(123), "1e3", "0x10", "NULL", "null", int64(0), int64(123))
 	f.Fuzz(func(t *testing.T, prefix string, id int64, s1, s2, s3, s4 string, weight, winning int64) {
 		s := newTestStore(t)
-		p := Prefix{prefix, s4, int(weight)}
-		tk := Ticket{prefix, int(id), s1, s2, s3, s4}
-		bk := Basket{prefix, int(id), s1, s2, int(winning)}
+		p := Prefix{Prefix: prefix, Color: s4, Weight: int(weight)}
+		tk := Ticket{Prefix: prefix, TID: int(id), FirstName: s1, LastName: s2, PhoneNumber: s3, Pref: s4}
+		bk := Basket{Prefix: prefix, BID: int(id), Description: s1, Donors: s2, WinningTicket: int(winning)}
 		must(t, s.UpsertPrefixes([]Prefix{p}))
 		must(t, s.UpsertTickets([]Ticket{tk}))
 		must(t, s.UpsertBaskets([]Basket{bk}))

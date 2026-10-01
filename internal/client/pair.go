@@ -151,6 +151,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	var root struct {
 		Whoami string `json:"whoami"`
 		Name   string `json:"name"`
+		Event  string `json:"event"`
 	}
 	if !res.OK() || res.JSON(&root) != nil || root.Whoami != "TAM Server" {
 		httpx.WriteError(w, http.StatusBadGateway, fmt.Sprintf("%s did not answer as a TAM server", hostPort))
@@ -161,8 +162,16 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prev := h.settings()
+	mine, err := h.st.MirrorEvent()
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	// The same server, holding the same event: a server that names its event
+	// is the same only while it holds the event of this client's copy.
 	same := prev.RemoteURL() != "" &&
-		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name)
+		(prev.RemoteServer == req.Host && prev.RemotePort == req.Port || prev.RemoteName != "" && prev.RemoteName == name) &&
+		(root.Event == "" || mine == "" || root.Event == mine)
 	res, err = rc.Do(http.MethodPost, "/api/auth", map[string]string{"TAM-PW": req.Password}, map[string]string{"description": h.host})
 	if err != nil {
 		h.unreachableAt(w, hostPort, err)
@@ -191,7 +200,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 	// server's data in at any moment.
 	kept := ""
 	if !same {
-		kept = h.keepLocalData(name)
+		kept = h.keepLocalData(name, "before-pairing-")
 	}
 
 	// The settings and the queue change together, while no save is numbered
@@ -221,6 +230,14 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 			msg += fmt.Sprintf(" %s queued %s %s set aside: Settings lists them under could not be sent, to retry here or discard.",
 				plural(moved, "save"), from, wasWere(moved))
 		}
+		// A copy of another event goes (it is in the file kept above): the
+		// new server's event replaces it whole. A copy that names no event
+		// stays, to be pushed or replaced row by row.
+		if mine != "" {
+			if err := h.st.ClearCopy(); err != nil {
+				log.Printf("pair: setting the copy of the earlier event aside: %v", err)
+			}
+		}
 	}
 	h.sync.Reset()
 	h.sync.Kick()
@@ -234,7 +251,7 @@ func (h *handler) pair(w http.ResponseWriter, r *http.Request) {
 // client is lost, and Backup and Restore can load the file again or send
 // it to the server. It returns the sentence the pairing's message adds, or
 // "" when the client holds no data.
-func (h *handler) keepLocalData(server string) string {
+func (h *handler) keepLocalData(server, prefix string) string {
 	bf, err := h.st.Export()
 	if err != nil {
 		log.Printf("pair: keeping this client's data: %v", err)
@@ -243,7 +260,7 @@ func (h *handler) keepLocalData(server string) string {
 	if len(bf.Prefixes)+len(bf.Tickets)+len(bf.Baskets) == 0 {
 		return ""
 	}
-	name := "before-pairing-" + time.Now().Format("20060102-150405") + ".json"
+	name := prefix + time.Now().Format("20060102-150405") + ".json"
 	data, err := json.MarshalIndent(bf, "", "  ")
 	if err == nil {
 		err = os.WriteFile(filepath.Join(h.dataDir, name), data, 0o600)
@@ -255,6 +272,33 @@ func (h *handler) keepLocalData(server string) string {
 	}
 	log.Printf("pair: this client's own data (%s) saved to %s before pairing with %s", what, name, server)
 	return fmt.Sprintf(" This client's own data (%s) was saved to %s in its data folder first; Backup and Restore can load it again or send it to the server.", what, name)
+}
+
+// changeEvent sets this client's copy aside when its server holds another
+// event than the copy's (see sync's OnEventChange): the copy is kept in a
+// file in the data folder, the saves still waiting for the earlier event
+// go to the failed list (Settings can retry them into this event or discard
+// them), and the copy is emptied for the server's event, whose data the
+// syncer pulls next. Nothing of the earlier event reaches the server
+// unasked.
+func (h *handler) changeEvent(old, new string) error {
+	defer h.sync.Numbering()()
+	defer h.sync.Sending()()
+	s := h.settings()
+	if kept := h.keepLocalData(serverLabel(s), "before-event-"); kept != "" {
+		log.Printf("event:%s", kept)
+	}
+	moved, err := h.st.FailAllOutbox("made for an earlier event than the one " + serverLabel(s) + " holds now; retry to send it to this event")
+	if err != nil {
+		return err
+	}
+	if moved > 0 {
+		log.Printf("event: %s waiting for the earlier event set aside in the failed list", plural(moved, "save"))
+	}
+	if err := h.st.ClearCopy(); err != nil {
+		return err
+	}
+	return h.st.SetMirrorEvent(new)
 }
 
 // serverLabel names the server of the settings as the pages do.
@@ -348,6 +392,28 @@ func (h *handler) retryOutbox(w http.ResponseWriter, r *http.Request) {
 }
 
 // discardOutbox forgets the saves the server refused.
+// failedOutbox lists the saves in the failed list with why each is there,
+// oldest first, so the volunteer can decide between Retry and Discard: a
+// change another computer's newer value kept out names the record, the
+// field and both values.
+func (h *handler) failedOutbox(w http.ResponseWriter, r *http.Request) {
+	failed, err := h.st.ListFailed()
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	type entry struct {
+		Made   string `json:"made"`
+		Save   string `json:"save"`
+		Reason string `json:"reason"`
+	}
+	out := make([]entry, 0, len(failed))
+	for _, o := range failed {
+		out = append(out, entry{Made: o.CreatedAt.UTC().Format(time.RFC3339), Save: o.Method + " " + o.Path, Reason: o.LastError})
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
 func (h *handler) discardOutbox(w http.ResponseWriter, r *http.Request) {
 	var ignored json.RawMessage
 	if err := httpx.DecodeJSON(w, r, &ignored); err != nil {

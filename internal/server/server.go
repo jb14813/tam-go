@@ -344,10 +344,21 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 			h.presence.Seen(key, clientOf(r))
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+	ev, err := h.st.Event()
+	if err != nil {
+		httpx.WriteInternal(w, err)
+		return
+	}
+	doc := map[string]any{
 		"whoami": "TAM Server", "authenticated": authed, "healthy": true,
 		"name": h.info.Name, "version": h.info.Version,
-	})
+	}
+	// The event the server holds: a client whose copy is of another event
+	// sets that copy aside (see sync's event check).
+	if ev != nil {
+		doc["event"] = ev.Event
+	}
+	httpx.WriteJSON(w, http.StatusOK, doc)
 }
 
 // errOrder is a save without a sensible name and number (X-TAM-Client-Name,
@@ -525,15 +536,19 @@ func (h *handler) listPrefixes(w http.ResponseWriter, r *http.Request) {
 	respond(w, ps, err)
 }
 
+// The save routes write each form's saves field by field (see store's
+// saves) and answer with the rows as stored afterwards, in the order of the
+// saves: the client sees from them which changes were not made, because
+// another computer changed the field first, and writes them into its copy.
+
 func (h *handler) postPrefixes(w http.ResponseWriter, r *http.Request) {
-	ps, ok := decodeList(w, r, store.ValidatePrefixes)
+	saves, ok := decodeList(w, r, store.ValidatePrefixSaves)
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, ps, func(st *store.Store) error { return st.UpsertPrefixes(ps) }); !ok {
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, ps)
+	var stored []store.Prefix
+	saveRoute(h, w, r, saves, func(st *store.Store) (err error) { stored, err = st.SavePrefixes(saves); return err },
+		&stored, func(sv store.PrefixSave) (*store.Prefix, error) { return h.st.PrefixByName(sv.Prefix.Prefix) })
 }
 
 func (h *handler) deletePrefix(w http.ResponseWriter, r *http.Request) {
@@ -594,14 +609,13 @@ func (h *handler) ticketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postTickets(w http.ResponseWriter, r *http.Request) {
-	ts, ok := decodeList(w, r, store.ValidateTickets)
+	saves, ok := decodeList(w, r, store.ValidateTicketSaves)
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, ts, func(st *store.Store) error { return st.UpsertTickets(ts) }); !ok {
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, ts)
+	var stored []store.Ticket
+	saveRoute(h, w, r, saves, func(st *store.Store) (err error) { stored, err = st.SaveTickets(saves); return err },
+		&stored, func(sv store.TicketSave) (*store.Ticket, error) { return h.st.Ticket(sv.Prefix, sv.TID) })
 }
 
 func (h *handler) searchTickets(w http.ResponseWriter, r *http.Request) {
@@ -643,14 +657,13 @@ func (h *handler) basketRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postBaskets(w http.ResponseWriter, r *http.Request) {
-	bs, ok := decodeList(w, r, store.ValidateBaskets)
+	saves, ok := decodeList(w, r, store.ValidateBasketSaves)
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertBaskets(bs) }); !ok {
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, bs)
+	var stored []store.Basket
+	saveRoute(h, w, r, saves, func(st *store.Store) (err error) { stored, err = st.SaveBaskets(saves); return err },
+		&stored, func(sv store.BasketSave) (*store.Basket, error) { return h.st.Basket(sv.Prefix, sv.BID) })
 }
 
 // --- drawing ---
@@ -686,14 +699,41 @@ func (h *handler) drawingRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) postDrawing(w http.ResponseWriter, r *http.Request) {
-	bs, ok := decodeList(w, r, store.ValidateBaskets)
+	saves, ok := decodeList(w, r, store.ValidateDrawingSaves)
 	if !ok {
 		return
 	}
-	if _, ok := h.write(w, r, bs, func(st *store.Store) error { return st.UpsertWinning(bs) }); !ok {
+	var stored []store.Basket
+	saveRoute(h, w, r, saves, func(st *store.Store) (err error) { stored, err = st.SaveWinning(saves); return err },
+		&stored, func(sv store.DrawingSave) (*store.Basket, error) { return h.st.Basket(sv.Prefix, sv.BID) })
+}
+
+// saveRoute runs a save in its client's order (see write) and answers with
+// the rows as stored. A repeat of a save already applied answers with the
+// rows as they are now, read with current.
+func saveRoute[S any, R any](h *handler, w http.ResponseWriter, r *http.Request, saves []S, save func(*store.Store) error,
+	stored *[]R, current func(S) (*R, error)) {
+	stale, ok := h.write(w, r, saves, save)
+	if !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, bs)
+	if stale {
+		rows := make([]R, 0, len(saves))
+		for _, sv := range saves {
+			row, err := current(sv)
+			if err != nil {
+				httpx.WriteInternal(w, err)
+				return
+			}
+			if row == nil {
+				httpx.WriteError(w, http.StatusConflict, "a row of this save is gone from the server")
+				return
+			}
+			rows = append(rows, *row)
+		}
+		*stored = rows
+	}
+	httpx.WriteJSON(w, http.StatusOK, *stored)
 }
 
 // --- reports ---
@@ -720,6 +760,9 @@ func (h *handler) exportBackup(w http.ResponseWriter, r *http.Request) {
 	respond(w, bf, err)
 }
 
+// importBackup restores a backup file: its rows replace the server's. With
+// X-TAM-Merge: newer it merges a client's copy instead (Push), writing only
+// the rows newer than the server's (see store.MergeNewer).
 func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
 	var bf store.BackupFile
 	if err := httpx.DecodeJSON(w, r, &bf); err != nil {
@@ -728,6 +771,21 @@ func (h *handler) importBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.ValidateBackup(&bf); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if r.Header.Get("X-TAM-Merge") == "newer" {
+		res, err := h.st.MergeNewer(bf)
+		switch {
+		case errors.Is(err, store.ErrOtherEvent):
+			httpx.WriteError(w, http.StatusConflict, "This client's copy belongs to another event than the one this server holds; nothing was written.")
+		case err != nil:
+			httpx.WriteInternal(w, err)
+		default:
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{
+				"message": fmt.Sprintf("%d rows added and %d updated; %d were as new or newer on the server and stayed.", res.Added, res.Updated, res.Kept),
+				"added":   res.Added, "updated": res.Updated, "kept": res.Kept,
+			})
+		}
 		return
 	}
 	if err := h.st.Import(bf); err != nil {

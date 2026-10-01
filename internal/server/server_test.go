@@ -229,8 +229,12 @@ func TestRootReportsNameAndVersion(t *testing.T) {
 	if root["name"] != hostname || root["version"] != version.Version || root["whoami"] != "TAM Server" || root["healthy"] != true || root["authenticated"] != false {
 		t.Fatalf("root = %v", root)
 	}
-	if len(root) != 5 {
-		t.Fatalf("root has %d fields, want whoami, authenticated, healthy, name and version: %v", len(root), root)
+	ev, err := a.st.Event()
+	if err != nil || ev == nil || root["event"] != ev.Event || len(ev.Event) != 32 {
+		t.Fatalf("root names event %v, the server holds %+v (%v)", root["event"], ev, err)
+	}
+	if len(root) != 6 {
+		t.Fatalf("root has %d fields, want whoami, authenticated, healthy, name, version and event: %v", len(root), root)
 	}
 
 	named := newAPI(t, WithInfo(Info{Name: "front-desk", Version: "9.9.9"}))
