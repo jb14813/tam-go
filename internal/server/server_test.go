@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ type api struct {
 	st    *store.Store
 	sqldb *sql.DB
 	key   string
+	saves int64 // the number of the last save do numbered
 }
 
 func newAPI(t *testing.T, opts ...Option) *api {
@@ -81,9 +83,19 @@ func (l resetOnClose) Accept() (net.Conn, error) {
 }
 
 // do sends a request. body may be nil, a string (sent verbatim as JSON) or
-// any value (marshalled).
+// any value (marshalled). A keyed POST or DELETE without X-TAM-Save is
+// numbered as the next save of client "test", as tam-client numbers its
+// saves.
 func (a *api) do(method, path string, body any, headers map[string]string) (int, []byte) {
 	a.t.Helper()
+	if (method == "POST" || method == "DELETE") && headers["TAM-KEY"] != "" && headers["X-TAM-Save"] == "" {
+		a.saves++
+		numbered := map[string]string{"X-TAM-Client-Name": "test", "X-TAM-Save": strconv.FormatInt(a.saves, 10)}
+		for k, v := range headers {
+			numbered[k] = v
+		}
+		headers = numbered
+	}
 	var rdr io.Reader
 	if body != nil {
 		switch b := body.(type) {
@@ -366,13 +378,16 @@ func TestPrefixes(t *testing.T) {
 		t.Fatalf("delete without p: %d, want 400", code)
 	}
 
-	// The original accepted numeric strings and integral floats.
-	if code, _ = a.keyed("POST", "/api/prefixes", `[{"prefix":"S","color":"red","weight":"3"},{"prefix":"F","color":"red","weight":4.0}]`); code != 200 {
-		t.Fatalf("numeric string weight: %d", code)
+	// A weight is a JSON integer; a string or a fraction is refused and
+	// nothing of the batch is written.
+	for _, body := range []string{`[{"prefix":"S","color":"red","weight":"3"}]`, `[{"prefix":"S","color":"red","weight":3},{"prefix":"F","color":"red","weight":4.5}]`} {
+		if code, _ = a.keyed("POST", "/api/prefixes", body); code != 400 {
+			t.Fatalf("POST %s = %d, want 400", body, code)
+		}
 	}
 	_, body = a.keyed("GET", "/api/prefixes", nil)
-	if ps = decode[[]store.Prefix](t, body); len(ps) != 3 {
-		t.Fatalf("after numeric string post: %v", ps)
+	if ps = decode[[]store.Prefix](t, body); len(ps) != 1 {
+		t.Fatalf("after refused posts: %v", ps)
 	}
 	// A JSON null body is an empty list, never a null answer.
 	if code, body = a.keyed("POST", "/api/prefixes", `null`); code != 200 || strings.TrimSpace(string(body)) != "[]" {
@@ -394,8 +409,8 @@ func TestErrorsAreJSON(t *testing.T) {
 	if code, body := a.keyed("POST", "/api/tickets", `[{"prefix":"A","first_name":"no id"}]`); code != 400 || !strings.Contains(string(body), "t_id is required") {
 		t.Fatalf("missing t_id = %d %s", code, body)
 	}
-	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":"12","pref":"CALL"}]`); code != 200 {
-		t.Fatalf("string t_id from the original client = %d, want 200", code)
+	if code, _ := a.keyed("POST", "/api/tickets", `[{"prefix":"A","t_id":"12","pref":"CALL"}]`); code != 400 {
+		t.Fatalf("a t_id sent as a string = %d, want 400", code)
 	}
 }
 
@@ -596,23 +611,6 @@ func TestOversizedBodyIs413(t *testing.T) {
 // TestKeyAcceptedUnderTheOriginalClientsSpelling: the original client sends
 // the key as TAM_KEY on its server-backup download, so that spelling counts
 // too, on the data routes and on the root route's authenticated flag.
-func TestKeyAcceptedUnderTheOriginalClientsSpelling(t *testing.T) {
-	a := newAPI(t)
-	underscore := map[string]string{"TAM_KEY": a.key}
-	if code, body := a.do("GET", "/api/backuprestore", nil, underscore); code != 200 {
-		t.Fatalf("backup with TAM_KEY = %d %s", code, body)
-	}
-	_, body := a.do("GET", "/api", nil, underscore)
-	if root := decode[map[string]any](t, body); root["authenticated"] != true {
-		t.Fatalf("root with TAM_KEY = %s", body)
-	}
-	if code, _ := a.do("GET", "/api/backuprestore", nil, map[string]string{"TAM_KEY": "WRONG"}); code != 401 {
-		t.Fatalf("a wrong TAM_KEY must still be refused, got %d", code)
-	}
-}
-
-// TestRootReportsTheBuildVersion: the version comes from the version
-// package, which the release build stamps.
 func TestRootReportsTheBuildVersion(t *testing.T) {
 	old := version.Version
 	version.Version = "9.9.9-test"

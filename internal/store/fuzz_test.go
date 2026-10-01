@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -45,14 +46,15 @@ func FuzzModelsDecode(f *testing.F) {
 		decodeRoundTrip[Prefix](t, data)
 		decodeRoundTrip[Int](t, data)
 
+		// Only a JSON integer, or null, is a whole number.
 		var n Int
-		if json.Unmarshal(data, &n) != nil || !isJSONNumber(data) {
+		if json.Unmarshal(data, &n) != nil {
 			return
 		}
-		quoted, _ := json.Marshal(strings.TrimSpace(string(data)))
-		var s Int
-		if err := json.Unmarshal(quoted, &s); err != nil || s != n {
-			t.Fatalf("the number %s decodes to %d, the string %s to %d (%v)", data, n, quoted, s, err)
+		if text := strings.TrimSpace(string(data)); text != "null" {
+			if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+				t.Fatalf("%q decoded as the whole number %d", data, n)
+			}
 		}
 	})
 }
@@ -76,18 +78,6 @@ func decodeRoundTrip[T comparable](t *testing.T, data []byte) {
 	if again != v {
 		t.Fatalf("%s decoded to the %T %+v, which comes back as %+v through %s", data, v, v, again, out)
 	}
-}
-
-// isJSONNumber reports whether data is one JSON number.
-func isJSONNumber(data []byte) bool {
-	var v any
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.UseNumber()
-	if dec.Decode(&v) != nil {
-		return false
-	}
-	_, ok := v.(json.Number)
-	return ok && !dec.More()
 }
 
 // FuzzSearchTickets: a search returns exactly the tickets whose three

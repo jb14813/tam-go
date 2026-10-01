@@ -22,8 +22,8 @@ type Client struct {
 }
 
 // New returns a client for baseURL (for example https://tam.lan:8443). When
-// insecureTLS is set the server certificate is not verified, which matches
-// the original's policy for the self-signed Caddy certificate.
+// insecureTLS is set the server certificate is not verified: a server typed
+// into the Remote Mode fields by hand has no certificate pinned by pairing.
 //
 // Connecting is given five seconds, so an unreachable server fails fast; a
 // whole request is given thirty, so a large backup push over slow Wi-Fi is
@@ -34,7 +34,7 @@ func New(baseURL, key string, insecureTLS bool) *Client {
 	tr.TLSHandshakeTimeout = 5 * time.Second
 	tr.ResponseHeaderTimeout = 10 * time.Second
 	if insecureTLS {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // mirrors the original deployment
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // no pinned certificate to check against
 	}
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"),

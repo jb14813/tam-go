@@ -70,8 +70,8 @@ func TestSavesFromAClientApplyInOrder(t *testing.T) {
 	if code, _ := a.orderedSave("L1", "8", "eighth"); code != 200 || a.phone() != "eighth" {
 		t.Fatalf("a newer save = %d, the ticket reads %q", code, a.phone())
 	}
-	if code, _ := a.orderedSave("", "", "unnumbered"); code != 200 || a.phone() != "unnumbered" {
-		t.Fatalf("an unnumbered save = %d, the ticket reads %q", code, a.phone())
+	if code, _ := a.orderedSave("", "", "unnumbered"); code != 400 || a.phone() != "eighth" {
+		t.Fatalf("an unnumbered save = %d, the ticket reads %q; want 400 and eighth", code, a.phone())
 	}
 	for _, bad := range []string{"0", "-1", "x"} {
 		if code, _ := a.orderedSave("L1", bad, "bad"); code != 400 {

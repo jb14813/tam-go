@@ -119,8 +119,8 @@ type handler struct {
 // that pw accepts, and answers 503 while no password is set. Wrong passwords
 // count against the address they come from: after guard.MaxFailures of them
 // it has to wait (429). Unknown paths and wrong methods under /api answer
-// {"detail": ...} like the original. Every request with a valid key is
-// recorded for the admin page; see WithPresence.
+// {"detail": ...}. Every request with a valid key is recorded for the admin
+// page; see WithPresence.
 func NewHandler(st *store.Store, pw Password, opts ...Option) http.Handler {
 	hostname, _ := os.Hostname()
 	h := &handler{
@@ -231,13 +231,9 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
-// keyOf returns the request's access key. The original client sends it as
-// TAM_KEY on its server-backup download, so that spelling counts too.
+// keyOf returns the request's access key, from the TAM-KEY header.
 func keyOf(r *http.Request) string {
-	if key := r.Header.Get("TAM-KEY"); key != "" {
-		return key
-	}
-	return r.Header.Get("TAM_KEY")
+	return r.Header.Get("TAM-KEY")
 }
 
 // clientOf names the program behind a request: the X-TAM-Client header
@@ -354,8 +350,8 @@ func (h *handler) root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errOrder is a save whose name and number (X-TAM-Client-Name, X-TAM-Save) do
-// not make sense.
+// errOrder is a save without a sensible name and number (X-TAM-Client-Name,
+// X-TAM-Save).
 var errOrder = errors.New("X-TAM-Client-Name must name the client, in at most 64 characters, and X-TAM-Save number its save, above 0")
 
 // behindError is a numbered save older than the last one applied from its
@@ -366,20 +362,18 @@ func (e behindError) Error() string {
 	return fmt.Sprintf("save %d of this client is older than its save %d, which the server has applied; send it again with a number above %d", e.n, e.last, e.last)
 }
 
-// ordered runs a save in the order the client made it when the request
-// numbers it, as tam-client does (see store.InOrder). A repeat of the last
-// save applied from that client is not applied again, and the answer says
-// so with X-TAM-Stale; the client takes it as done. An older save is not
-// applied either, and is answered 409 with the last number applied
-// (X-TAM-Last-Save, and last_save in the body), so a client whose numbers
-// went back numbers it again and resends it. Saves without numbers, as the
-// original client sends them, apply as they come. content is the save as
-// decoded (nil when the path says it all), for the save's digest.
+// ordered runs a save in the order the client made it: every save names
+// its client and number (X-TAM-Client-Name, X-TAM-Save), as tam-client sends
+// them (see store.InOrder). A repeat of the last save applied from that
+// client is not applied again, and the answer says so with X-TAM-Stale; the
+// client takes it as done. An older save is not applied either, and is
+// answered 409 with the last number applied (X-TAM-Last-Save, and last_save
+// in the body), so a client whose numbers went back numbers it again and
+// resends it. A save without a name and number is refused (400). content is
+// the save as decoded (nil when the path says it all), for the save's
+// digest.
 func (h *handler) ordered(w http.ResponseWriter, r *http.Request, content any, save func(*store.Store) error) (stale bool, err error) {
 	client, number := r.Header.Get("X-TAM-Client-Name"), r.Header.Get("X-TAM-Save")
-	if client == "" && number == "" {
-		return false, save(h.st)
-	}
 	n, perr := strconv.ParseInt(number, 10, 64)
 	if client == "" || len(client) > 64 || perr != nil || n <= 0 {
 		return false, errOrder

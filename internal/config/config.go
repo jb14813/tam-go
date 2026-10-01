@@ -16,8 +16,7 @@ import (
 	"time"
 )
 
-// Settings is the settings.json document. The JSON names are shared with
-// the original Ticket Auction Manager.
+// Settings is the settings.json document.
 type Settings struct {
 	RemoteServer  string `json:"remote_server"`
 	RemoteKey     string `json:"remote_key"`
@@ -27,9 +26,8 @@ type Settings struct {
 	VenueName     string `json:"venue_name"`
 	DisableAttrib bool   `json:"disable_attrib"`
 
-	// Added by tam-go for pairing: the server's display name and, over
-	// TLS, the SHA-256 fingerprint of the certificate seen when pairing.
-	// The original client never reads them.
+	// Set by pairing: the server's display name and, over TLS, the
+	// SHA-256 fingerprint of the certificate seen when pairing.
 	RemoteName        string `json:"remote_name"`
 	RemoteFingerprint string `json:"remote_fingerprint"`
 }

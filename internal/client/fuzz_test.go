@@ -748,24 +748,21 @@ func decoded(s string) string {
 	return string([]rune(s))
 }
 
-// jsonID spells an id as the original's clients do: form 0 a number, 1 a
-// string, 2 a float, 3 a string padded with spaces. It returns the spelling,
-// the id a decoder reads from it, and whether the decoder takes it at all.
+// jsonID spells an id: form 0 a JSON integer, 1 a string, 2 a float, 3 a
+// string padded with spaces. It returns the spelling, the id a decoder
+// reads from it, and whether the decoder takes it at all: only an integer
+// from -(2^53-1) to 2^53-1, the whole numbers a browser holds exactly.
 func jsonID(id int64, form uint8) (spelled string, value int64, ok bool) {
 	digits := strconv.FormatInt(id, 10)
 	switch form % 4 {
 	case 1:
-		return `"` + digits + `"`, id, true
+		return `"` + digits + `"`, 0, false
 	case 2:
-		// A float holds whole numbers exactly up to 2^53. The decoder
-		// refuses larger ones, and a spelling that rounds onto 2^53 reads
-		// as the rounded number, as the original's pydantic models read it.
-		f := float64(id)
-		return digits + ".0", int64(f), math.Abs(f) <= 1<<53
+		return digits + ".0", 0, false
 	case 3:
-		return `" ` + digits + ` "`, id, true
+		return `" ` + digits + ` "`, 0, false
 	}
-	return digits, id, true
+	return digits, id, id >= -(1<<53-1) && id <= 1<<53-1
 }
 
 // lengthen repeats s until it is at least n bytes long, so the fuzzer

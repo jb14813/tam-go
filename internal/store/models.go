@@ -4,41 +4,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 )
 
-// The JSON names below are the wire format shared with the original
-// Ticket Auction Manager; do not rename them.
-
-// Int decodes every spelling of a whole number the original accepted:
-// 4, 4.0, "4" and null (zero). The original client sends ids from URL
-// parameters as strings, so this keeps it compatible with tam-server.
+// Int decodes a whole number sent as a JSON integer. null is zero, which is
+// what the pages send for an empty number box. Strings and fractions are
+// refused, and so is anything beyond what a browser holds exactly (2^53-1).
 type Int int
+
+// maxExact is the largest whole number a browser's numbers hold exactly.
+const maxExact = 1<<53 - 1
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (n *Int) UnmarshalJSON(b []byte) error {
 	s := strings.TrimSpace(string(b))
 	if s == "null" {
+		*n = 0
 		return nil
 	}
-	if strings.HasPrefix(s, `"`) {
-		var str string
-		if err := json.Unmarshal(b, &str); err != nil {
-			return err
-		}
-		s = strings.TrimSpace(str)
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || i > maxExact || i < -maxExact {
+		return fmt.Errorf("%s is not a whole number from %d to %d", s, -maxExact, maxExact)
 	}
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-		*n = Int(i)
-		return nil
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f != math.Trunc(f) || math.Abs(f) > 1<<53 {
-		return fmt.Errorf("%q is not a whole number", s)
-	}
-	*n = Int(f)
+	*n = Int(i)
 	return nil
 }
 
@@ -50,7 +39,7 @@ type Prefix struct {
 	Weight int    `json:"weight"`
 }
 
-// UnmarshalJSON accepts the numeric spellings of Int for weight.
+// UnmarshalJSON reads weight as an Int.
 func (p *Prefix) UnmarshalJSON(b []byte) error {
 	var raw struct {
 		Prefix string `json:"prefix"`
@@ -74,7 +63,7 @@ type Ticket struct {
 	Pref        string `json:"pref"`
 }
 
-// UnmarshalJSON requires t_id and accepts the numeric spellings of Int.
+// UnmarshalJSON requires t_id and reads it as an Int.
 func (t *Ticket) UnmarshalJSON(b []byte) error {
 	var raw struct {
 		Prefix      string `json:"prefix"`
@@ -103,7 +92,7 @@ type Basket struct {
 	WinningTicket int    `json:"winning_ticket"`
 }
 
-// UnmarshalJSON requires b_id and accepts the numeric spellings of Int.
+// UnmarshalJSON requires b_id and reads the numbers as Ints.
 func (bk *Basket) UnmarshalJSON(b []byte) error {
 	var raw struct {
 		Prefix        string `json:"prefix"`
@@ -170,8 +159,7 @@ type ReportCountLine struct {
 // AuthKey is a server access key. LastSeen is the time of the key's last
 // authenticated request and LastUpdate that of its last accepted write, in
 // RFC 3339, or "" when that never happened or the database has no
-// auth_key_activity table; both are left out of the JSON when empty so the
-// wire format stays the original's.
+// auth_key_activity table; both are left out of the JSON when empty.
 type AuthKey struct {
 	AuthKey     string `json:"auth_key"`
 	Description string `json:"description"`
@@ -180,7 +168,7 @@ type AuthKey struct {
 }
 
 // BackupFile is the backup and restore document. Every list is always
-// present on the wire, which the original server requires.
+// present on the wire.
 type BackupFile struct {
 	Prefixes []Prefix `json:"prefixes"`
 	Baskets  []Basket `json:"baskets"`
