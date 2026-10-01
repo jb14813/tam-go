@@ -382,3 +382,80 @@ func TestReportsFromTheCopySaySo(t *testing.T) {
 		t.Fatalf("a report while a save waits says X-TAM-Copy %q, want 1", got)
 	}
 }
+
+// Two saves of one ticket made while the server was away replay in order.
+// The server's answer to the first must not put its older value back into
+// the client's copy while the second is still on its way: a sheet opened
+// meanwhile shows the later value.
+func TestAReplayedAnswerDoesNotUndoALaterQueuedSave(t *testing.T) {
+	f := newFixture(t)
+	rst := newServerStore(t)
+	inner := server.NewHandler(rst, server.FixedPassword("secret"), server.WithInfo(server.Info{Name: "front-desk"}))
+	var (
+		mu       sync.Mutex
+		busy     bool
+		posts    int
+		held     = make(chan struct{})
+		release  = make(chan struct{})
+		holdOnce sync.Once
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		isBusy := busy
+		if r.Method == http.MethodPost && r.URL.Path == "/api/tickets" && !isBusy {
+			posts++
+			if posts == 2 {
+				mu.Unlock()
+				holdOnce.Do(func() { close(held) })
+				<-release
+				inner.ServeHTTP(w, r)
+				return
+			}
+		}
+		mu.Unlock()
+		if isBusy && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	f.pairTo(ts.URL)
+	f.h.sync.Tick()
+	mu.Lock()
+	busy = true
+	mu.Unlock()
+
+	first := loadedAnn
+	first.PhoneNumber = "555-0101"
+	if code, body := f.do("POST", "/api/tickets", ticketSaved(first, nil), nil); code != 200 {
+		t.Fatalf("first save = %d %s", code, body)
+	}
+	second := first
+	second.PhoneNumber = "555-0202"
+	if code, body := f.do("POST", "/api/tickets", ticketSaved(second, &first), nil); code != 200 {
+		t.Fatalf("second save = %d %s", code, body)
+	}
+	mu.Lock()
+	busy = false
+	mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.h.sync.Reset()
+		f.h.sync.Tick()
+	}()
+	<-held // the first save was answered; the second is on its way
+	if got := phoneOf(t, f.st); got != "555-0202" {
+		t.Errorf("with the second save still on its way the client's copy shows %q, want the later 555-0202", got)
+	}
+	close(release)
+	<-done
+	if got := phoneOf(t, rst); got != "555-0202" {
+		t.Fatalf("the server ended with %q", got)
+	}
+	if got := phoneOf(t, f.st); got != "555-0202" {
+		t.Fatalf("the client's copy ended with %q", got)
+	}
+}

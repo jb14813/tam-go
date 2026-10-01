@@ -604,15 +604,28 @@ type SaveResult struct {
 	Again     []byte
 	Kept      []byte
 	write     func(*Store) error
+	writeOwn  func(*Store) error
 }
 
 // Write puts the stored rows into a client's copy, as stored, order
-// numbers included.
+// numbers included: for a save sent directly, which nothing saved since can
+// have overtaken.
 func (r SaveResult) Write(s *Store) error {
 	if r.write == nil {
 		return nil
 	}
 	return r.write(s)
+}
+
+// WriteUnlessNewer is Write for a save replayed from the queue: a row the
+// copy holds differently from what this save sent was saved again here
+// since, by a save still queued behind it, and stays as it is until that
+// one is answered.
+func (r SaveResult) WriteUnlessNewer(s *Store) error {
+	if r.writeOwn == nil {
+		return nil
+	}
+	return r.writeOwn(s)
 }
 
 // SavePath reports whether a save to path, by method, is one of the forms'
@@ -640,35 +653,35 @@ func ResultOf(path string, request, answer []byte) (SaveResult, error) {
 			func(r Ticket, base Ticket) TicketSave {
 				return TicketSave{Ticket: r, Base: &TicketValues{FirstName: base.FirstName, LastName: base.LastName, PhoneNumber: base.PhoneNumber, Pref: base.Pref}}
 			},
-			(*Store).UpsertTickets)
+			func(s *Store, t Ticket) (*Ticket, error) { return s.Ticket(t.Prefix, t.TID) }, (*Store).UpsertTickets)
 	case "/api/baskets":
 		return result(request, answer, func(b BasketSave) Basket { return b.Basket }, BasketSave.base,
 			func(b Basket) (string, int) { return b.Prefix, b.BID }, "basket", basketFields,
 			func(r Basket, base Basket) BasketSave {
 				return BasketSave{Basket: r, Base: &BasketValues{Description: base.Description, Donors: base.Donors}}
 			},
-			(*Store).UpsertBaskets)
+			func(s *Store, b Basket) (*Basket, error) { return s.Basket(b.Prefix, b.BID) }, (*Store).UpsertBasketDescriptions)
 	case "/api/drawing":
 		return result(request, answer, func(d DrawingSave) Basket { return d.Basket }, DrawingSave.base,
 			func(b Basket) (string, int) { return b.Prefix, b.BID }, "drawing", drawingFields,
 			func(r Basket, base Basket) DrawingSave {
 				return DrawingSave{Basket: r, Base: &DrawingValues{WinningTicket: Int(base.WinningTicket)}}
 			},
-			(*Store).UpsertWinning)
+			func(s *Store, b Basket) (*Basket, error) { return s.Basket(b.Prefix, b.BID) }, (*Store).UpsertWinning)
 	case "/api/prefixes":
 		return result(request, answer, func(p PrefixSave) Prefix { return p.Prefix }, PrefixSave.base,
 			func(p Prefix) (string, int) { return p.Prefix, 0 }, "prefix", prefixFields,
 			func(r Prefix, base Prefix) PrefixSave {
 				return PrefixSave{Prefix: r, Base: &PrefixValues{Color: base.Color, Weight: Int(base.Weight)}}
 			},
-			(*Store).UpsertPrefixes)
+			func(s *Store, p Prefix) (*Prefix, error) { return s.PrefixByName(p.Prefix) }, (*Store).UpsertPrefixes)
 	}
 	return SaveResult{}, fmt.Errorf("no save is sent to %s", path)
 }
 
 // result is ResultOf for one kind of row: S the save, R the row.
 func result[S any, R any](request, answer []byte, row func(S) R, baseOf func(S) (R, bool), key func(R) (string, int),
-	kind string, fields []field[R], resave func(row R, base R) S, write func(*Store, []R) error) (SaveResult, error) {
+	kind string, fields []field[R], resave func(row R, base R) S, load func(*Store, R) (*R, error), write func(*Store, []R) error) (SaveResult, error) {
 	var saves []S
 	if err := json.Unmarshal(request, &saves); err != nil {
 		return SaveResult{}, fmt.Errorf("read the save: %w", err)
@@ -707,5 +720,30 @@ func result[S any, R any](request, answer []byte, row func(S) R, baseOf func(S) 
 		}
 	}
 	res.write = func(s *Store) error { return write(s, stored) }
+	res.writeOwn = func(s *Store) error {
+		var rows []R
+		for i, sv := range saves {
+			mine := row(sv)
+			cur, err := load(s, mine)
+			if err != nil {
+				return err
+			}
+			if cur != nil && !sameFields(fields, *cur, mine) {
+				continue
+			}
+			rows = append(rows, stored[i])
+		}
+		return write(s, rows)
+	}
 	return res, nil
+}
+
+// sameFields reports whether a and b hold the same value in every field.
+func sameFields[R any](fields []field[R], a, b R) bool {
+	for _, f := range fields {
+		if f.text(a) != f.text(b) {
+			return false
+		}
+	}
+	return true
 }

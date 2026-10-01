@@ -72,6 +72,18 @@ func (s *Store) UpsertBaskets(bs []Basket) error {
 	})
 }
 
+// UpsertBasketDescriptions writes the description and donors of baskets,
+// with their order number, and whole baskets that do not exist yet: what
+// the server answered for the Baskets form, into a client's copy, leaving a
+// winning ticket the copy holds alone.
+func (s *Store) UpsertBasketDescriptions(bs []Basket) error {
+	return s.tx(func(tx *sql.Tx) error {
+		return execEach(tx, `INSERT INTO baskets (prefix, b_id, description, donors, winning_ticket, rev, win_rev) VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (prefix, b_id) DO UPDATE SET description = EXCLUDED.description, donors = EXCLUDED.donors, rev = EXCLUDED.rev`,
+			len(bs), func(i int) []any { return basketArgs(bs[i]) })
+	})
+}
+
 // UpsertWinning writes the winning ticket of each basket, with its order
 // number, creating the basket when it does not exist yet: what the server
 // answered for the drawing, into a client's copy.

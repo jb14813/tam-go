@@ -609,7 +609,7 @@ func (s *Syncer) replayOne(rc *remote.Client) (took, ok bool) {
 			}
 			reason = strings.Join(reasons, "; ")
 		}
-		if err := s.st.FinishOutbox(o.ID, result.Write, result.Again, reason); err != nil {
+		if err := s.st.FinishOutbox(o.ID, result.WriteUnlessNewer, result.Again, reason); err != nil {
 			log.Printf("outbox: %v", err)
 			return false, false
 		}
