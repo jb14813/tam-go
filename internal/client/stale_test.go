@@ -459,3 +459,74 @@ func TestAReplayedAnswerDoesNotUndoALaterQueuedSave(t *testing.T) {
 		t.Fatalf("the client's copy ended with %q", got)
 	}
 }
+
+// A copy is emptied only once it is in a file: when the file cannot be
+// written (a full disk, a folder gone), the client changes nothing, keeps
+// its queue and its copy, and tries again; once the file is written the
+// change goes ahead.
+func TestAnEventChangeKeepsTheCopyWhenItCannotBeSaved(t *testing.T) {
+	f, ss := pairedWithAnn(t)
+	ss.set("busy")
+	if code, body := f.do("POST", "/api/tickets", []store.TicketSave{{Ticket: store.Ticket{Prefix: "A", TID: 2, FirstName: "Queued", Pref: "CALL"}}}, nil); code != 200 {
+		t.Fatalf("queued save = %d %s", code, body)
+	}
+	before, err := f.st.MirrorEvent()
+	if err != nil || before == "" {
+		t.Fatalf("the copy's event = %q, %v", before, err)
+	}
+	fresh := ss.replaceKeeping(t, f.h.settings().RemoteKey)
+	ss.set("")
+	dataDir := f.h.dataDir
+	f.h.dataDir = filepath.Join(dataDir, "gone", "away")
+	f.h.sync.Reset()
+	f.h.sync.Tick()
+	f.h.sync.Tick()
+	if got, _ := f.st.Ticket("A", 1); got == nil {
+		t.Fatal("the copy was emptied although it could not be saved to a file")
+	}
+	if p, fl := pending(t, f.st); p != 1 || fl != 0 {
+		t.Fatalf("pending %d failed %d, want the queue left as it was", p, fl)
+	}
+	if mine, _ := f.st.MirrorEvent(); mine != before {
+		t.Fatalf("the copy's event changed to %q without its file", mine)
+	}
+	if got, _ := fresh.Ticket("A", 2); got != nil {
+		t.Fatalf("the other event's server got the queued save %+v", got)
+	}
+
+	f.h.dataDir = dataDir
+	f.h.sync.Tick()
+	f.h.sync.Tick()
+	if got, _ := f.st.Ticket("A", 1); got != nil {
+		t.Fatalf("once the file could be written the copy still holds %+v", got)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dataDir, "before-event-*.json")); len(files) != 1 {
+		t.Fatalf("kept files = %v", files)
+	}
+}
+
+// Pairing with a server of another event empties this client's copy, so it
+// does not pair while the copy cannot be saved to a file first.
+func TestPairingWithAnotherEventKeepsTheCopyWhenItCannotBeSaved(t *testing.T) {
+	f, ss := pairedWithAnn(t)
+	f.h.sync.Tick()
+	ss.replace(t)
+	dataDir := f.h.dataDir
+	f.h.dataDir = filepath.Join(dataDir, "gone", "away")
+	code, body := f.do("POST", "/api/pair", map[string]any{"host": "127.0.0.1", "port": strings.TrimPrefix(ss.ts.URL, "http://127.0.0.1:"), "password": "secret"}, nil)
+	if code != 500 || !strings.Contains(string(body), "did not pair") {
+		t.Fatalf("pairing without a place for the file = %d %s, want 500", code, body)
+	}
+	if got, _ := f.st.Ticket("A", 1); got == nil {
+		t.Fatal("the copy was emptied although it could not be saved to a file")
+	}
+	keys, err := ss.st().ListKeys()
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("the refused pairing left keys on the server: %+v (%v)", keys, err)
+	}
+	f.h.dataDir = dataDir
+	f.pairTo(ss.ts.URL)
+	if got, _ := f.st.Ticket("A", 1); got != nil {
+		t.Fatalf("after pairing with the file written the copy still holds %+v", got)
+	}
+}
