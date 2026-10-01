@@ -334,8 +334,28 @@ func TestReports(t *testing.T) {
 	if got["A"].TotalBuys != 3 || got["A"].UniqueBuyers != 2 || got["B"].TotalBuys != 1 {
 		t.Fatalf("ReportCounts = %v", counts)
 	}
-	if got["Total"].TotalBuys != 4 || got["Total"].UniqueBuyers != 3 {
+	if got["Total"].TotalBuys != 4 || got["Total"].UniqueBuyers != 3 || !got["Total"].IsTotal {
 		t.Fatalf("ReportCounts total = %v", got["Total"])
+	}
+}
+
+// A buyer is a name and phone number together, not their letters run
+// into one text; a prefix named Total is a row of its own.
+func TestCountsTellBuyersAndTheTotalApart(t *testing.T) {
+	s := newTestStore(t)
+	must(t, s.UpsertTickets([]Ticket{
+		{Prefix: "Total", TID: 1, FirstName: "Jo", LastName: "Ann", PhoneNumber: "5", Pref: "CALL"},
+		{Prefix: "Total", TID: 2, FirstName: "Joa", LastName: "nn", PhoneNumber: "5", Pref: "CALL"},
+		{Prefix: "Total", TID: 3, FirstName: "Jo", LastName: "Ann", PhoneNumber: "5", Pref: "CALL"},
+	}))
+	counts, err := s.ReportCounts()
+	must(t, err)
+	want := []ReportCountLine{
+		{Prefix: "Total", UniqueBuyers: 2, TotalBuys: 3},
+		{Prefix: "Total", IsTotal: true, UniqueBuyers: 2, TotalBuys: 3},
+	}
+	if !reflect.DeepEqual(counts, want) {
+		t.Fatalf("counts = %+v, want %+v", counts, want)
 	}
 }
 

@@ -180,10 +180,11 @@ type ReportByBasketLine struct {
 	Pref          string `json:"pref"`
 }
 
-// ReportCountLine is one row of the ticket counts report. The last row has
-// the prefix "Total".
+// ReportCountLine is one row of the ticket counts report. The last row is
+// the total over every prefix: IsTotal, with the prefix "Total".
 type ReportCountLine struct {
 	Prefix       string `json:"prefix"`
+	IsTotal      bool   `json:"is_total"`
 	UniqueBuyers int    `json:"unique_buyers"`
 	TotalBuys    int    `json:"total_buys"`
 }

@@ -23,9 +23,11 @@
 		}
 		if (!alive) return;
 		if (res.ok) {
+			// The total row is keyed apart: a prefix may be named Total.
+			const key = (c) => (c.is_total ? '\u0000total' : c.prefix);
 			prefixes.forEach((p) => (rtnData[p.prefix] = { ...p }));
 			const resData = await res.json();
-			resData.forEach((c) => (rtnData[c.prefix] = { ...rtnData[c.prefix], ...c }));
+			resData.forEach((c) => (rtnData[key(c)] = { ...rtnData[key(c)], ...c, key: key(c) }));
 			tableData = [...Object.values(rtnData)];
 			const now = new Date();
 			lastRefreshed = now.toLocaleString();
@@ -64,7 +66,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each tableData as line (line.prefix)}
+			{#each tableData as line (line.key ?? line.prefix)}
 				<tr class={tS[line.color] || ''}>
 					<td class="border p-0.5">{line.prefix}</td>
 					<td class="border p-0.5">{line.unique_buyers || 0}</td>
