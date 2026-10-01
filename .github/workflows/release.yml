@@ -1,9 +1,9 @@
 name: release
 
-# A pushed version tag (1.2.3, v1.2.3, 1.2.3-rc1) runs the tests, builds
-# every package with build.sh and attaches them, with a SHA256SUMS file, to
-# a GitHub release of that tag; a tag with a hyphen is marked as a
-# pre-release. The version in the file names and the programs is the tag
+# A pushed version tag (1.2.3, v1.2.3, 1.2.3-rc1, 1.2.3rc1) runs the tests,
+# builds every package with build.sh and attaches them, with a SHA256SUMS
+# file, to a GitHub release of that tag; a tag with a hyphen, or letters
+# after its numbers, is marked as a pre-release. The version in the file names and the programs is the tag
 # without a leading v.
 on:
   push:
@@ -67,7 +67,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pre=""
-          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          case "$GITHUB_REF_NAME" in *-* | *[0-9][a-z]*) pre="--prerelease" ;; esac
           version="$GITHUB_REF_NAME"
           case "$version" in v[0-9]*.[0-9]*) version="${version#v}" ;; esac
           # The description: docs/release-notes.md with the version (as in the

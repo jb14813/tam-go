@@ -1,4 +1,4 @@
-Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-person benefit auction. This is the Go version: one self-contained program per machine, no runtime to install and no container needed. Each client at the event runs **tam-client**, the web app it opens in the browser. One machine runs **tam-server**, the shared database the clients pair with; a client keeps working when the server is out of reach and catches up when it is back, and the server's admin page lists every client, whether it is connected, and when it last saved. The full manual is the [README at this version](https://github.com/{REPO}/blob/{TAG}/README.md).
+Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-person benefit auction. This is the Go version: one self-contained program per machine, no runtime to install and no container needed. Each client at the event runs **tam-client**, the web app it opens in the browser. One machine runs **tam-server**, the shared database the clients pair with; a client keeps working when the server is out of reach and catches up when it is back, a change made on an older copy never overwrites what another client saved since, and the server's admin page lists every client, whether it is connected, and when it last saved. The full manual is the [README at this version](https://github.com/{REPO}/blob/{TAG}/README.md).
 
 ## Which file to download
 
@@ -20,7 +20,7 @@ Ticket Auction Manager is the ticket, basket and drawing bookkeeping for an in-p
 
 ## Upgrading
 
-Keep the existing Go data folder. Upgrade the Go server and clients together when moving to the native-only protocol; clients retain pending saves while their server is unsupported.
+The data stays where it is. Upgrade the server and the clients of an event together: an earlier client still saves, but only an updated one keeps another client's newer value from being overwritten and sees what was kept out.
 
 - Windows, macOS, or a program run by hand: stop it, replace the file with the new one, and start it again.
 - `.deb` or `.rpm`: install the new package the same way as the first one. A running service restarts with the new program, and a service you turned off stays off.
@@ -33,9 +33,9 @@ Upgrading from 1.0.0-rc1 on Linux:
 - rc1's `install.sh` put the units into `/etc/systemd/system`. The new one installs them into `/usr/local/lib/systemd/system` and removes the old copies; a `TAM_PWD` line uncommented in the old unit moves to `/etc/default/tam-server`. An old unit with other changes stays in effect, and `install.sh` says how to move them.
 - The Linux client service now listens on `localhost:3080`, this computer only, like the other systems; the README (Deployment, Linux) shows the drop-in that opens it to the network again.
 
-## Native backups
+## Switching from the original (Linux, Docker) version
 
-This release supports the Go client, Go server and Go-native event backups. The original app's three-list backups and wire protocol are no longer supported. Native backups preserve component ownership, accepted history and unresolved differences. Whole data-folder backups additionally preserve settings, keys and pending queues.
+The data files open as they are: `tam-remote.db` for the server, `tam-local.db` and `settings.json` for the client. Point `TAM_DATA_DIR` at the old data folder (the `/data` of the old containers) or copy those files into the program's `data` folder, and start it; a backup file from the original restores too. The original programs do not talk to these, so switch the server and every client of an event together.
 
 ## Good to know
 
