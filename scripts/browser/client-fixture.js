@@ -9,11 +9,8 @@ export { expect };
 
 export const test = base.extend({
   client: [async ({}, use) => {
-    if (process.platform !== 'linux') {
-      throw new Error('Run these tests on Linux or in a Linux container; they start a real TAM client.');
-    }
     if (!process.env.TAM_CLIENT_BIN) {
-      throw new Error('Set TAM_CLIENT_BIN to a prebuilt Linux tam-client with the web app embedded.');
+      throw new Error('Set TAM_CLIENT_BIN to a built tam-client with the web app embedded.');
     }
     const binary = resolve(process.env.TAM_CLIENT_BIN);
     await access(binary, constants.X_OK);

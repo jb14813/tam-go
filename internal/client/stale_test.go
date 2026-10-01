@@ -355,3 +355,30 @@ func TestPushKeepsTheServersNewerValues(t *testing.T) {
 		t.Fatalf("push with a save queued = %d %s, want 409", code, body)
 	}
 }
+
+// A report answered from the client's copy while the server is away, or
+// while saves still wait for it, says so (X-TAM-Copy), so the page can warn
+// that other computers' saves may be missing; one from the server does not.
+func TestReportsFromTheCopySaySo(t *testing.T) {
+	f, ss := pairedWithAnn(t)
+	copyHeader := func() string {
+		t.Helper()
+		req, _ := http.NewRequest("GET", f.url+"/api/reports/counts", nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.Header.Get("X-TAM-Copy")
+	}
+	if got := copyHeader(); got != "" {
+		t.Fatalf("a report from the server says X-TAM-Copy %q", got)
+	}
+	ss.set("busy")
+	if code, body := f.do("POST", "/api/tickets", []store.TicketSave{{Ticket: store.Ticket{Prefix: "A", TID: 2, FirstName: "Queued", Pref: "CALL"}}}, nil); code != 200 {
+		t.Fatalf("queued save = %d %s", code, body)
+	}
+	if got := copyHeader(); got != "1" {
+		t.Fatalf("a report while a save waits says X-TAM-Copy %q, want 1", got)
+	}
+}

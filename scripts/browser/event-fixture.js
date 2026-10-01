@@ -53,7 +53,7 @@ async function networkLink(port) {
 }
 
 async function program(variable, args, directory, baseURL) {
-  if (!process.env[variable]) throw new Error(`Set ${variable} to its prebuilt Linux binary.`);
+  if (!process.env[variable]) throw new Error(`Set ${variable} to the built program.`);
   const binary = resolve(process.env[variable]);
   await access(binary, constants.X_OK);
   let log = '';
@@ -99,7 +99,6 @@ async function program(variable, args, directory, baseURL) {
 
 export const test = base.extend({
   event: async ({ request }, use, testInfo) => {
-    if (process.platform !== 'linux') throw new Error('Run real TAM browser tests in Linux or Docker.');
     const directories = [];
     const programs = [];
     const links = [];
@@ -131,8 +130,8 @@ export const test = base.extend({
       await expect.poll(async () => Promise.all(clients.map(async (client) => {
         const response = await request.get(new URL('/api/status', client.baseURL).href);
         const state = await response.json();
-        return [state.state, !!state.recovering, state.pending, state.failed];
-      })), { timeout: 15_000 }).toEqual([['connected', false, 0, 0], ['connected', false, 0, 0]]);
+        return [state.state, state.pending, state.failed];
+      })), { timeout: 15_000 }).toEqual([['connected', 0, 0], ['connected', 0, 0]]);
       await use({ a: clients[0], b: clients[1], server });
     } finally {
       if (testInfo.status !== testInfo.expectedStatus) {

@@ -1,67 +1,30 @@
-# Browser regression tests
+# Browser tests
 
-The leave-save tests launch a real Linux `tam-client` with a new temporary data folder
-and an automatically allocated loopback port. They fill two marked rows in
-Tickets, Baskets, Drawing, and Search, then check the saved API data after
-visibility changes, Main Menu navigation, and closing the browser tab.
-Failures return a nonzero exit status. The client and its temporary data are
-cleaned up after the run; failure traces and client logs stay in `test-results`.
+Playwright tests that drive the web app in Chromium against real programs:
+a `tam-client` with its own temporary data folder, or a `tam-server` with two
+paired clients whose network link to it can be cut. Nothing is mocked.
 
-The Drawing lookup tests start a real server and two clients with separate
-data folders and access keys. A buyer entered on one client is displayed by
-the other client's Drawing page without copying that ticket into its local
-database. These tests distinguish a missing ticket from a saved blank ticket,
-verify the drawing save contains only drawing fields, and disconnect real TCP
-links to check local-only feedback and automatic lookup retries after queued
-entries arrive. Queue readiness also waits for event recovery to finish.
+- `save-on-leave.spec.js`: marked rows on Tickets, Baskets, Drawing and Search
+  are saved when the page is hidden, when a link is followed and when the tab
+  is closed; a description saved from Baskets leaves a drawn winner alone.
+- `stale-saves.spec.js`: a change from a page or a queued offline save never
+  replaces a newer value another client saved; the volunteer is told, the page
+  shows the current value, and Settings lists a queued change kept out, which
+  Retry applies. Reports read from a client's copy while the server is away
+  say so.
+- `counts.spec.js`: a prefix named Total is a row of its own on the counts page.
 
-The integrity regressions delay saves and row loads while typing continues,
-overlap repeated values, and let a hidden-page save overtake a normal request.
-They verify that the visible input, dirty state and stored value agree. They
-also correct an already displayed buyer on another client and require the open
-Drawing page to refresh that contact information. Request interception is used
-to control timing in these fault tests; the application and HTTP programs are
-real.
-
-The draft regressions reject saves during navigation, hide and close forms,
-reload unsent input for explicit review, and exercise invalid winning numbers
-and multiple tabs. Pager tests edit a row while the next range is loading and
-require the visible range to stay aligned with the displayed rows. Report tests
-disconnect the real shared server link, check printable errors instead of
-partial local reports, and delay counts refreshes to check retry ordering.
-Native backup tests download and upload through the browser and require the
-downloaded document to preserve the API response.
-
-Further review tests discard draft rows while comparisons are visible, overlap
-comparison requests, and crash a Chromium renderer after keyboard-only edits.
-Settings tests delay a real save acknowledgement while typing continues. Print
-tests correct winners through another client and require Print to refresh before
-printing; an unavailable report must show an error instead of printing old rows.
-
-The [data integrity regressions](data-integrity.spec.js) also preserve newer Prefix Settings input during a save,
-keep a prefix named Total separate from the aggregate count, and reject unsafe
-numeric IDs before any part of a request is stored. They check the largest
-supported ticket number, refuse unsafe existing search results and browser
-drafts, and show missing native status/discovery endpoints until polling recovers.
-
-Build the frontend and both Linux programs first, then run on Linux (Node.js 22+):
+Build the web app and both programs, then run the tests (Node.js 24, pnpm 12):
 
 ```sh
-# From the repository root, after pnpm install and pnpm build in frontend:
-go build -o /tmp/tam-client ./cmd/tam-client
-go build -o /tmp/tam-server ./cmd/tam-server
+cd frontend && pnpm install && pnpm build && cd ..
+go build -o build/ ./cmd/tam-client ./cmd/tam-server
 cd scripts/browser
-npm ci
-npx playwright install --with-deps chromium
-TAM_CLIENT_BIN=/tmp/tam-client TAM_SERVER_BIN=/tmp/tam-server npm test
+pnpm install
+pnpm exec playwright install --with-deps chromium
+TAM_CLIENT_BIN=../../build/tam-client TAM_SERVER_BIN=../../build/tam-server pnpm test
 ```
 
-On Windows, run the programs and this suite in a Linux container. The fixtures
-refuse Windows execution to avoid starting throwaway listening programs.
-The npm dependencies here are separate from the frontend and its Nix inputs.
-
-The hidden-page check synthesizes `visibilitychange`, since headless Chromium
-keeps tabs visible; it checks persistence before any close can save the rows.
-The navigation and close checks use actual browser actions without request
-interception. These cover the application's lifecycle handlers, not every
-operating system's tab-discard or browser-termination behavior.
+On Windows use the `.exe` paths. The programs listen on 127.0.0.1 only and
+stop when the tests end; failure traces and program logs are kept in
+`test-results`.

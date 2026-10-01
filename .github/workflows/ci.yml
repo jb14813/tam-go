@@ -149,7 +149,7 @@ jobs:
           if-no-files-found: ignore
 
   browser:
-    name: Browser saves and shared winner lookups
+    name: Browser tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -161,8 +161,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: scripts/browser/package-lock.json
+          cache: pnpm
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            scripts/browser/pnpm-lock.yaml
 
       - uses: actions/setup-go@v7
         with:
@@ -180,21 +182,21 @@ jobs:
       - name: Install the pinned browser test tools
         working-directory: scripts/browser
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
 
-      - name: Save marked rows and look up winners across clients
+      - name: Saves, newer values kept, reports from a client's copy
         working-directory: scripts/browser
         env:
           TAM_CLIENT_BIN: ${{ runner.temp }}/tam-client
           TAM_SERVER_BIN: ${{ runner.temp }}/tam-server
-        run: npm test 2>&1 | tee "$RUNNER_TEMP/browser-tests.txt"
+        run: pnpm test 2>&1 | tee "$RUNNER_TEMP/browser-tests.txt"
 
       - name: Printed results on the run page
         if: always()
         run: |
           {
-            echo '### Browser saves and shared winner lookups'
+            echo '### Browser tests'
             echo '```'
             cat "$RUNNER_TEMP/browser-tests.txt" 2>/dev/null || echo "(the tests did not run)"
             echo '```'

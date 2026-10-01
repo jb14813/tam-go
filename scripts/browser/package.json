@@ -9,6 +9,6 @@
     "@playwright/test": "1.63.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   }
 }

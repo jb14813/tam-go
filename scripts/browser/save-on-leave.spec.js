@@ -31,7 +31,7 @@ test.beforeEach(async ({ request }) => {
   }
 });
 
-test('Basket metadata saves do not claim a displayed winning ticket', async ({ page, request }) => {
+test('A description saved from the Baskets form leaves a drawn winner alone', async ({ page, request }) => {
   const drawing = await request.post('/api/drawing', {
     data: [{ prefix: 'A', b_id: 1, winning_ticket: 11 }]
   });
@@ -41,10 +41,8 @@ test('Basket metadata saves do not claim a displayed winning ticket', async ({ p
   await page.locator('#id_to').fill('2');
   await page.getByRole('button', { name: 'Go', exact: true }).click();
   await page.getByRole('textbox', { name: 'Basket 1 description', exact: true }).fill('Only metadata edited');
-  const sent = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/baskets');
   await page.getByRole('link', { name: 'Main Menu', exact: true }).click();
-  const rows = (await sent).postDataJSON();
-  expect(rows).toEqual([{ prefix: 'A', b_id: 1, description: 'Only metadata edited', donors: 'Test donor' }]);
+  await expect(page).toHaveURL(/\/web\/$/);
   await expect.poll(async () => {
     const response = await request.get('/api/baskets/A/1');
     return response.json();

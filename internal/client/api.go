@@ -84,7 +84,8 @@ func (h *handler) observe(err error, res *remote.Response) bool {
 // listOr answers with a list. In remote mode it comes from the server while
 // the client is in step with it (see inStep), and is copied into the mirror
 // on the way; otherwise it comes from the mirror, which in standalone mode
-// is the only store.
+// is the only store. In remote mode an answer from the mirror carries
+// X-TAM-Copy: 1, so a report can say it may lack other computers' saves.
 func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remotePath string, mirror func([]T) error, local func() ([]T, error)) {
 	if rc != nil && h.inStep() {
 		res, err := rc.WithTimeout(readTimeout).Get(remotePath)
@@ -108,6 +109,9 @@ func listOr[T any](h *handler, w http.ResponseWriter, rc *remote.Client, remoteP
 	if err != nil {
 		httpx.WriteInternal(w, err)
 		return
+	}
+	if rc != nil {
+		w.Header().Set("X-TAM-Copy", "1")
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
