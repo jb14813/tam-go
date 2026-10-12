@@ -2,7 +2,8 @@
 
 These downloads contain the native Rust server and client with their web
 interfaces embedded. Running them needs no Rust, Go, Node.js or separate web
-server. This initial release is marked as a prerelease for optional use and
+server. Windows builds include the Visual C++ runtime through static linkage;
+no Visual C++ Redistributable installation is needed. This initial release is marked as a prerelease for optional use and
 evaluation; it is a complete executable package.
 
 ## Choose a download
@@ -60,7 +61,7 @@ Upgrading the extracted binaries preserves the launcher data folders.
 GitHub Actions builds both Rust programs and embedded frontend assets from
 locked dependencies on native Windows and Ubuntu 24.04 runners. Publication
 requires both platforms to pass formatting, all-target compiler checks, tests,
-Clippy with warnings denied, packaging tests and execution of both programs
+Clippy with warnings denied, Windows runtime dependency inspection, packaging tests and execution of both programs
 from the extracted release archives. The publishing job verifies package
 checksums before uploading the archives and `SHA256SUMS`.
 

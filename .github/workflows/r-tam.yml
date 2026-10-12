@@ -18,6 +18,8 @@ env:
 jobs:
   rust:
     name: Rust on ${{ matrix.platform }}
+    env:
+      RUSTFLAGS: ${{ matrix.platform == 'windows' && '-Dwarnings -C target-feature=+crt-static' || '-Dwarnings' }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +73,23 @@ jobs:
       - name: Build Linux programs and web assets
         if: runner.os == 'Linux'
         run: ./rust/build.sh
+
+      - name: Check Windows programs need no Visual C++ runtime installation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$installation/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw 'MSVC dependency inspection tool was not found' }
+          foreach ($role in @('client', 'server')) {
+              $imports = & $dumpbin /dependents "build/r-tam/windows/r-tam-$role.exe"
+              if ($LASTEXITCODE -ne 0) { throw 'Windows dependency inspection failed' }
+              if ($imports -match '(?i)\b(?:VCRUNTIME|MSVCP)[^\s]*\.dll') {
+                  throw 'Windows release must statically link the Visual C++ runtime'
+              }
+              Write-Output "Rust $role uses only Windows system runtimes"
+          }
 
       - name: Format check
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check

@@ -9,7 +9,8 @@ Its Rust, frontend, load harness and dependency locks match the locally tested
 source. The document cleanup changes no program behavior. That published runtime
 snapshot is commit `b3aeee96de7c527b29bdf9e34e06a7bf0ef1a20d`; verify its Rust
 source identity with `git rev-parse b3aeee96:rust`. Subsequent release tooling adds
-packaging and launcher validation without changing the runtime crates. Development history
+packaging and launcher validation, a release version bump and static Windows
+runtime linkage without changing application logic or third-party dependencies. Development history
 and raw local test receipts are not included in the published branch.
 
 The committed [result summary](R-TAM-RESULTS.json) records artifact hashes,

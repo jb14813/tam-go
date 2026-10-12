@@ -10,6 +10,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
 } finally { Pop-Location }
 Push-Location $projectRoot
+$previousRustFlags = $env:RUSTFLAGS
+if ($env:RUSTFLAGS -notmatch '\+crt-static') {
+    $env:RUSTFLAGS = "$previousRustFlags -C target-feature=+crt-static".Trim()
+}
 try {
     $buildArgs = @('build', '--manifest-path', 'rust/Cargo.toml', '--locked', '--workspace')
     if (-not $DebugBuild) { $buildArgs += '--release' }
@@ -22,4 +26,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $targetRoot "$profileName/$binaryName") -Destination $outputPath -Force
     }
     Write-Output "Built R-TAM programs in $outputPath"
-} finally { Pop-Location }
+} finally {
+    $env:RUSTFLAGS = $previousRustFlags
+    Pop-Location
+}
