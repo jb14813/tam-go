@@ -43,14 +43,15 @@ var probe = &http.Client{
 
 // program is one tam-server or tam-client under test.
 type program struct {
-	name string
-	path string
-	args []string
-	env  []string
-	dir  string // its data folder, which also gets its console output
-	host string // the address clients pair with
-	port string
-	url  string
+	name          string
+	path          string
+	args          []string
+	env           []string
+	dir           string // its data folder, which also gets its console output
+	host          string // the address clients pair with
+	port          string
+	url           string
+	readinessPath string
 
 	// A server running on another machine (-server): not started here, and
 	// killed and started again only through the -kill and -restart commands.
@@ -72,11 +73,16 @@ func newProgram(name, path, dir, port string, args, env []string) (*program, err
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	readinessPath := "/api/status"
+	if name == "tam-server" {
+		readinessPath = "/api"
+	}
 	return &program{
 		name: name, path: path, dir: dir, host: "127.0.0.1", port: port,
-		url:  "http://127.0.0.1:" + port,
-		args: append([]string{"-addr", "127.0.0.1:" + port}, args...),
-		env:  append([]string{"TAM_DATA_DIR=" + dir}, env...),
+		url:           "http://127.0.0.1:" + port,
+		args:          append([]string{"-addr", "127.0.0.1:" + port}, args...),
+		env:           append([]string{"TAM_DATA_DIR=" + dir}, env...),
+		readinessPath: readinessPath,
 	}, nil
 }
 
@@ -104,6 +110,7 @@ func (p *program) startOnce() error {
 		return err
 	}
 	cmd := exec.Command(p.path, p.args...)
+	fmt.Fprintf(out, "loadtest starting %s: binary=%q args=%q control=%s readiness=%s\n", p.name, p.path, p.args, p.url, p.readinessPath)
 	cmd.Env = append(os.Environ(), p.env...)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
@@ -133,8 +140,13 @@ func (p *program) startOnce() error {
 			return fmt.Errorf("%s stopped while starting; see %s", p.name, filepath.Join(p.dir, "console.log"))
 		default:
 		}
-		if answers(p.url) {
-			return nil
+		if answersAt(p.url, p.readinessPath) {
+			select {
+			case <-exited:
+				return fmt.Errorf("%s stopped while starting; see %s", p.name, filepath.Join(p.dir, "console.log"))
+			default:
+				return nil
+			}
 		}
 		if time.Now().After(deadline) {
 			cmd.Process.Kill()
@@ -147,7 +159,11 @@ func (p *program) startOnce() error {
 
 // answers reports whether a program answers at base.
 func answers(base string) bool {
-	res, err := probe.Get(base + "/api")
+	return answersAt(base, "/api")
+}
+
+func answersAt(base, path string) bool {
+	res, err := probe.Get(base + path)
 	if err != nil {
 		return false
 	}
@@ -271,26 +287,38 @@ func (p *program) usage() (cpu time.Duration, peak uint64, runs int) {
 	return p.cpu, p.peak, p.runs
 }
 
-// freePorts returns n ports that are free on the loopback interface. The
-// listeners are all held until every port is known, so no port comes back
-// twice.
-func freePorts(n int) ([]string, error) {
-	var lns []net.Listener
-	defer func() {
-		for _, ln := range lns {
-			ln.Close()
-		}
-	}()
-	ports := make([]string, 0, n)
+// portReservations holds control ports while the relays allocate their own
+// listeners. Each reservation is released immediately before its child starts.
+type portReservations struct {
+	ports     []string
+	listeners []net.Listener
+}
+
+func (r *portReservations) release(i int) {
+	if ln := r.listeners[i]; ln != nil {
+		ln.Close()
+		r.listeners[i] = nil
+	}
+}
+
+func (r *portReservations) close() {
+	for i := range r.listeners {
+		r.release(i)
+	}
+}
+
+func reservePorts(n int) (*portReservations, error) {
+	r := &portReservations{ports: make([]string, 0, n)}
 	for i := 0; i < n; i++ {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
+			r.close()
 			return nil, err
 		}
-		lns = append(lns, ln)
-		ports = append(ports, strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
+		r.listeners = append(r.listeners, ln)
+		r.ports = append(r.ports, strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
 	}
-	return ports, nil
+	return r, nil
 }
 
 func exeSuffix() string {

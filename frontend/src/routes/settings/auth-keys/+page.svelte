@@ -5,7 +5,7 @@
 	import { postJSON } from '$lib/client/api';
 	let { data } = $props();
 
-	const pageTitle = 'Auth Keys | TAM';
+	const pageTitle = 'Auth Keys | R-TAM';
 
 	let auth = $state({
 		toggle: false,
@@ -29,7 +29,7 @@
 				headers: { 'TAM-PWD': auth.pwd }
 			});
 		} catch {
-			errorStatus = 'Could not reach the TAM client API';
+			errorStatus = 'Could not reach the R-TAM client API';
 			setTimeout(() => (errorStatus = ''), 7000);
 			return;
 		}

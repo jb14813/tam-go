@@ -9,7 +9,7 @@
 	let { data } = $props();
 	let { prefix, prefixes, defaultPref } = $derived(data);
 
-	let pageTitle = $derived(`${prefix.prefix} Tickets | TAM`);
+	let pageTitle = $derived(`${prefix.prefix} Tickets | R-TAM`);
 
 	let curIdx = $state(0),
 		nextIdx = $derived(curIdx + 1),

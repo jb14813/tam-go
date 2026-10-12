@@ -13,7 +13,6 @@ Spec: `docs/superpowers/specs/2026-09-25-tam-go-remote-v2-design.md`. Base: bran
 - Every existing `/api` route keeps its path, method, JSON field names, status codes and `{"detail": ...}` errors on both daemons.
 - New routes are additive. The original client and server must keep working against the Go daemons unchanged.
 - `gofmt -l .` empty, `go vet ./...` clean for `GOOS=windows` and `GOOS=linux`, `go test ./...` green, `pnpm build` in `frontend/` clean.
-- Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
 ## Contracts shared by the work packages
 

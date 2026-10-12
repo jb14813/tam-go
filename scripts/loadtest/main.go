@@ -57,6 +57,7 @@ type options struct {
 	clients, tickets, baskets, prefixes, page int
 	entry, outage, rush, settle               time.Duration
 	bin                                       string
+	otherClient                               string
 	keep                                      bool
 	seed                                      uint64
 	server, password, kill, restart           string
@@ -79,6 +80,7 @@ func main() {
 	flag.DurationVar(&o.rush, "rush", 10*time.Second, "how long every client saves sheets as fast as it can at the end; 0 to skip")
 	flag.DurationVar(&o.settle, "settle", 2*time.Minute, "how long the clients get to send what they queued")
 	flag.StringVar(&o.bin, "bin", "", "folder with the tam-server and tam-client to test; by default both are built from this checkout")
+	flag.StringVar(&o.otherClient, "other-client", "", "optional second client executable, used by every second client for mixed-runtime validation")
 	flag.BoolVar(&o.keep, "keep", false, "keep the data folders and logs of a passing run")
 	flag.Uint64Var(&o.seed, "seed", 1, "seed of the made-up event")
 	flag.Float64Var(&o.wifi, "wifi", 0.25, "share of the clients whose Wi-Fi drops once during ticket entry, silently; 0 for none")

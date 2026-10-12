@@ -1,0 +1,74 @@
+name: R-TAM
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  rust:
+    name: Rust on ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install the validated Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.98.0
+
+      - name: Build Windows programs and web assets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./rust/build.ps1
+
+      - name: Build Linux programs and web assets
+        if: runner.os == 'Linux'
+        run: ./rust/build.sh
+
+      - name: Format check
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+
+      - name: Check all targets
+        run: cargo check --manifest-path rust/Cargo.toml --locked --workspace --all-targets
+
+      - name: Test all targets
+        run: cargo test --manifest-path rust/Cargo.toml --locked --workspace --all-targets
+
+      - name: Clippy without warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings
+
+      - name: Keep the validated programs
+        uses: actions/upload-artifact@v7
+        with:
+          name: r-tam-${{ matrix.platform }}
+          path: build/r-tam/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 14

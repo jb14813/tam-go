@@ -6,3 +6,7 @@
 /deploy/docker/client-data/
 .claude-flow/
 /result
+/rust/target/
+/.superpowers/
+/.validation/
+/rust/tests/compatibility/__pycache__/

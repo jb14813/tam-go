@@ -28,7 +28,7 @@
 		}
 		if (!alive) return;
 		if (!res) {
-			problem = 'Could not reach the TAM client program.';
+			problem = 'Could not reach the R-TAM client program.';
 		} else if (!res.ok) {
 			problem = `The counts could not be read (${res.status}).`;
 		} else {
@@ -49,7 +49,7 @@
 		}
 	};
 
-	const pageTitle = 'Ticket Counts | TAM';
+	const pageTitle = 'Ticket Counts | R-TAM';
 
 	$effect(() => {
 		alive = true;

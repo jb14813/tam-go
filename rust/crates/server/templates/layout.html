@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} - R-TAM Server</title>
+<link rel="icon" href="/admin/favicon.ico">
+{% block head %}{% endblock %}
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 1rem; line-height: 1.5; color: #1f2933; background: #f5f7fa; }
+  header { background: #243b53; color: #fff; padding: 0.75rem 1rem; }
+  header .brand { display: flex; align-items: center; gap: 0.6rem; font-weight: bold; font-size: 1.1rem; }
+  header .brand img { height: 1.75rem; width: auto; }
+  nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center; margin-top: 0.5rem; }
+  nav a { color: #fff; text-decoration: none; padding: 0.25rem 0; }
+  nav a.active { border-bottom: 2px solid #fff; }
+  nav form { margin: 0; }
+  nav button { margin: 0; background: none; border: none; color: #d9e2ec; padding: 0.25rem 0; font: inherit; cursor: pointer; text-decoration: underline; }
+  main { max-width: 44rem; margin: 0 auto; padding: 1rem; }
+  h1 { font-size: 1.5rem; margin: 0.5rem 0 1rem; }
+  h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #d9e2ec; vertical-align: top; }
+  th { background: #e4e9f0; }
+  table.facts th { width: 40%; }
+  label { display: block; margin-top: 0.75rem; }
+  label.check { display: flex; gap: 0.5rem; align-items: flex-start; }
+  input[type=text], input[type=password], input[type=file] { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; margin-top: 0.25rem; border: 1px solid #9fb3c8; border-radius: 4px; }
+  button, a.button { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; font: inherit; border: 1px solid #243b53; border-radius: 4px; background: #243b53; color: #fff; cursor: pointer; text-decoration: none; }
+  button.danger { background: #a61b1b; border-color: #a61b1b; }
+  button.small { margin: 0; padding: 0.3rem 0.7rem; }
+  .msg { background: #e3f9e5; border: 1px solid #57ae5b; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
+  .err { background: #ffe3e3; border: 1px solid #d64545; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
+  .key { font-family: ui-monospace, Consolas, monospace; font-size: 1.25rem; word-break: break-all; background: #fff; padding: 0.75rem; border: 1px dashed #57ae5b; margin: 0.5rem 0 0; }
+  code { font-family: ui-monospace, Consolas, monospace; }
+  p.note { color: #52606d; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/admin/logo.svg" alt="" width="62" height="28">R-TAM Server</div>
+  {% if LoggedIn %}
+  <nav>
+    <a href="/admin/status"{% if Active == "status" %} class="active"{% endif %}>Status</a>
+    <a href="/admin/keys"{% if Active == "keys" %} class="active"{% endif %}>Clients and keys</a>
+    <a href="/admin/backup"{% if Active == "backup" %} class="active"{% endif %}>Backup</a>
+    <a href="/admin/password"{% if Active == "password" %} class="active"{% endif %}>Password</a>
+    <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{{ CSRF }}"><button type="submit">Log out</button></form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+  {% if Message %}<div class="msg">{{ Message }}</div>{% endif %}
+  {% if Error %}<div class="err">{{ Error }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

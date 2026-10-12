@@ -9,7 +9,7 @@
 	let { data } = $props();
 	let prefix = $derived(data.prefix);
 
-	let pageTitle = $derived(`${prefix.prefix} Winners by Name | TAM`);
+	let pageTitle = $derived(`${prefix.prefix} Winners by Name | R-TAM`);
 	let filterTitle = $state('All Winners');
 
 	const headers = ['Winner Name', 'Phone Number', 'Basket ID', 'Winning Ticket', 'Description'];

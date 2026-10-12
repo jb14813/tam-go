@@ -1,0 +1,30 @@
+[package]
+name = "r-tam-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+time.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+mdns-sd.workspace = true
+if-addrs.workspace = true
+fs2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]

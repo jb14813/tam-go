@@ -1,0 +1,125 @@
+{
+  "validation_date": "2026-10-12",
+  "product_source_rust_tree": "61b20fbea837b9880fd4b332a4e779f7855d7b15",
+  "source_provenance": "Git tree identity of the validated rust directory; the public import preserves Rust, frontend, load harness and dependency locks. Artifact hashes identify locally validated binaries, not subsequent hosted builds.",
+  "go_reference": "b530cdad8da7be968e8f640a8de8badc1d113be7",
+  "artifacts": [
+    {
+      "path": "windows/r-tam-client.exe",
+      "sha256": "d50ca6d55825e708552f6585ebad462d953dcac907c946ccd60762de0593505d",
+      "bytes": 10668032
+    },
+    {
+      "path": "windows/r-tam-server.exe",
+      "sha256": "085db05326d155421b9c8608a1e114f32c558de971250ce63495474b81c5a439",
+      "bytes": 9303552
+    },
+    {
+      "path": "linux/r-tam-client",
+      "sha256": "e68d337b28ab89d7bc85acc6a638da5d321831fca718bc6846928f9b1287111e",
+      "bytes": 14166144
+    },
+    {
+      "path": "linux/r-tam-server",
+      "sha256": "ef09aa87cca1d5a626b9dfb4a5458006bd06786b1622161855669b30f131febd",
+      "bytes": 12637400
+    }
+  ],
+  "windows_cargo_tests": 128,
+  "linux_cargo_tests": 165,
+  "cargo_failed": 0,
+  "cargo_ignored": 0,
+  "rust_warnings_denied": true,
+  "browser_scenarios_passed": 20,
+  "hosted_ci_executed": false,
+  "cohorts": [
+    {
+      "cohort": 1,
+      "server": "Linux host A Rust",
+      "clients": "Linux host B 3 Rust + 3 Go",
+      "network": "LAN",
+      "transport": "HTTP",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 0
+    },
+    {
+      "cohort": 2,
+      "server": "Linux host A Go",
+      "clients": "Linux host B 6 Rust",
+      "network": "LAN",
+      "transport": "HTTPS",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 6
+    },
+    {
+      "cohort": 3,
+      "server": "Linux host B Rust",
+      "clients": "Linux host A 3 Rust + 3 Go",
+      "network": "LAN",
+      "transport": "HTTPS",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 6
+    },
+    {
+      "cohort": 4,
+      "server": "Linux host B Go",
+      "clients": "Linux host A 6 Rust",
+      "network": "LAN",
+      "transport": "HTTP",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 0
+    },
+    {
+      "cohort": 5,
+      "server": "Linux host A Rust",
+      "clients": "native Windows 6 Rust",
+      "network": "LAN",
+      "transport": "HTTPS",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 6
+    },
+    {
+      "cohort": 6,
+      "server": "Windows Rust",
+      "clients": "Windows 6 Rust",
+      "network": "loopback",
+      "transport": "HTTPS",
+      "application_checks_passed": 26,
+      "stopped_databases": 7,
+      "tls_pins_matched": 6
+    }
+  ],
+  "totals": {
+    "application_checks": 156,
+    "stopped_databases": 42,
+    "client_tls_pins": 24,
+    "failed_requests": 0,
+    "final_client_pending_or_refused": 0
+  },
+  "cleanup": {
+    "linux_host_a_test_root_absent": true,
+    "linux_host_b_test_root_absent": true,
+    "owned_remote_processes_absent": true,
+    "test_lan_ports_closed": true,
+    "owned_native_processes_absent": true,
+    "native_disposable_data_absent": true,
+    "private_ssh_agent_stopped": true,
+    "linux_host_b_container_snapshot_unchanged": true,
+    "linux_host_a_other_container_snapshots_unchanged": true,
+    "linux_host_a_concurrent_staging_pid_change": "Unrelated staging container restarted during concurrent staging activity",
+    "full_linux_snapshot_guard_exit": 1,
+    "full_linux_snapshot_guard_reason": "Only concurrent staging PID difference; all workload, database, hash and cleanup gates passed"
+  },
+  "limits": [
+    "Manually selected LAN peers; cross-host mDNS not tested",
+    "Windows inbound LAN firewall not tested; native Windows server tested on HTTPS loopback",
+    "Existing Go release and Docker packaging unchanged",
+    "Physical storage corruption and arbitrary power loss not guaranteed"
+  ],
+  "report": "R-TAM-NETWORK.md"
+}

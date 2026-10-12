@@ -2,7 +2,7 @@
 	import { bS, iS } from '$lib/client/styles';
 	import HeaderBar from '$lib/client/components/HeaderBar.svelte';
 
-	const pageTitle = 'Print Ticket Sheets | TAM';
+	const pageTitle = 'Print Ticket Sheets | R-TAM';
 
 	let inputs = $state({ start: 0, end: 0, perPage: 20, ticketType: '' });
 

@@ -7,7 +7,7 @@
 
 	let { data } = $props();
 
-	const pageTitle = 'Prefixes | TAM';
+	const pageTitle = 'Prefixes | R-TAM';
 
 	// Local copy of the loaded prefixes (intentionally captured once; the page reloads after changes).
 	let prefixes = $state(untrack(() => [...data.prefixes]));
@@ -41,7 +41,7 @@
 		try {
 			res = await postJSON('/api/prefixes', [base ? { ...row, base } : row]);
 		} catch {
-			status = 'Could not reach the TAM client API';
+			status = 'Could not reach the R-TAM client API';
 			return;
 		}
 		if (!res.ok) {
@@ -77,7 +77,7 @@
 				method: 'DELETE'
 			});
 		} catch {
-			status = 'Could not reach the TAM client API';
+			status = 'Could not reach the R-TAM client API';
 			return;
 		}
 		if (res.ok) {

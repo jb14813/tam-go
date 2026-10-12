@@ -8,7 +8,7 @@
 	let { data } = $props();
 	let { prefix, prefixes } = $derived(data);
 
-	let pageTitle = 'Ticket Search | TAM';
+	let pageTitle = 'Ticket Search | R-TAM';
 
 	let curIdx = $state(0),
 		nextIdx = $derived(curIdx + 1),

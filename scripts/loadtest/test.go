@@ -161,10 +161,12 @@ func (t *test) start() error {
 	if err != nil {
 		return err
 	}
-	ports, err := freePorts(1 + t.o.clients)
+	reservations, err := reservePorts(1 + t.o.clients)
 	if err != nil {
 		return err
 	}
+	defer reservations.close()
+	ports := reservations.ports
 	if t.o.server != "" {
 		t.password = t.o.password
 		t.server, err = externalServer(t.o)
@@ -182,6 +184,7 @@ func (t *test) start() error {
 	if err != nil {
 		return err
 	}
+	reservations.release(0)
 	if err := t.server.start(); err != nil {
 		return err
 	}
@@ -199,7 +202,11 @@ func (t *test) start() error {
 	t.clients = make([]*client, t.o.clients)
 	for i := range t.clients {
 		name := fmt.Sprintf("client-%02d", i+1)
-		p, err := newProgram(name, clientPath, filepath.Join(t.work, name), ports[1+i], []string{"-open=false", "-tray=false"}, nil)
+		selectedClient := clientPath
+		if t.o.otherClient != "" && i%2 == 1 {
+			selectedClient = t.o.otherClient
+		}
+		p, err := newProgram(name, selectedClient, filepath.Join(t.work, name), ports[1+i], []string{"-open=false", "-tray=false"}, nil)
 		if err != nil {
 			return err
 		}
@@ -211,6 +218,7 @@ func (t *test) start() error {
 	}
 	var failed atomic.Value
 	t.each(func(l *client) {
+		reservations.release(l.n)
 		if err := l.prog.start(); err != nil {
 			failed.Store(err)
 		}
@@ -219,6 +227,9 @@ func (t *test) start() error {
 		return err
 	}
 	fmt.Printf("%d tam-client programs answering after %s\n", len(t.clients), secs(time.Since(began)))
+	if t.o.otherClient != "" {
+		fmt.Printf("mixed clients: %s and %s, alternating by client number\n", clientPath, t.o.otherClient)
+	}
 	return nil
 }
 
@@ -705,6 +716,9 @@ func (t *test) stopAll() {
 		close(t.stopPollers)
 		t.pollers.Wait()
 		t.each(func(l *client) {
+			if l == nil {
+				return // startup may have failed before constructing every client
+			}
 			l.prog.shutDown()
 			l.relay.close()
 		})

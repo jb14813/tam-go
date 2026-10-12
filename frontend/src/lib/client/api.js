@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 
-export const API_UNREACHABLE = 'Could not reach the TAM client API';
+export const API_UNREACHABLE = 'Could not reach the R-TAM client API';
 
 /**
  * Reads the `detail` message of an API error response (`{detail: "..."}`),
@@ -77,7 +77,7 @@ export function postJSON(
 
 /** What a form says when a save cannot reach the TAM client program. */
 export const SAVE_UNREACHABLE =
-	'Could not reach the TAM client program. Nothing was saved; your rows are still on this page.';
+	'Could not reach the R-TAM client program. Nothing was saved; your rows are still on this page.';
 
 /**
  * The fields each form saves, and how a message names a row. A save sends

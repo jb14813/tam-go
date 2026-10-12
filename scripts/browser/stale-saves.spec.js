@@ -101,7 +101,11 @@ test('a winner from a page loaded before another winner was entered does not rep
   await page.goto(url(event.a, '/web/drawing/A/'));
   await page.locator('#id_from').fill('1');
   await page.locator('#id_to').fill('1');
+  const loaded = page.waitForResponse((response) =>
+    response.url() === url(event.a, '/api/drawing/A/1/1') && response.request().method() === 'GET');
   await page.getByRole('button', { name: 'Go', exact: true }).click();
+  await (await loaded).finished();
+  await expect(page.getByRole('spinbutton', { name: 'Basket 1 winning ticket', exact: true })).toHaveValue('0');
   await post(request, event.b, '/api/drawing', [{ prefix: 'A', b_id: 1, winning_ticket: 2, base: { winning_ticket: 0 } }]);
 
   const dialogs = [];

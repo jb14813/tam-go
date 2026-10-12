@@ -15,7 +15,7 @@
 		color: 'green'
 	});
 
-	const pageTitle = 'Settings | TAM';
+	const pageTitle = 'Settings | R-TAM';
 
 	let reloadTimer;
 	$effect(() => () => clearTimeout(reloadTimer));
@@ -411,7 +411,7 @@
 					try {
 						res = await postJSON('/api/settings', settings);
 					} catch {
-						status.message = 'Could not reach the TAM client API';
+						status.message = 'Could not reach the R-TAM client API';
 						status.color = 'red';
 						return;
 					}

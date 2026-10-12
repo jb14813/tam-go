@@ -8,7 +8,7 @@ A client that walks in and out of wifi keeps working and never loses a save. A s
 
 ## What is settled
 
-From Dilan's answers on 2026-09-25:
+From the requirements agreed on 2026-09-25:
 
 - The reference is ticket-auction-manager/tam. A pull request against tam-go's `dev` branch is welcome.
 - Same ticket entered on two clients: the last save wins. Blocking caused stuck rows before; no review queue.
@@ -66,7 +66,7 @@ Today every request in remote mode goes to the server and the local mirror is wr
 
 **Outbox.** `outbox(id, created_at, method, path, body, attempts, last_error)`, replayed in order by one worker: on reconnect immediately, otherwise with backoff of 1, 2, 5, 10 and then 30 s. An item that the server rejects with a 4xx other than 401 or 403 moves to `outbox_failed`, is counted in the status bar as "could not be sent", and can be retried or discarded from Settings. Prefix deletes and the three list saves go through the outbox; backup push and restore stay direct and report failure instead of queueing.
 
-**Conflicts.** Last arrival at the server wins, which is what Dilan asked for. A client that replays an hour-old edit after another client changed the same ticket wins with the older edit; against the Go server a later option is a `saved_at` field so the newer edit wins, but it is not part of this design.
+**Conflicts.** Last arrival at the server wins, as specified. A client that replays an hour-old edit after another client changed the same ticket wins with the older edit; against the Go server a later option is a `saved_at` field so the newer edit wins, but it is not part of this design.
 
 **Heartbeat.** While remote mode is configured the client calls the server's `GET /api` every 5 s with a 2 s timeout. States: `connected`, `reconnecting` (first failure, up to 30 s), `offline`, `unauthenticated`. Reaching `connected` from any other state triggers the full pull and the outbox drain.
 

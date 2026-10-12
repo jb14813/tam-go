@@ -42,7 +42,7 @@
 	// Settings can fix, a link there followed by `after`.
 	let view = $derived.by(() => {
 		if (unreachable) {
-			return { color: 'red', text: 'TAM client not running: changes cannot be saved' };
+			return { color: 'red', text: 'R-TAM client not running: changes cannot be saved' };
 		}
 		if (!status || status.mode !== 'remote') return null;
 		const pending = Number(status.pending) || 0;

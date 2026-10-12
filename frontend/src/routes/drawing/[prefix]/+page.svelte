@@ -9,7 +9,7 @@
 	let { data } = $props();
 	let { prefix, prefixes } = $derived(data);
 
-	let pageTitle = $derived(`${prefix.prefix} Drawing Form | TAM`);
+	let pageTitle = $derived(`${prefix.prefix} Drawing Form | R-TAM`);
 
 	let curIdx = $state(0),
 		nextIdx = $derived(curIdx + 1),

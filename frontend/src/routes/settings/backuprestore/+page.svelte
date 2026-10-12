@@ -4,7 +4,7 @@
 	import { bS, iS } from '$lib/client/styles';
 	import { readDetail, API_UNREACHABLE } from '$lib/client/api';
 
-	const pageTitle = 'Backup and Restore | TAM';
+	const pageTitle = 'Backup and Restore | R-TAM';
 
 	let { data } = $props();
 	let { remoteServer } = $derived(data);
@@ -55,7 +55,7 @@
 
 			const a = document.createElement('a');
 			a.href = url;
-			a.download = `TAM_${date.year}-${date.month}-${date.day} ${date.hour}-${date.minutes}.json`;
+			a.download = `R-TAM_${date.year}-${date.month}-${date.day} ${date.hour}-${date.minutes}.json`;
 			document.body.appendChild(a);
 			a.click();
 			document.body.removeChild(a);

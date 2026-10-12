@@ -5,7 +5,7 @@
 	import { prefixPage } from '$lib/client/paths.js';
 	import hotkeys from 'hotkeys-js';
 
-	const pageTitle = 'Main Menu | TAM';
+	const pageTitle = 'Main Menu | R-TAM';
 	const { data } = $props();
 	let adminMode = $state(false);
 	let stopped = $state(false);
@@ -14,7 +14,7 @@
 	async function shutdown() {
 		if (
 			!confirm(
-				'Stop the TAM client on this computer? The pages will stop working until it is started again.'
+				'Stop the R-TAM client on this computer? The pages will stop working until it is started again.'
 			)
 		)
 			return;
@@ -26,7 +26,7 @@
 				body: '{}'
 			});
 		} catch {
-			shutdownError = 'Could not reach the TAM client.';
+			shutdownError = 'Could not reach the R-TAM client.';
 			return;
 		}
 		if (res.ok) {
@@ -88,7 +88,7 @@
 <div class="p-1" id="app_container">
 	<div class="flex flex-row gap-1 items-center">
 		<div>
-			<img src={logo} alt="TAM Logo" style="height: 1.75rem" />
+			<img src={logo} alt="R-TAM Logo" style="height: 1.75rem" />
 		</div>
 		<div>
 			<h1 class="text-xl font-bold">{pageTitle}</h1>
@@ -151,11 +151,11 @@
 			<div class="flex flex-row gap-1">
 				<a href={resolve('/settings')} class={bS.gray}>Settings</a>
 				<a href={resolve('/search/tickets')} class={bS.gray}>Search Tickets</a>
-				<button class={bS.red} onclick={shutdown} disabled={stopped}>Shut Down TAM</button>
+				<button class={bS.red} onclick={shutdown} disabled={stopped}>Shut Down R-TAM</button>
 			</div>
 			{#if stopped}
 				<p class="py-1 font-bold">
-					The TAM client has stopped. You can close this tab; start the program again to continue.
+					The R-TAM client has stopped. You can close this tab; start the program again to continue.
 				</p>
 			{:else if shutdownError}
 				<p class="py-1 {tS.red}">{shutdownError}</p>
