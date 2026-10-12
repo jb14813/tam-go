@@ -6,8 +6,10 @@ Go `b530cdad8da7be968e8f640a8de8badc1d113be7`.
 
 The public branch imports the validated implementation onto that Go reference.
 Its Rust, frontend, load harness and dependency locks match the locally tested
-source. The document cleanup changes no program behavior. To verify the Rust
-source identity from a clone, run `git rev-parse HEAD:rust`. Development history
+source. The document cleanup changes no program behavior. That published runtime
+snapshot is commit `b3aeee96de7c527b29bdf9e34e06a7bf0ef1a20d`; verify its Rust
+source identity with `git rev-parse b3aeee96:rust`. Subsequent release tooling adds
+packaging and launcher validation without changing the runtime crates. Development history
 and raw local test receipts are not included in the published branch.
 
 The committed [result summary](R-TAM-RESULTS.json) records artifact hashes,
@@ -124,5 +126,6 @@ Building the programs needs Rust, Node/pnpm and a native C toolchain; running
 the compatibility probes additionally needs Go and Python. Raw logs are local
 validation evidence and are not required by a clean clone.
 
-The review branch is `r-tam`. No release tag, deployment, automatic merge or
-pull request is part of the branch handoff.
+The branch is `r-tam`. Later Rust release packaging and publication are described
+in [R-TAM-RELEASE.md](R-TAM-RELEASE.md); this report records the preceding runtime
+validation and cleanup. No merge or deployment is part of this validation.

@@ -3,6 +3,7 @@ name: R-TAM
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,11 +24,29 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check the Rust release version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('rust/Cargo.toml').read_text())['workspace']['package']['version']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+              raise SystemExit('Rust release version must be major.minor.patch')
+          ref = os.environ['REF_NAME']
+          if os.environ['REF_TYPE'] == 'tag' and ref.startswith('r-tam-v') and ref != f'r-tam-v{version}':
+              raise SystemExit('R-TAM tag must match the Cargo workspace version')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
 
       - uses: pnpm/action-setup@v6
         with:
@@ -72,3 +91,84 @@ jobs:
           path: build/r-tam/${{ matrix.platform }}/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Test the release packager and launchers
+        run: python -W error -B rust/release/test_package.py
+
+      - name: Package the Rust programs
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -W error -B rust/release/package.py --platform "$PLATFORM" --version "$VERSION" \
+            --source "$GITHUB_SHA" --binaries "build/r-tam/$PLATFORM" --output build/r-tam-packages
+
+      - name: Run the programs from their release archive
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess, tarfile, tempfile, zipfile
+          platform = os.environ['PLATFORM']
+          name = f'r-tam-{os.environ["VERSION"]}-{platform}-x86_64'
+          suffix = '.zip' if platform == 'windows' else '.tar.gz'
+          archive = pathlib.Path('build/r-tam-packages') / (name + suffix)
+          with tempfile.TemporaryDirectory(prefix='r-tam-package-') as directory:
+              if platform == 'windows':
+                  with zipfile.ZipFile(archive) as package:
+                      package.extractall(directory)
+              else:
+                  with tarfile.open(archive) as package:
+                      package.extractall(directory, filter='data')
+              root = pathlib.Path(directory) / name
+              for role in ('server', 'client'):
+                  binary = root / (f'r-tam-{role}' + ('.exe' if platform == 'windows' else ''))
+                  result = subprocess.run([str(binary), '--help'], check=True, capture_output=True, text=True, timeout=15)
+                  if f'R-TAM {role.title()}' not in result.stdout:
+                      raise SystemExit('Release archive contains the wrong program')
+                  print(f'Packaged Rust {role}: PASS')
+          PY
+
+      - name: Keep the usable release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: r-tam-release-${{ matrix.platform }}
+          path: build/r-tam-packages/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish the Rust release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/r-tam-v')
+    needs: rust
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download only this run's Rust packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: r-tam-release-*
+          merge-multiple: true
+          path: build/r-tam-packages
+
+      - name: Verify the release archives
+        working-directory: build/r-tam-packages
+        run: |
+          cat SHA256SUMS-windows-x86_64.txt SHA256SUMS-linux-x86_64.txt > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+
+      - name: Publish the versioned Rust downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#r-tam-v}"
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "R-TAM $version" --notes-file docs/R-TAM-RELEASE.md --prerelease --latest=false \
+            "build/r-tam-packages/r-tam-$version-windows-x86_64.zip" \
+            "build/r-tam-packages/r-tam-$version-linux-x86_64.tar.gz" \
+            build/r-tam-packages/SHA256SUMS

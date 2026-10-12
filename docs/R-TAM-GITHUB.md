@@ -1,4 +1,4 @@
-# R-TAM review branch
+# R-TAM branch and releases
 
 The `r-tam` branch provides native Rust server and client programs with the
 existing Svelte interface, compatible with Go commit
@@ -10,7 +10,15 @@ preservation of later local edits. Build and trial instructions are in
 [README](../README.md). Use fresh data directories or stopped, complete copies
 while retaining originals.
 
-## Try the branch
+## Use the Rust downloads
+
+Choose an R-TAM release from this repository's Releases page. Its Windows ZIP
+and Linux tar.gz each contain the native Rust server and client, data-isolating
+launch scripts, instructions and license. See
+[release instructions](R-TAM-RELEASE.md) for supported systems and existing Go
+data. No compiler is required to use the downloads.
+
+## Build the branch
 
 From a clone of the repository containing this branch:
 
@@ -36,10 +44,11 @@ was verified. Detailed scope and remaining limits are in
 [R-TAM-SPEED.md](R-TAM-SPEED.md).
 
 The Windows/Linux Rust CI workflow validates locked builds, formatting,
-all-target checks/tests and Clippy, and retains the two program binaries per
-platform. Consult the branch's Actions results for hosted CI status; local
-validation does not establish a hosted CI result. Existing Go release, Docker
-and installer automation continues to target Go.
+all-target checks/tests and Clippy, then tests packaging and executes the
+programs from extracted release archives. It retains the binaries and ready-to-run
+packages. Matching R-TAM version tags publish those packages and checksums after
+both native jobs pass. Consult Actions for each commit's hosted result. Existing
+Go release, Docker and installer automation continues to target Go.
 
-This is a review and trial branch. No release tag, deployment, automatic merge
-or pull request is implied by the branch handoff.
+The initial R-TAM release is marked as a prerelease for optional use. Release
+publication does not merge the Rust branch or deploy it to existing events.

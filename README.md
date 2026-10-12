@@ -11,8 +11,12 @@ HTTP protocol, SQLite data and native backup document. Protocol identities and
 headers retain their TAM names. The Go source and its [reference README](GO-REFERENCE.md)
 remain available here.
 
-This branch is an R-TAM workup prepared for review. Current validation,
-cleanup and GitHub handoff details are in [the network validation report](docs/R-TAM-NETWORK.md).
+Ready-to-run Windows and Linux downloads are published as R-TAM releases on
+this repository. Choose the ZIP or tar.gz package from the Releases page;
+each includes both Rust programs, launchers, instructions and its license.
+[Release instructions](docs/R-TAM-RELEASE.md) explain supported systems,
+checksums, data folders and pairing. Current validation and cleanup details
+are in [the network validation report](docs/R-TAM-NETWORK.md).
 Measured performance is recorded in [the speed and safety report](docs/R-TAM-SPEED.md).
 The [initial validation report](docs/R-TAM-VALIDATION.md) retains the original
 baseline, implementation decisions and earlier compatibility evidence.
@@ -121,9 +125,10 @@ commands and results. Network validation covers two Linux peers, native
 Windows clients over the LAN, and native Windows server/client HTTPS on loopback.
 The Windows tray and console-close tests additionally exercise platform callbacks.
 
-The R-TAM GitHub workflow builds and validates native Windows and Linux programs
-with warnings denied. Existing Go workflows and release packaging remain available
-for the Go source.
+The R-TAM GitHub workflow builds, validates and packages native Windows and Linux
+Rust programs with warnings denied. Matching `r-tam-v<version>` tags publish the
+tested packages and checksums as an R-TAM release. Existing Go workflows and Go
+release packaging remain separate.
 
 ## Attribution
 
