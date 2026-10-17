@@ -50,7 +50,7 @@ let
       pnpm = pnpm_12;
       sourceRoot = "${finalAttrs.src.name}/frontend";
       fetcherVersion = 4;
-      hash = "sha256-c7SKTbiN44RXsmwHqlBzt3mZpuKTKC43ygOIU9sSxSs=";
+      hash = "sha256-2pQDDLZMsK/U6WWCUlzoOCLXrBfHIeE0249R4isu5HU=";
     };
 
     nativeBuildInputs = [

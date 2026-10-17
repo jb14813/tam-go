@@ -13,6 +13,12 @@ paired clients whose network link to it can be cut. Nothing is mocked.
   Retry applies. Reports read from a client's copy while the server is away
   say so.
 - `counts.spec.js`: a prefix named Total is a row of its own on the counts page.
+- `shortcuts.spec.js`: every Alt shortcut of Tickets, Baskets, Drawing, Search
+  and the main menu does what its tooltip says, by the letter on the key on
+  other layouts too. After a message box opened by Alt+S while its keys were
+  held, Alt+C, Alt+V and Alt+L still work. Alt+V with nothing copied leaves the
+  row alone, Alt+C on Search's Pref button leaves the preference, and Ctrl+Alt
+  (AltGr) and Alt+Shift are not shortcuts.
 
 Build the web app and both programs, then run the tests (Node.js 24, pnpm 12):
 

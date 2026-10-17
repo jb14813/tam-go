@@ -10,6 +10,11 @@ Features:
   - **Ticket Form**: Enter the names and phone numbers of ticket purchasers, as well as their contact preference, which the default is controllable via the Settings screen.
   - **Basket Form**: Optionally, basket/item descriptions can be added as well as who the donor(s) are for each one. The descriptions appear on the reports later on.
   - **Drawing Form**: Use this form to enter the winning ticket numbers. The form automatically looks up if an entry exists when a field is changed and will populate the information next to it if it does.
+- **Keyboard shortcuts**: The forms work from the keyboard with Alt (Option on a Mac) and a letter; each button and box shows its keys when the mouse rests on it.
+  - **Tickets, Baskets, Drawing and Ticket Search**: Alt+L next line, Alt+O previous line, Alt+J copies the line into the one below (Duplicate Down), Alt+U into the one above (Duplicate Up), Alt+C copies a line and Alt+V pastes it into the current one, Alt+S saves the marked lines. On a ticket's Pref, C sets CALL and T sets TEXT.
+  - **Pager** (Tickets, Baskets, Drawing): Alt+Q goes to the From box and Alt+W to the To box, Enter loads them, Alt+B goes to the previous page and Alt+N to the next.
+  - **Ticket Search**: Alt+Q goes to the first name, Alt+W to the last name and Alt+E to the phone number; Enter searches.
+  - **Main menu**: Alt+A shows or hides the Admin section.
 - **Reports**: Reports are automatically generated with one click to avoid line shifts or other issues which may arise during compilation.
   - **By Name Report**: This report orders the lines by the last name of each winner, then first name, phone number, and finally basket number.
   - **By Basket Report**: Orders winners by basket number.
@@ -161,7 +166,7 @@ Unit and integration tests; the client tests drive the real server handler as th
 go test ./...
 ```
 
-The browser tests drive the web app in Chromium against real programs: marked rows saved when a page is hidden, left or closed; a change from a page, or from a save queued offline, kept out where another client saved a newer value, with the message and Settings' list; reports read from a client's copy saying so. [scripts/browser/README.md](scripts/browser/README.md) says how to run them.
+The browser tests drive the web app in Chromium against real programs: marked rows saved when a page is hidden, left or closed; a change from a page, or from a save queued offline, kept out where another client saved a newer value, with the message and Settings' list; reports read from a client's copy saying so; every Alt shortcut of the forms and the main menu, and the shortcuts still working after a message box. [scripts/browser/README.md](scripts/browser/README.md) says how to run them.
 
 The load test runs a whole event through one real `tam-server` and many real `tam-client` programs on the machine, each client with its own data folder and paired through its Settings route. Ticket entry is paced over 40 seconds, fixing a typo now and then and opening sheets again; a quarter of the way in the server is killed and started again 8 seconds later while the clients keep saving, and each client goes back to correct the sheets it saved meanwhile as soon as it sees the server again. Then another client corrects every 40th ticket, the baskets are entered and drawn (each winner looked up as the page does), every report and a few searches are read, and for 10 seconds every client saves as fast as it can. It then checks every ticket, basket and winner on the server and in each client's own copy, the admin page's Clients table, and everything the programs wrote, and prints the time of every page action:
 

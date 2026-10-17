@@ -161,8 +161,10 @@
 			setTimeout(() => focusIdx(curIdx), 1);
 		},
 		paste() {
-			if (items[curIdx]) {
-				const buffer = rowValues(JSON.parse(window.localStorage.getItem('tam-ticket')), 't_id');
+			// Nothing copied yet: the row stays as it is, unmarked.
+			const copied = window.localStorage.getItem('tam-ticket');
+			if (items[curIdx] && copied) {
+				const buffer = rowValues(JSON.parse(copied), 't_id');
 				items[curIdx] = { ...items[curIdx], ...buffer, changed: true };
 			}
 			setTimeout(() => focusIdx(curIdx), 1);

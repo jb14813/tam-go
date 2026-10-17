@@ -163,8 +163,10 @@
 			focusIdx(curIdx);
 		},
 		paste() {
-			if (items[curIdx]) {
-				const buffer = rowValues(JSON.parse(window.localStorage.getItem('tam-drawing')), 'b_id');
+			// Nothing copied yet: the row stays as it is, unmarked.
+			const copied = window.localStorage.getItem('tam-drawing');
+			if (items[curIdx] && copied) {
+				const buffer = rowValues(JSON.parse(copied), 'b_id');
 				items[curIdx] = { ...items[curIdx], ...buffer, changed: true };
 			}
 			focusIdx(curIdx);
