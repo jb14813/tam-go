@@ -3,7 +3,7 @@
 	import { tS, bS, bAS } from '$lib/client/styles.js';
 	import { resolve } from '$app/paths';
 	import { prefixPage } from '$lib/client/paths.js';
-	import hotkeys from 'hotkeys-js';
+	import { altShortcuts } from '$lib/client/shortcuts.js';
 
 	const pageTitle = 'Main Menu | R-TAM';
 	const { data } = $props();
@@ -66,19 +66,7 @@
 		}
 	});
 
-	$effect(() => {
-		hotkeys.filter = () => {
-			return true;
-		};
-		const toggleAdminMode = (event) => {
-			event.preventDefault();
-			adminMode = !adminMode;
-		};
-		hotkeys('alt+a', toggleAdminMode);
-		return () => {
-			hotkeys.unbind('alt+a', toggleAdminMode);
-		};
-	});
+	$effect(() => altShortcuts({ a: () => (adminMode = !adminMode) }));
 </script>
 
 <svelte:head>

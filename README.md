@@ -83,6 +83,21 @@ TLS generates and retains a self-signed certificate when both default PEM files
 are absent. Pairing records its SHA-256 leaf fingerprint; certificate changes
 require pairing again.
 
+## Keyboard shortcuts
+
+The entry forms work from the keyboard with Alt (Option on a Mac) and a
+letter; each button and box shows its keys when the mouse rests on it.
+
+- Tickets, Baskets, Drawing and Ticket Search: Alt+L next line, Alt+O
+  previous line, Alt+J and Alt+U copy the line into the one below or above,
+  Alt+C copies a line and Alt+V pastes it into the current one, Alt+S saves
+  the marked lines. On a ticket's Pref, C sets CALL and T sets TEXT.
+- Pager (Tickets, Baskets, Drawing): Alt+Q and Alt+W go to the From and To
+  boxes, Enter loads them, Alt+B and Alt+N go to the previous and next page.
+- Ticket Search: Alt+Q, Alt+W and Alt+E go to the first name, last name and
+  phone number boxes; Enter searches.
+- Main menu: Alt+A shows or hides administration.
+
 ## Data and compatibility
 
 For a database handoff, stop the source program and copy its complete data
