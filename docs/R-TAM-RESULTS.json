@@ -1,7 +1,7 @@
 {
   "validation_date": "2026-10-12",
   "product_source_rust_tree": "61b20fbea837b9880fd4b332a4e779f7855d7b15",
-  "source_provenance": "Validated rust directory at public commit b3aeee96de7c527b29bdf9e34e06a7bf0ef1a20d. Subsequent release tooling adds a version bump and static Windows runtime linkage while preserving application logic, frontend and third-party dependencies. Artifact hashes identify locally validated binaries, not subsequent hosted builds.",
+  "source_provenance": "Validated rust directory at public commit b3aeee96de7c527b29bdf9e34e06a7bf0ef1a20d. Subsequent release tooling adds a version bump and static Windows runtime linkage while preserving application logic, frontend and third-party dependencies. Release 0.1.2 changes only the embedded frontend's keyboard shortcuts and removes its hotkeys-js dependency; the Rust crates and their dependencies are unchanged. Artifact hashes identify locally validated binaries, not subsequent hosted builds.",
   "go_reference": "b530cdad8da7be968e8f640a8de8badc1d113be7",
   "artifacts": [
     {

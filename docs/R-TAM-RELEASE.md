@@ -3,8 +3,15 @@
 These downloads contain the native Rust server and client with their web
 interfaces embedded. Running them needs no Rust, Go, Node.js or separate web
 server. Windows builds include the Visual C++ runtime through static linkage;
-no Visual C++ Redistributable installation is needed. This initial release is marked as a prerelease for optional use and
-evaluation; it is a complete executable package.
+no Visual C++ Redistributable installation is needed. These releases are marked as prereleases for optional use and
+evaluation; each is a complete executable package.
+
+0.1.2 fixes the Alt keyboard shortcuts of the entry forms. After a message box,
+such as "Some changes were not saved" answering Alt+S, Alt+C, Alt+V and every
+other Alt shortcut stopped working until the window lost focus; now they keep
+working. Alt+V with nothing copied leaves the row unmarked, and Alt+C on a Ticket
+Search row's Pref button no longer switches it to CALL. The README lists the
+shortcuts.
 
 ## Choose a download
 

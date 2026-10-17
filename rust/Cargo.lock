@@ -1187,7 +1187,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "r-tam-client"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "axum-server",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "r-tam-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "fs2",
  "getrandom 0.4.3",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "r-tam-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "axum-server",
