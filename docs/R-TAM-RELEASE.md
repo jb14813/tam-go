@@ -1,5 +1,10 @@
 # R-TAM Rust release
 
+R-TAM is JZB's independent Rust fork of
+[Ticket Auction Manager Go](https://github.com/ticket-auction-manager/tam-go).
+The original Ticket Auction Manager project is Dilan Gilluly's project. These
+R-TAM downloads are separate from the official project's Go releases.
+
 These downloads contain the native Rust server and client with their web
 interfaces embedded. Running them needs no Rust, Go, Node.js or separate web
 server. Windows builds include the Visual C++ runtime through static linkage;
@@ -17,8 +22,13 @@ shortcuts.
 
 | Package | Supported system | Contents |
 | --- | --- | --- |
-| Windows x86-64 ZIP | 64-bit Windows | Rust server, Rust client, launch scripts, instructions, license and build metadata |
-| Linux x86-64 tar.gz | Ubuntu 24.04 or another glibc-based distribution with glibc 2.39 or later | Rust server, Rust client, executable launch scripts, instructions, license and build metadata |
+| Windows x86-64 ZIP | Windows 10 or 11, Intel/AMD 64-bit | Rust server, Rust client, launch scripts, instructions, license and build metadata |
+| Linux x86-64 tar.gz | Linux x86-64 with glibc 2.39 or later and the standard libgcc runtime, such as Ubuntu 24.04 or later | Rust server, Rust client, executable launch scripts, instructions, license and build metadata |
+
+No native R-TAM macOS, ARM or musl package is published. The repository's
+retained Go installers, Docker files and Nix configuration target Go, not these
+Rust packages. A browser is required for the interface; Linux launchers do not
+open one automatically. In WSL, keep the package and data on the Linux filesystem.
 
 Use the ZIP or tar.gz asset, rather than GitHub's automatic source-code archive.
 The `SHA256SUMS` asset lists the SHA-256 digest of each package. On Windows,
@@ -35,8 +45,8 @@ Use only the client for standalone operation. Default data folders are separate 
 package:
 
 - Windows: `%LOCALAPPDATA%\R-TAM\server` and `%LOCALAPPDATA%\R-TAM\client`.
-- Linux: `$XDG_DATA_HOME/r-tam/server` and `$XDG_DATA_HOME/r-tam/client`, or
-  `$HOME/.local/share/r-tam/` when `XDG_DATA_HOME` is unset.
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/r-tam/server` and the separate
+  `${XDG_DATA_HOME:-$HOME/.local/share}/r-tam/client` folder.
 
 An explicit `TAM_DATA_DIR` overrides these defaults. Give the two programs
 different folders. Close each program normally before copying or backing up
@@ -63,6 +73,17 @@ selective push. A native event backup contains event rows and revisions;
 settings, authentication keys and waiting saves require the complete data folder.
 Upgrading the extracted binaries preserves the launcher data folders.
 
+Ordinary restore overwrites matching supplied rows and retains absent rows; it
+does not replace the whole event. A paired client's cache and local event backup
+may be partial; use the server's backup for the shared event. JSON event backups
+omit operational metadata as well as settings, keys and pending saves. Use a
+complete stopped-folder copy when those are needed. The automatic archive
+before a client switches server events does not cover ordinary server restores.
+
+Compatibility with later upstream changes is not implied. These prereleases and
+bounded validation do not guarantee recovery from arbitrary power loss,
+storage failure or corruption. Retain complete stopped-folder copies and backups.
+
 ## Build and release validation
 
 GitHub Actions builds both Rust programs and embedded frontend assets from
@@ -77,3 +98,19 @@ version. They trigger the R-TAM workflow; the existing Go release tags and Go
 packages remain separate. Ordinary branch builds also retain ready-to-run Rust
 packages as Actions artifacts. Published release assets remain available beyond
 the temporary Actions artifact retention period.
+
+## License and support
+
+R-TAM retains the upstream
+[MIT license and copyright notice](https://github.com/jb14813/tam-go/blob/r-tam/LICENSE.md).
+The Rust fork is maintained by JZB; Ticket Auction Manager's original project
+and Dilan Gilluly's credit remain separate from the fork.
+
+Follow the fork's
+[R-TAM branch](https://github.com/jb14813/tam-go/tree/r-tam) for source and
+maintenance information. This fork currently has no Issues or Discussions
+board, so no dedicated R-TAM support tracker is advertised. For the official
+Go software, use the
+[official repository](https://github.com/ticket-auction-manager/tam-go) and its
+[issue tracker](https://github.com/ticket-auction-manager/tam-go/issues).
+Do not present a Rust-only failure as an upstream Go bug.

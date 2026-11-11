@@ -1,6 +1,9 @@
 # R-TAM
 
-R-TAM is a native Rust server and client for Ticket Auction Manager. It manages
+R-TAM is JZB's independent Rust server and client fork of the
+[official Ticket Auction Manager Go project](https://github.com/ticket-auction-manager/tam-go).
+Ticket Auction Manager is Dilan Gilluly's project; R-TAM and its releases are
+maintained separately. R-TAM manages
 ticket buyers, baskets, drawing results, searches and printed reports for
 in-person benefit auctions. The client uses the existing Svelte interface and
 can work alone or pair with a server, including offline entry and queued replay.
@@ -11,8 +14,9 @@ HTTP protocol, SQLite data and native backup document. Protocol identities and
 headers retain their TAM names. The Go source and its [reference README](GO-REFERENCE.md)
 remain available here.
 
-Ready-to-run Windows and Linux downloads are published as R-TAM releases on
-this repository. Choose the ZIP or tar.gz package from the Releases page;
+The current Rust download is the
+[R-TAM 0.1.2 prerelease](https://github.com/jb14813/tam-go/releases/tag/r-tam-v0.1.2).
+Choose its ZIP or tar.gz package;
 each includes both Rust programs, launchers, instructions and its license.
 [Release instructions](docs/R-TAM-RELEASE.md) explain supported systems,
 checksums, data folders and pairing. Current validation and cleanup details
@@ -20,6 +24,20 @@ are in [the network validation report](docs/R-TAM-NETWORK.md).
 Measured performance is recorded in [the speed and safety report](docs/R-TAM-SPEED.md).
 The [initial validation report](docs/R-TAM-VALIDATION.md) retains the original
 baseline, implementation decisions and earlier compatibility evidence.
+
+## Published platforms and scope
+
+- Windows 10 or 11, x86-64 (Intel/AMD 64-bit). The Visual C++ runtime is
+  statically linked; no Visual C++ Redistributable installation is needed.
+- Linux x86-64 with glibc 2.39 or later and the standard libgcc runtime,
+  such as Ubuntu 24.04 or later. In WSL, keep data on the Linux filesystem.
+
+These are native Rust programs with an embedded browser interface. No Rust,
+Go, Node.js or Python installation is needed to run the release packages.
+No native R-TAM macOS, ARM or musl package is published. The retained Go
+installers, Docker files and Nix configuration target the Go programs.
+Compatibility is pinned to the Go reference above; compatibility with later
+upstream changes is not implied. See [support and attribution](#support).
 
 ## Build
 
@@ -85,7 +103,7 @@ require pairing again.
 
 ## Keyboard shortcuts
 
-The entry forms work from the keyboard with Alt (Option on a Mac) and a
+The entry forms work from the keyboard with Alt and a
 letter; each button and box shows its keys when the mouse rests on it.
 
 - Tickets, Baskets, Drawing and Ticket Search: Alt+L next line, Alt+O
@@ -110,9 +128,11 @@ saves directly, preserving unknown tables. Current Go-native backups contain
 An event backup contains event rows and revisions. It does not contain keys,
 settings or waiting saves; retain the complete data folder for those. Ordinary
 restore upserts supplied rows and keeps absent rows. A newer-only push respects
-event identity, revisions and deleted-prefix records. Changing events preserves
-the old copy in an exclusive, flushed JSON archive before clearing or
-quarantining anything.
+event identity, revisions and deleted-prefix records. When a paired client
+switches to a different server event, it preserves the old copy in an exclusive,
+flushed JSON archive before clearing its mirror or quarantining pending saves. This archive
+guarantee does not apply to ordinary server restores. A paired client's cache
+and local event backup may be partial; the server holds the shared event.
 
 R-TAM adds several safeguards: remote intents are durable before dispatch;
 online rows are accepted after a validated acknowledgment; invalid answers
@@ -147,6 +167,19 @@ release packaging remain separate.
 
 ## Attribution
 
-Ticket Auction Manager and its Svelte interface retain their existing license
-and copyright notices. This fork is distributed under the existing
-[MIT license](LICENSE.md).
+Dilan Gilluly's Ticket Auction Manager project and its contributors provide
+the upstream Go programs and Svelte interface. R-TAM is JZB's independently
+maintained Rust fork, not an official Ticket Auction Manager Go release.
+The existing [MIT license](LICENSE.md) and copyright notice are retained.
+
+## Support
+
+R-TAM source and maintenance updates belong to this fork's `r-tam` branch and
+[R-TAM releases](https://github.com/jb14813/tam-go/releases/tag/r-tam-v0.1.2).
+This fork currently has no Issues or Discussions board; no dedicated R-TAM
+support tracker is advertised.
+
+For the official Go software, use the
+[official repository](https://github.com/ticket-auction-manager/tam-go) and its
+[issue tracker](https://github.com/ticket-auction-manager/tam-go/issues).
+A failure specific to this Rust fork is not automatically an upstream Go bug.
